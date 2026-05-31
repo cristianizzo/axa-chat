@@ -943,6 +943,14 @@ function get3PModelFallbackSuggestion(model: string): string | undefined {
   }
   // @[MODEL LAUNCH]: Add a fallback suggestion chain for the new model → previous version for 3P
   const m = model.toLowerCase()
+  // If the failing model looks like an Opus 4.8 variant, fall back to 4.7
+  if (m.includes('opus-4-8') || m.includes('opus_4_8')) {
+    return getModelStrings().opus47
+  }
+  // If the failing model looks like an Opus 4.7 variant, fall back to 4.6
+  if (m.includes('opus-4-7') || m.includes('opus_4_7')) {
+    return getModelStrings().opus46
+  }
   // If the failing model looks like an Opus 4.6 variant, suggest the default Opus (4.1 for 3P)
   if (m.includes('opus-4-6') || m.includes('opus_4_6')) {
     return getModelStrings().opus41

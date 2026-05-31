@@ -152,6 +152,8 @@ export function modelSupportsStructuredOutputs(model: string): boolean {
     canonical.includes('claude-opus-4-1') ||
     canonical.includes('claude-opus-4-5') ||
     canonical.includes('claude-opus-4-6') ||
+    canonical.includes('claude-opus-4-7') ||
+    canonical.includes('claude-opus-4-8') ||
     canonical.includes('claude-haiku-4-5')
   )
 }
@@ -189,7 +191,7 @@ export function modelSupportsAutoMode(model: string): boolean {
       return true
     }
     // External allowlist (firstParty already checked above).
-    return /^claude-(opus|sonnet)-4-6/.test(m)
+    return /^claude-(opus|sonnet)-4-[678]/.test(m) || /^claude-opus-4-8/.test(m)
   }
   return false
 }
