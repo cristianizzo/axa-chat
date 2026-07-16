@@ -1,21 +1,20 @@
 <p align="center">
-  <img src="assets/screenshot.png" alt="free-code" width="720" />
+  <img src="assets/screenshot.png" alt="axa-chat" width="720" />
 </p>
 
-<h1 align="center">free-code</h1>
+<h1 align="center">axa-chat</h1>
 
 <p align="center">
-  <strong>The free build of Claude Code.</strong><br>
+  <strong>Multi-provider AI coding CLI.</strong><br>
   All telemetry stripped. All guardrails removed. All experimental features unlocked.<br>
   One binary, zero callbacks home.
 </p>
 
 <p align="center">
   <a href="#quick-install"><img src="https://img.shields.io/badge/install-one--liner-blue?style=flat-square" alt="Install" /></a>
-  <a href="https://github.com/cristianizzo/free-code/stargazers"><img src="https://img.shields.io/github/stars/cristianizzoanzn/free-code?style=flat-square" alt="Stars" /></a>
-  <a href="https://github.com/cristianizzo/free-code/issues"><img src="https://img.shields.io/github/issues/cristianizzoanzn/free-code?style=flat-square" alt="Issues" /></a>
-  <a href="https://github.com/cristianizzo/free-code/blob/main/FEATURES.md"><img src="https://img.shields.io/badge/features-88%20flags-orange?style=flat-square" alt="Feature Flags" /></a>
-  <a href="#ipfs-mirror"><img src="https://img.shields.io/badge/IPFS-mirrored-teal?style=flat-square" alt="IPFS" /></a>
+  <a href="https://github.com/cristianizzo/axa-chat/stargazers"><img src="https://img.shields.io/github/stars/cristianizzo/axa-chat?style=flat-square" alt="Stars" /></a>
+  <a href="https://github.com/cristianizzo/axa-chat/issues"><img src="https://img.shields.io/github/issues/cristianizzo/axa-chat?style=flat-square" alt="Issues" /></a>
+  <a href="https://github.com/cristianizzo/axa-chat/blob/main/FEATURES.md"><img src="https://img.shields.io/badge/features-88%20flags-orange?style=flat-square" alt="Feature Flags" /></a>
 </p>
 
 ---
@@ -23,12 +22,12 @@
 ## Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cristianizzo/free-code/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cristianizzo/axa-chat/main/install.sh | bash
 ```
 
-Checks your system, installs Bun if needed, clones the repo, builds with all experimental features enabled, and symlinks `free-code` on your PATH.
+Checks your system, installs Bun if needed, clones the repo, builds with all experimental features enabled, and symlinks `axa` on your PATH.
 
-Then run `free-code` and use the `/login` command to authenticate with your preferred model provider.
+Then run `axa` and use the `/login` command to authenticate with your preferred model provider.
 
 ---
 
@@ -43,7 +42,6 @@ Then run `free-code` and use the `/login` command to authenticate with your pref
 - [Experimental Features](#experimental-features)
 - [Project Structure](#project-structure)
 - [Tech Stack](#tech-stack)
-- [IPFS Mirror](#ipfs-mirror)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -51,7 +49,7 @@ Then run `free-code` and use the `/login` command to authenticate with your pref
 
 ## What is this
 
-A clean, buildable fork of Anthropic's [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI -- the terminal-native AI coding agent. The upstream source became publicly available on March 31, 2026 through a source map exposure in the npm distribution.
+A multi-provider AI coding CLI built on top of Anthropic's [Claude Code](https://docs.anthropic.com/en/docs/claude-code) source. Supports Anthropic, OpenAI Codex, AWS Bedrock, Google Vertex AI, and Anthropic Foundry.
 
 This fork applies three categories of changes on top of that snapshot:
 
@@ -77,7 +75,7 @@ Claude Code ships with 88 feature flags gated behind `bun:bundle` compile-time s
 
 ## Model Providers
 
-free-code supports **five API providers** out of the box. Set the corresponding environment variable to switch providers -- no code changes needed.
+axa-chat supports **five API providers** out of the box. Set the corresponding environment variable to switch providers -- no code changes needed.
 
 ### Anthropic (Direct API) -- Default
 
@@ -101,7 +99,7 @@ Use OpenAI's Codex models for code generation. Requires a Codex subscription.
 
 ```bash
 export CLAUDE_CODE_USE_OPENAI=1
-free-code
+axa
 ```
 
 ### AWS Bedrock
@@ -111,7 +109,7 @@ Route requests through your AWS account via Amazon Bedrock.
 ```bash
 export CLAUDE_CODE_USE_BEDROCK=1
 export AWS_REGION="us-east-1"   # or AWS_DEFAULT_REGION
-free-code
+axa
 ```
 
 Uses your standard AWS credentials (environment variables, `~/.aws/config`, or IAM role). Models are mapped to Bedrock ARN format automatically (e.g., `us.anthropic.claude-opus-4-6-v1`).
@@ -130,7 +128,7 @@ Route requests through your GCP project via Vertex AI.
 
 ```bash
 export CLAUDE_CODE_USE_VERTEX=1
-free-code
+axa
 ```
 
 Uses Google Cloud Application Default Credentials (`gcloud auth application-default login`). Models are mapped to Vertex format automatically (e.g., `claude-opus-4-6@latest`).
@@ -142,7 +140,7 @@ Use Anthropic Foundry for dedicated deployments.
 ```bash
 export CLAUDE_CODE_USE_FOUNDRY=1
 export ANTHROPIC_FOUNDRY_API_KEY="..."
-free-code
+axa
 ```
 
 Supports custom deployment IDs as model names.
@@ -175,10 +173,11 @@ curl -fsSL https://bun.sh/install | bash
 ## Build
 
 ```bash
-git clone https://github.com/cristianizzo/free-code.git
-cd free-code
-bun build
-./cli
+git clone https://github.com/cristianizzo/axa-chat.git
+cd axa-chat
+bun install
+bun run build:dev
+./cli-dev
 ```
 
 ### Build Variants
@@ -189,6 +188,12 @@ bun build
 | `bun run build:dev` | `./cli-dev` | `VOICE_MODE` only | Dev version stamp |
 | `bun run build:dev:full` | `./cli-dev` | All 54 experimental flags | Full unlock build |
 | `bun run compile` | `./dist/cli` | `VOICE_MODE` only | Alternative output path |
+
+### Update & Rebuild
+
+```bash
+bun run update
+```
 
 ### Custom Feature Flags
 
@@ -208,19 +213,19 @@ bun run ./scripts/build.ts --dev --feature=BRIDGE_MODE
 
 ```bash
 # Interactive REPL (default)
-./cli
+axa
 
 # One-shot mode
-./cli -p "what files are in this directory?"
+axa -p "what files are in this directory?"
 
 # Specify a model
-./cli --model claude-opus-4-6
+axa --model claude-opus-4-6
 
 # Run from source (slower startup)
 bun run dev
 
 # OAuth login
-./cli /login
+axa /login
 ```
 
 ### Environment Variables Reference
@@ -328,22 +333,7 @@ src/
 
 ---
 
-## IPFS Mirror
-
-A full copy of this repository is permanently pinned on IPFS via Filecoin:
-
-| | |
-|---|---|
-| **CID** | `bafybeiegvef3dt24n2znnnmzcud2vxat7y7rl5ikz7y7yoglxappim54bm` |
-| **Gateway** | https://w3s.link/ipfs/bafybeiegvef3dt24n2znnnmzcud2vxat7y7rl5ikz7y7yoglxappim54bm |
-
-If this repo gets taken down, the code lives on.
-
----
-
 ## Contributing
-
-Contributions are welcome. If you're working on restoring one of the 34 broken feature flags, check the reconstruction notes in [FEATURES.md](FEATURES.md) first -- many are close to compiling and just need a small wrapper or missing asset.
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feat/my-feature`)

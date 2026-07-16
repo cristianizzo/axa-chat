@@ -236,6 +236,8 @@ export class QueryEngine {
     } = this.config
 
     this.discoveredSkillNames.clear()
+    this.permissionDenials = []
+    this.loadedNestedMemoryPaths.clear()
     setCwd(cwd)
     const persistSession = !isSessionPersistenceDisabled()
     const startTime = Date.now()

@@ -64,9 +64,9 @@ export const WARNING_THRESHOLD_BUFFER_TOKENS = 20_000
 export const ERROR_THRESHOLD_BUFFER_TOKENS = 20_000
 export const MANUAL_COMPACT_BUFFER_TOKENS = 3_000
 
-// Stop trying autocompact after this many consecutive failures.
-// BQ 2026-03-10: 1,279 sessions had 50+ consecutive failures (up to 3,272)
-// in a single session, wasting ~250K API calls/day globally.
+// Max consecutive failures before applying exponential backoff.
+// After this many failures, we skip attempts on increasing intervals
+// (2, 4, 8... turns) instead of permanently disabling compaction.
 const MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3
 
 export function getAutoCompactThreshold(model: string): number {
@@ -254,14 +254,24 @@ export async function autoCompactIfNeeded(
     return { wasCompacted: false }
   }
 
-  // Circuit breaker: stop retrying after N consecutive failures.
-  // Without this, sessions where context is irrecoverably over the limit
-  // hammer the API with doomed compaction attempts on every turn.
+  // Exponential backoff: after N consecutive failures, retry every 2^(failures-N) turns
+  // instead of permanently disabling compaction (which causes unbounded memory growth).
   if (
     tracking?.consecutiveFailures !== undefined &&
     tracking.consecutiveFailures >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
   ) {
-    return { wasCompacted: false }
+    const backoffTurns = Math.min(
+      64,
+      Math.pow(2, tracking.consecutiveFailures - MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES),
+    )
+    const turnsSinceLastAttempt = tracking.turnCounter % backoffTurns
+    if (turnsSinceLastAttempt !== 0) {
+      return { wasCompacted: false }
+    }
+    logForDebugging(
+      `autocompact: retrying after ${tracking.consecutiveFailures} consecutive failures (backoff: every ${backoffTurns} turns)`,
+      { level: 'warn' },
+    )
   }
 
   const model = toolUseContext.options.mainLoopModel
@@ -341,8 +351,12 @@ export async function autoCompactIfNeeded(
     const prevFailures = tracking?.consecutiveFailures ?? 0
     const nextFailures = prevFailures + 1
     if (nextFailures >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES) {
+      const backoffTurns = Math.min(
+        64,
+        Math.pow(2, nextFailures - MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES),
+      )
       logForDebugging(
-        `autocompact: circuit breaker tripped after ${nextFailures} consecutive failures — skipping future attempts this session`,
+        `autocompact: ${nextFailures} consecutive failures — will retry every ${backoffTurns} turns (run /compact to force manual compaction)`,
         { level: 'warn' },
       )
     }

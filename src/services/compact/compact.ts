@@ -9,7 +9,7 @@ const sessionTranscriptModule = feature('KAIROS')
 
 import { APIUserAbortError } from '@anthropic-ai/sdk'
 import { markPostCompaction } from 'src/bootstrap/state.js'
-import { getInvokedSkillsForAgent } from '../../bootstrap/state.js'
+import { getInvokedSkillsForAgent, getSessionId } from '../../bootstrap/state.js'
 import type { QuerySource } from '../../constants/querySource.js'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { Tool, ToolUseContext } from '../../Tool.js'
@@ -79,6 +79,8 @@ import {
 } from '../../utils/sessionStorage.js'
 import { sleep } from '../../utils/sleep.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
+import { writeFile, mkdir } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 /* eslint-enable @typescript-eslint/no-require-imports */
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { getTaskOutputPath } from '../../utils/task/diskOutput.js'
@@ -381,6 +383,26 @@ export function mergeHookInstructions(
 }
 
 /**
+ * Save a full backup of pre-compaction messages to disk.
+ * Returns the backup file path, or undefined if backup fails (non-blocking).
+ */
+async function savePreCompactBackup(messages: Message[]): Promise<string | undefined> {
+  try {
+    const transcriptPath = getTranscriptPath()
+    const backupDir = join(dirname(transcriptPath), getSessionId(), 'backups')
+    await mkdir(backupDir, { recursive: true })
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const backupPath = join(backupDir, `pre-compact-${timestamp}.jsonl`)
+    const lines = messages.map(m => jsonStringify(m)).join('\n') + '\n'
+    await writeFile(backupPath, lines, { mode: 0o600 })
+    return backupPath
+  } catch (err) {
+    logError(err)
+    return undefined
+  }
+}
+
+/**
  * Creates a compact version of a conversation by summarizing older messages
  * and preserving recent conversation history.
  */
@@ -441,6 +463,10 @@ export async function compactConversation(
     const summaryRequest = createUserMessage({
       content: compactPrompt,
     })
+
+    // Save full pre-compaction messages to disk before summarizing.
+    // This backup lets Claude read the full conversation later if needed.
+    const backupPath = await savePreCompactBackup(messages)
 
     let messagesToSummarize = messages
     let retryCacheSafeParams = cacheSafeParams
@@ -611,12 +637,15 @@ export async function compactConversation(
     }
 
     const transcriptPath = getTranscriptPath()
+    // Prefer backup path (clean JSONL of pre-compact messages) over full
+    // transcript (which includes metadata entries and is harder to parse).
+    const referencePathForSummary = backupPath ?? transcriptPath
     const summaryMessages: UserMessage[] = [
       createUserMessage({
         content: getCompactUserSummaryMessage(
           summary,
           suppressFollowUpQuestions,
-          transcriptPath,
+          referencePathForSummary,
         ),
         isCompactSummary: true,
         isVisibleInTranscriptOnly: true,
