@@ -451,7 +451,7 @@ async function* queryLoop(
     )
 
     queryCheckpoint('query_autocompact_start')
-    const { compactionResult, consecutiveFailures } = await deps.autocompact(
+    const { compactionResult, consecutiveFailures, lastAttemptTurn } = await deps.autocompact(
       messagesForQuery,
       toolUseContext,
       {
@@ -539,6 +539,7 @@ async function* queryLoop(
       tracking = {
         ...(tracking ?? { compacted: false, turnId: '', turnCounter: 0 }),
         consecutiveFailures,
+        lastAttemptTurn,
       }
     }
 

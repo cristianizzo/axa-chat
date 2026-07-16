@@ -54,9 +54,10 @@ export type AutoCompactTrackingState = {
   // Unique ID per turn
   turnId: string
   // Consecutive autocompact failures. Reset on success.
-  // Used as a circuit breaker to stop retrying when the context is
-  // irrecoverably over the limit (e.g., prompt_too_long).
   consecutiveFailures?: number
+  // Turn counter when the last compaction attempt was made (success or failure).
+  // Used for exponential backoff calculation.
+  lastAttemptTurn?: number
 }
 
 export const AUTOCOMPACT_BUFFER_TOKENS = 13_000
@@ -264,8 +265,10 @@ export async function autoCompactIfNeeded(
       64,
       Math.pow(2, tracking.consecutiveFailures - MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES),
     )
-    const turnsSinceLastAttempt = tracking.turnCounter % backoffTurns
-    if (turnsSinceLastAttempt !== 0) {
+    const turnsSinceLastAttempt = tracking.lastAttemptTurn !== undefined
+      ? tracking.turnCounter - tracking.lastAttemptTurn
+      : backoffTurns // first attempt after threshold: proceed
+    if (turnsSinceLastAttempt < backoffTurns) {
       return { wasCompacted: false }
     }
     logForDebugging(
@@ -340,6 +343,7 @@ export async function autoCompactIfNeeded(
       compactionResult,
       // Reset failure count on success
       consecutiveFailures: 0,
+      lastAttemptTurn: tracking?.turnCounter,
     }
   } catch (error) {
     if (!hasExactErrorMessage(error, ERROR_MESSAGE_USER_ABORT)) {
@@ -360,6 +364,6 @@ export async function autoCompactIfNeeded(
         { level: 'warn' },
       )
     }
-    return { wasCompacted: false, consecutiveFailures: nextFailures }
+    return { wasCompacted: false, consecutiveFailures: nextFailures, lastAttemptTurn: tracking?.turnCounter }
   }
 }

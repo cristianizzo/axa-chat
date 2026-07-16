@@ -398,6 +398,10 @@ async function savePreCompactBackup(messages: Message[]): Promise<string | undef
     return backupPath
   } catch (err) {
     logError(err)
+    logForDebugging(
+      `Failed to save pre-compaction backup: ${String(err)}. Compaction will proceed without backup.`,
+      { level: 'warn' },
+    )
     return undefined
   }
 }
