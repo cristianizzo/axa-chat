@@ -134,6 +134,11 @@ export const CLAUDE_MYTHOS_5_CONFIG = {
   openai: 'claude-mythos-5',
 } as const satisfies ModelConfig
 
+// NOTE: Bedrock IDs for new models use the dateless format (e.g. 'anthropic.claude-opus-4-8')
+// matching the pattern from Anthropic docs. The modelStrings.ts findFirstMatch() will resolve
+// these against actual Bedrock inference profiles at runtime. If a model is not yet available
+// on Bedrock, the fallback ID is used and the API will return an appropriate error.
+
 // OpenAI Codex models
 export const GPT_5_4_CONFIG = {
   firstParty: 'gpt-5.4',

@@ -332,7 +332,9 @@ export function renderDefaultModelSetting(
   setting: ModelName | ModelAlias,
 ): string {
   if (setting === 'opusplan') {
-    return 'Opus 4.6 in plan mode, else Sonnet 4.6'
+    const opusName = renderModelName(parseUserSpecifiedModel('opus'))
+    const sonnetName = renderModelName(parseUserSpecifiedModel('sonnet'))
+    return `${opusName} in plan mode, else ${sonnetName}`
   }
   return renderModelName(parseUserSpecifiedModel(setting))
 }
