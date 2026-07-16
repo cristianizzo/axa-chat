@@ -451,7 +451,7 @@ async function* queryLoop(
     )
 
     queryCheckpoint('query_autocompact_start')
-    const { compactionResult, consecutiveFailures } = await deps.autocompact(
+    const compactOutcome = await deps.autocompact(
       messagesForQuery,
       toolUseContext,
       {
@@ -467,20 +467,20 @@ async function* queryLoop(
     )
     queryCheckpoint('query_autocompact_end')
 
-    if (compactionResult) {
+    if (compactOutcome.type === 'compacted') {
       const {
         preCompactTokenCount,
         postCompactTokenCount,
         truePostCompactTokenCount,
         compactionUsage,
-      } = compactionResult
+      } = compactOutcome.compactionResult
 
       logEvent('tengu_auto_compact_succeeded', {
         originalMessageCount: messages.length,
         compactedMessageCount:
-          compactionResult.summaryMessages.length +
-          compactionResult.attachments.length +
-          compactionResult.hookResults.length,
+          compactOutcome.compactionResult.summaryMessages.length +
+          compactOutcome.compactionResult.attachments.length +
+          compactOutcome.compactionResult.hookResults.length,
         preCompactTokenCount,
         postCompactTokenCount,
         truePostCompactTokenCount,
@@ -518,14 +518,14 @@ async function* queryLoop(
       // compact. recompactionInfo (autoCompact.ts:190) already captured the
       // old values for turnsSincePreviousCompact/previousCompactTurnId before
       // the call, so this reset doesn't lose those.
+      // Reset tracking on success — clear failure state
       tracking = {
         compacted: true,
         turnId: deps.uuid(),
         turnCounter: 0,
-        consecutiveFailures: 0,
       }
 
-      const postCompactMessages = buildPostCompactMessages(compactionResult)
+      const postCompactMessages = buildPostCompactMessages(compactOutcome.compactionResult)
 
       for (const message of postCompactMessages) {
         yield message
@@ -533,12 +533,11 @@ async function* queryLoop(
 
       // Continue on with the current query call using the post compact messages
       messagesForQuery = postCompactMessages
-    } else if (consecutiveFailures !== undefined) {
-      // Autocompact failed — propagate failure count so the circuit breaker
-      // can stop retrying on the next iteration.
+    } else if (compactOutcome.type === 'failed') {
+      // Autocompact failed — propagate failure tracking for backoff
       tracking = {
         ...(tracking ?? { compacted: false, turnId: '', turnCounter: 0 }),
-        consecutiveFailures,
+        failureTracking: compactOutcome.failureTracking,
       }
     }
 
@@ -626,7 +625,7 @@ async function* queryLoop(
     const mediaRecoveryEnabled =
       reactiveCompact?.isReactiveCompactEnabled() ?? false
     if (
-      !compactionResult &&
+      compactOutcome.type !== 'compacted' &&
       querySource !== 'compact' &&
       querySource !== 'session_memory' &&
       !(

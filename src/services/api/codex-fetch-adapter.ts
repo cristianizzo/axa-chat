@@ -338,14 +338,14 @@ async function translateCodexStreamToAnthropic(
       let hadToolCalls = false
       let inReasoningBlock = false
 
-      try {
-        const reader = codexResponse.body?.getReader()
-        if (!reader) {
-          emitTextBlock(controller, encoder, contentBlockIndex, 'Error: No response body')
-          finishStream(controller, encoder, outputTokens, inputTokens, false)
-          return
-        }
+      const reader = codexResponse.body?.getReader()
+      if (!reader) {
+        emitTextBlock(controller, encoder, contentBlockIndex, 'Error: No response body')
+        finishStream(controller, encoder, outputTokens, inputTokens, false)
+        return
+      }
 
+      try {
         const decoder = new TextDecoder()
         let buffer = ''
 
@@ -598,6 +598,8 @@ async function translateCodexStreamToAnthropic(
             })),
           ),
         )
+      } finally {
+        reader.releaseLock()
       }
 
       // Close any remaining open blocks

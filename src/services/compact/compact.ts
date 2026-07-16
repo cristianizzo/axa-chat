@@ -1,5 +1,7 @@
 import { feature } from 'bun:bundle'
 import type { UUID } from 'crypto'
+import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import uniqBy from 'lodash-es/uniqBy.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -9,7 +11,7 @@ const sessionTranscriptModule = feature('KAIROS')
 
 import { APIUserAbortError } from '@anthropic-ai/sdk'
 import { markPostCompaction } from 'src/bootstrap/state.js'
-import { getInvokedSkillsForAgent } from '../../bootstrap/state.js'
+import { getInvokedSkillsForAgent, getSessionId } from '../../bootstrap/state.js'
 import type { QuerySource } from '../../constants/querySource.js'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { Tool, ToolUseContext } from '../../Tool.js'
@@ -380,6 +382,98 @@ export function mergeHookInstructions(
   return `${userInstructions}\n\n${hookInstructions}`
 }
 
+/** Max size per backup chunk file (5MB). */
+const BACKUP_CHUNK_SIZE = 5 * 1024 * 1024
+/** Max number of compaction backup sets to keep. Oldest are deleted. */
+const MAX_BACKUP_SETS = 3
+
+/**
+ * Save a full backup of pre-compaction messages to disk.
+ * Large conversations are split into multiple chunk files (max 5MB each).
+ * Only the last 3 compaction backups are kept — older sets are deleted.
+ * Returns the backup directory path (or first chunk), or undefined on failure.
+ */
+async function savePreCompactBackup(messages: Message[]): Promise<string | undefined> {
+  try {
+    const transcriptPath = getTranscriptPath()
+    const backupDir = join(dirname(transcriptPath), getSessionId(), 'backups')
+    await mkdir(backupDir, { recursive: true })
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const prefix = `pre-compact-${timestamp}`
+
+    // Serialize and split into chunks
+    let currentChunk = ''
+    let chunkIndex = 0
+    let firstChunkPath: string | undefined
+
+    for (const m of messages) {
+      const line = jsonStringify(m) + '\n'
+      if (currentChunk.length + line.length > BACKUP_CHUNK_SIZE && currentChunk.length > 0) {
+        const chunkPath = join(backupDir, `${prefix}-part${chunkIndex}.jsonl`)
+        await writeFile(chunkPath, currentChunk, { mode: 0o600 })
+        if (chunkIndex === 0) firstChunkPath = chunkPath
+        chunkIndex++
+        currentChunk = ''
+      }
+      currentChunk += line
+    }
+
+    // Write remaining chunk
+    if (currentChunk.length > 0) {
+      const chunkPath = chunkIndex === 0
+        ? join(backupDir, `${prefix}.jsonl`)
+        : join(backupDir, `${prefix}-part${chunkIndex}.jsonl`)
+      await writeFile(chunkPath, currentChunk, { mode: 0o600 })
+      if (!firstChunkPath) firstChunkPath = chunkPath
+    }
+
+    // Cleanup: keep only the last MAX_BACKUP_SETS compaction sets
+    await pruneOldBackups(backupDir)
+
+    return firstChunkPath
+  } catch (err) {
+    logError(err)
+    logForDebugging(
+      `Failed to save pre-compaction backup: ${String(err)}. Compaction will proceed without backup.`,
+      { level: 'warn' },
+    )
+    return undefined
+  }
+}
+
+/**
+ * Delete old backup sets, keeping only the most recent MAX_BACKUP_SETS.
+ * A "set" is all files sharing the same timestamp prefix.
+ */
+async function pruneOldBackups(backupDir: string): Promise<void> {
+  try {
+    const entries = await readdir(backupDir)
+    const backupFiles = entries.filter(e => e.startsWith('pre-compact-')).sort()
+
+    // Extract unique timestamp prefixes (set identifiers)
+    const sets = new Set<string>()
+    for (const f of backupFiles) {
+      // Extract timestamp: "pre-compact-2026-07-17T..." → everything before "-part" or ".jsonl"
+      const match = f.match(/^(pre-compact-\d{4}-\d{2}-\d{2}T[^.]+?)(?:-part\d+)?\.jsonl$/)
+      if (match) sets.add(match[1])
+    }
+
+    const sortedSets = [...sets].sort()
+    if (sortedSets.length <= MAX_BACKUP_SETS) return
+
+    // Delete files belonging to oldest sets
+    const setsToDelete = new Set(sortedSets.slice(0, sortedSets.length - MAX_BACKUP_SETS))
+    for (const f of backupFiles) {
+      const match = f.match(/^(pre-compact-\d{4}-\d{2}-\d{2}T[^.]+?)(?:-part\d+)?\.jsonl$/)
+      if (match && setsToDelete.has(match[1])) {
+        await unlink(join(backupDir, f)).catch(() => {})
+      }
+    }
+  } catch {
+    // Non-critical — don't fail compaction over cleanup
+  }
+}
+
 /**
  * Creates a compact version of a conversation by summarizing older messages
  * and preserving recent conversation history.
@@ -441,6 +535,10 @@ export async function compactConversation(
     const summaryRequest = createUserMessage({
       content: compactPrompt,
     })
+
+    // Save full pre-compaction messages to disk before summarizing.
+    // This backup lets Claude read the full conversation later if needed.
+    const backupPath = await savePreCompactBackup(messages)
 
     let messagesToSummarize = messages
     let retryCacheSafeParams = cacheSafeParams
@@ -611,12 +709,15 @@ export async function compactConversation(
     }
 
     const transcriptPath = getTranscriptPath()
+    // Prefer backup path (clean JSONL of pre-compact messages) over full
+    // transcript (which includes metadata entries and is harder to parse).
+    const referencePathForSummary = backupPath ?? transcriptPath
     const summaryMessages: UserMessage[] = [
       createUserMessage({
         content: getCompactUserSummaryMessage(
           summary,
           suppressFollowUpQuestions,
-          transcriptPath,
+          referencePathForSummary,
         ),
         isCompactSummary: true,
         isVisibleInTranscriptOnly: true,

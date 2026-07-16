@@ -3,3 +3,6 @@ dist/
 cli
 cli-dev
 openclaw/
+docs/
+CLAUDE.md
+*.bun-build

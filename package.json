@@ -1,13 +1,13 @@
 {
-  "name": "claude-code-source-snapshot",
+  "name": "axa-chat",
   "version": "2.1.87",
   "private": true,
-  "description": "Reconstructed Bun CLI workspace for the Claude Code source snapshot.",
+  "description": "AXA Chat — multi-provider support",
   "type": "module",
   "packageManager": "bun@1.3.11",
   "bin": {
-    "claude": "./cli",
-    "claude-source": "./cli"
+    "axa": "./cli",
+    "claude": "./cli"
   },
   "engines": {
     "bun": ">=1.3.11"
@@ -17,7 +17,8 @@
     "build:dev": "bun run ./scripts/build.ts --dev",
     "build:dev:full": "bun run ./scripts/build.ts --dev --feature-set=dev-full",
     "compile": "bun run ./scripts/build.ts --compile",
-    "dev": "bun run ./src/entrypoints/cli.tsx"
+    "dev": "bun run ./src/entrypoints/cli.tsx",
+    "update": "git pull && bun install && bun run build:dev"
   },
   "dependencies": {
     "@alcalzone/ansi-tokenize": "^0.3.0",

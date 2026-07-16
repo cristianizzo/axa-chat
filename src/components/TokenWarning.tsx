@@ -85,7 +85,7 @@ function CollapseLabel(t0) {
   return t5;
 }
 export function TokenWarning(t0) {
-  const $ = _c(13);
+  const $ = _c(14);
   const {
     tokenUsage,
     model
@@ -105,7 +105,29 @@ export function TokenWarning(t0) {
     isAboveErrorThreshold
   } = t1;
   const suppressWarning = useCompactWarningSuppression();
-  if (!isAboveWarningThreshold || suppressWarning) {
+
+  // Resource usage stats (RAM) — quantized to 10MB to avoid busting memoization on every render.
+  const quantize10MB = (bytes: number): number => Math.round(bytes / 1024 / 1024 / 10) * 10;
+  let rssMB = 0;
+  let heapMB = 0;
+  try {
+    const mem = process.memoryUsage();
+    rssMB = quantize10MB(mem.rss);
+    heapMB = quantize10MB(mem.heapUsed);
+  } catch {}
+  const resourceLabel = rssMB >= 1024
+    ? `RAM: ${(rssMB / 1024).toFixed(1)}GB (heap: ${heapMB}MB)`
+    : `RAM: ${rssMB}MB (heap: ${heapMB}MB)`;
+
+  // Always show context usage so the user can see growth and decide when to /compact.
+  // Visible even when suppressWarning is true (post-compaction) — that only suppresses the warning text.
+  if (!isAboveWarningThreshold) {
+    const effectiveWindow = getEffectiveContextWindowSize(model);
+    const usedPct = Math.round((tokenUsage / effectiveWindow) * 100);
+    if (usedPct < 5) return null;
+    return <Box flexDirection="row"><Text dimColor={true} wrap="truncate">{`Context: ${usedPct}% used · ${resourceLabel}`}</Text></Box>;
+  }
+  if (suppressWarning) {
     return null;
   }
   let t2;
@@ -165,12 +187,13 @@ export function TokenWarning(t0) {
   }
   const autocompactLabel = reactiveOnlyMode ? `${100 - displayPercentLeft}% context used` : `${displayPercentLeft}% until auto-compact`;
   let t4;
-  if ($[9] !== autocompactLabel || $[10] !== isAboveErrorThreshold || $[11] !== percentLeft) {
-    t4 = <Box flexDirection="row">{showAutoCompactWarning ? <Text dimColor={true} wrap="truncate">{upgradeMessage ? `${autocompactLabel} \u00b7 ${upgradeMessage}` : autocompactLabel}</Text> : <Text color={isAboveErrorThreshold ? "error" : "warning"} wrap="truncate">{upgradeMessage ? `Context low (${percentLeft}% remaining) \u00b7 ${upgradeMessage}` : `Context low (${percentLeft}% remaining) \u00b7 Run /compact to compact & continue`}</Text>}</Box>;
+  if ($[9] !== autocompactLabel || $[10] !== isAboveErrorThreshold || $[11] !== percentLeft || $[13] !== resourceLabel) {
+    t4 = <Box flexDirection="row">{showAutoCompactWarning ? <Text dimColor={true} wrap="truncate">{upgradeMessage ? `${autocompactLabel} \u00b7 ${resourceLabel} \u00b7 ${upgradeMessage}` : `${autocompactLabel} \u00b7 ${resourceLabel}`}</Text> : <Text color={isAboveErrorThreshold ? "error" : "warning"} wrap="truncate">{upgradeMessage ? `Context low (${percentLeft}% remaining) \u00b7 ${resourceLabel} \u00b7 ${upgradeMessage}` : `Context low (${percentLeft}% remaining) \u00b7 ${resourceLabel} \u00b7 Run /compact`}</Text>}</Box>;
     $[9] = autocompactLabel;
     $[10] = isAboveErrorThreshold;
     $[11] = percentLeft;
     $[12] = t4;
+    $[13] = resourceLabel;
   } else {
     t4 = $[12];
   }

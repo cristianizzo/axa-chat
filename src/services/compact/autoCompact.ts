@@ -48,26 +48,43 @@ export function getEffectiveContextWindowSize(model: string): number {
   return contextWindow - reservedTokensForSummary
 }
 
+/** Tracks failure state for exponential backoff. Present only after at least one failed attempt. */
+export type CompactFailureTracking = {
+  /** Number of consecutive failures (>= 1). Reset to undefined on success. */
+  consecutiveFailures: number
+  /** Turn counter when the last compaction was attempted. Used for backoff interval. */
+  lastAttemptTurn: number
+}
+
 export type AutoCompactTrackingState = {
   compacted: boolean
   turnCounter: number
   // Unique ID per turn
   turnId: string
-  // Consecutive autocompact failures. Reset on success.
-  // Used as a circuit breaker to stop retrying when the context is
-  // irrecoverably over the limit (e.g., prompt_too_long).
-  consecutiveFailures?: number
+  /** Present only when compaction has failed at least once. Cleared on success. */
+  failureTracking?: CompactFailureTracking
 }
+
+/** Discriminated union for autoCompactIfNeeded outcomes. */
+export type AutoCompactOutcome =
+  | { type: 'skipped' }
+  | { type: 'compacted'; compactionResult: CompactionResult }
+  | { type: 'failed'; failureTracking: CompactFailureTracking }
 
 export const AUTOCOMPACT_BUFFER_TOKENS = 13_000
 export const WARNING_THRESHOLD_BUFFER_TOKENS = 20_000
 export const ERROR_THRESHOLD_BUFFER_TOKENS = 20_000
 export const MANUAL_COMPACT_BUFFER_TOKENS = 3_000
 
-// Stop trying autocompact after this many consecutive failures.
-// BQ 2026-03-10: 1,279 sessions had 50+ consecutive failures (up to 3,272)
-// in a single session, wasting ~250K API calls/day globally.
+// Max consecutive failures before applying exponential backoff.
+// After this many failures, we skip attempts on increasing intervals
+// (2, 4, 8... turns) instead of permanently disabling compaction.
 const MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3
+
+/** Compute backoff interval (in turns) for the given failure count, capped at 64. */
+function backoffTurnsForFailures(failures: number): number {
+  return Math.min(64, Math.pow(2, failures - MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES))
+}
 
 export function getAutoCompactThreshold(model: string): number {
   const effectiveContextWindow = getEffectiveContextWindowSize(model)
@@ -245,23 +262,27 @@ export async function autoCompactIfNeeded(
   querySource?: QuerySource,
   tracking?: AutoCompactTrackingState,
   snipTokensFreed?: number,
-): Promise<{
-  wasCompacted: boolean
-  compactionResult?: CompactionResult
-  consecutiveFailures?: number
-}> {
+): Promise<AutoCompactOutcome> {
   if (isEnvTruthy(process.env.DISABLE_COMPACT)) {
-    return { wasCompacted: false }
+    return { type: 'skipped' }
   }
 
-  // Circuit breaker: stop retrying after N consecutive failures.
-  // Without this, sessions where context is irrecoverably over the limit
-  // hammer the API with doomed compaction attempts on every turn.
+  // Exponential backoff: after N consecutive failures, retry every 2^(failures-N) turns
+  // instead of permanently disabling compaction (which causes unbounded memory growth).
   if (
-    tracking?.consecutiveFailures !== undefined &&
-    tracking.consecutiveFailures >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
+    tracking?.failureTracking &&
+    tracking.failureTracking.consecutiveFailures >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
   ) {
-    return { wasCompacted: false }
+    const { consecutiveFailures, lastAttemptTurn } = tracking.failureTracking
+    const backoffTurns = backoffTurnsForFailures(consecutiveFailures)
+    const turnsSinceLastAttempt = tracking.turnCounter - lastAttemptTurn
+    if (turnsSinceLastAttempt < backoffTurns) {
+      return { type: 'skipped' }
+    }
+    logForDebugging(
+      `autocompact: retrying after ${consecutiveFailures} consecutive failures (backoff: every ${backoffTurns} turns)`,
+      { level: 'warn' },
+    )
   }
 
   const model = toolUseContext.options.mainLoopModel
@@ -273,7 +294,7 @@ export async function autoCompactIfNeeded(
   )
 
   if (!shouldCompact) {
-    return { wasCompacted: false }
+    return { type: 'skipped' }
   }
 
   const recompactionInfo: RecompactionInfo = {
@@ -304,7 +325,7 @@ export async function autoCompactIfNeeded(
     }
     markPostCompaction()
     return {
-      wasCompacted: true,
+      type: 'compacted',
       compactionResult: sessionMemoryResult,
     }
   }
@@ -326,10 +347,8 @@ export async function autoCompactIfNeeded(
     runPostCompactCleanup(querySource)
 
     return {
-      wasCompacted: true,
+      type: 'compacted',
       compactionResult,
-      // Reset failure count on success
-      consecutiveFailures: 0,
     }
   } catch (error) {
     if (!hasExactErrorMessage(error, ERROR_MESSAGE_USER_ABORT)) {
@@ -338,14 +357,19 @@ export async function autoCompactIfNeeded(
     // Increment consecutive failure count for circuit breaker.
     // The caller threads this through autoCompactTracking so the
     // next query loop iteration can skip futile retry attempts.
-    const prevFailures = tracking?.consecutiveFailures ?? 0
+    const prevFailures = tracking?.failureTracking?.consecutiveFailures ?? 0
     const nextFailures = prevFailures + 1
+    const lastAttemptTurn = tracking?.turnCounter ?? 0
     if (nextFailures >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES) {
+      const backoffTurns = backoffTurnsForFailures(nextFailures)
       logForDebugging(
-        `autocompact: circuit breaker tripped after ${nextFailures} consecutive failures — skipping future attempts this session`,
+        `autocompact: ${nextFailures} consecutive failures — will retry every ${backoffTurns} turns (run /compact to force manual compaction)`,
         { level: 'warn' },
       )
     }
-    return { wasCompacted: false, consecutiveFailures: nextFailures }
+    return {
+      type: 'failed',
+      failureTracking: { consecutiveFailures: nextFailures, lastAttemptTurn },
+    }
   }
 }
