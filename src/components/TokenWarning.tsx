@@ -85,7 +85,7 @@ function CollapseLabel(t0) {
   return t5;
 }
 export function TokenWarning(t0) {
-  const $ = _c(13);
+  const $ = _c(14);
   const {
     tokenUsage,
     model
@@ -107,12 +107,13 @@ export function TokenWarning(t0) {
   const suppressWarning = useCompactWarningSuppression();
 
   // Resource usage stats (RAM) — quantized to 10MB to avoid busting memoization on every render.
+  const quantize10MB = (bytes: number): number => Math.round(bytes / 1024 / 1024 / 10) * 10;
   let rssMB = 0;
   let heapMB = 0;
   try {
     const mem = process.memoryUsage();
-    rssMB = Math.round(mem.rss / 1024 / 1024 / 10) * 10;
-    heapMB = Math.round(mem.heapUsed / 1024 / 1024 / 10) * 10;
+    rssMB = quantize10MB(mem.rss);
+    heapMB = quantize10MB(mem.heapUsed);
   } catch {}
   const resourceLabel = rssMB >= 1024
     ? `RAM: ${(rssMB / 1024).toFixed(1)}GB (heap: ${heapMB}MB)`
