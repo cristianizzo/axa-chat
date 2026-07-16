@@ -12,9 +12,9 @@
 
 <p align="center">
   <a href="#quick-install"><img src="https://img.shields.io/badge/install-one--liner-blue?style=flat-square" alt="Install" /></a>
-  <a href="https://github.com/paoloanzn/free-code/stargazers"><img src="https://img.shields.io/github/stars/paoloanzn/free-code?style=flat-square" alt="Stars" /></a>
-  <a href="https://github.com/paoloanzn/free-code/issues"><img src="https://img.shields.io/github/issues/paoloanzn/free-code?style=flat-square" alt="Issues" /></a>
-  <a href="https://github.com/paoloanzn/free-code/blob/main/FEATURES.md"><img src="https://img.shields.io/badge/features-88%20flags-orange?style=flat-square" alt="Feature Flags" /></a>
+  <a href="https://github.com/cristianizzo/free-code/stargazers"><img src="https://img.shields.io/github/stars/cristianizzoanzn/free-code?style=flat-square" alt="Stars" /></a>
+  <a href="https://github.com/cristianizzo/free-code/issues"><img src="https://img.shields.io/github/issues/cristianizzoanzn/free-code?style=flat-square" alt="Issues" /></a>
+  <a href="https://github.com/cristianizzo/free-code/blob/main/FEATURES.md"><img src="https://img.shields.io/badge/features-88%20flags-orange?style=flat-square" alt="Feature Flags" /></a>
   <a href="#ipfs-mirror"><img src="https://img.shields.io/badge/IPFS-mirrored-teal?style=flat-square" alt="IPFS" /></a>
 </p>
 
@@ -23,7 +23,7 @@
 ## Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/paoloanzn/free-code/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cristianizzo/free-code/main/install.sh | bash
 ```
 
 Checks your system, installs Bun if needed, clones the repo, builds with all experimental features enabled, and symlinks `free-code` on your PATH.
@@ -175,7 +175,7 @@ curl -fsSL https://bun.sh/install | bash
 ## Build
 
 ```bash
-git clone https://github.com/paoloanzn/free-code.git
+git clone https://github.com/cristianizzo/free-code.git
 cd free-code
 bun build
 ./cli
