@@ -94,6 +94,46 @@ export const CLAUDE_SONNET_4_6_CONFIG = {
   openai: 'claude-sonnet-4-6',
 } as const satisfies ModelConfig
 
+export const CLAUDE_OPUS_4_7_CONFIG = {
+  firstParty: 'claude-opus-4-7',
+  bedrock: 'anthropic.claude-opus-4-7',
+  vertex: 'claude-opus-4-7',
+  foundry: 'claude-opus-4-7',
+  openai: 'claude-opus-4-7',
+} as const satisfies ModelConfig
+
+export const CLAUDE_OPUS_4_8_CONFIG = {
+  firstParty: 'claude-opus-4-8',
+  bedrock: 'anthropic.claude-opus-4-8',
+  vertex: 'claude-opus-4-8',
+  foundry: 'claude-opus-4-8',
+  openai: 'claude-opus-4-8',
+} as const satisfies ModelConfig
+
+export const CLAUDE_SONNET_5_CONFIG = {
+  firstParty: 'claude-sonnet-5',
+  bedrock: 'anthropic.claude-sonnet-5',
+  vertex: 'claude-sonnet-5',
+  foundry: 'claude-sonnet-5',
+  openai: 'claude-sonnet-5',
+} as const satisfies ModelConfig
+
+export const CLAUDE_FABLE_5_CONFIG = {
+  firstParty: 'claude-fable-5',
+  bedrock: 'anthropic.claude-fable-5',
+  vertex: 'claude-fable-5',
+  foundry: 'claude-fable-5',
+  openai: 'claude-fable-5',
+} as const satisfies ModelConfig
+
+export const CLAUDE_MYTHOS_5_CONFIG = {
+  firstParty: 'claude-mythos-5',
+  bedrock: 'anthropic.claude-mythos-5',
+  vertex: 'claude-mythos-5',
+  foundry: 'claude-mythos-5',
+  openai: 'claude-mythos-5',
+} as const satisfies ModelConfig
+
 // OpenAI Codex models
 export const GPT_5_4_CONFIG = {
   firstParty: 'gpt-5.4',
@@ -132,6 +172,11 @@ export const ALL_MODEL_CONFIGS = {
   opus41: CLAUDE_OPUS_4_1_CONFIG,
   opus45: CLAUDE_OPUS_4_5_CONFIG,
   opus46: CLAUDE_OPUS_4_6_CONFIG,
+  opus47: CLAUDE_OPUS_4_7_CONFIG,
+  opus48: CLAUDE_OPUS_4_8_CONFIG,
+  sonnet5: CLAUDE_SONNET_5_CONFIG,
+  fable5: CLAUDE_FABLE_5_CONFIG,
+  mythos5: CLAUDE_MYTHOS_5_CONFIG,
   // OpenAI Codex models
   gpt54: GPT_5_4_CONFIG,
   gpt53codex: GPT_5_3_CODEX_CONFIG,
