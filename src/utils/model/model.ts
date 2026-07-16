@@ -323,7 +323,8 @@ export function getClaudeAiUserDefaultModelDescription(
     return 'GPT-5.3 Codex · Optimized for code generation and understanding'
   }
   if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
-    return `Opus 4.8 (1M context) · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
+    const contextNote = isOpus1mMergeEnabled() ? ' (1M context)' : ''
+    return `Opus 4.8${contextNote} · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
   }
   return 'Sonnet 5 · Best for everyday tasks'
 }
