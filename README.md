@@ -93,9 +93,11 @@ Use OpenAI's Codex models for code generation. Requires a Codex subscription.
 
 | Model | ID |
 |---|---|
-| GPT-5.3 Codex (recommended) | `gpt-5.3-codex` |
+| GPT-5.2 Codex (default) | `gpt-5.2-codex` |
+| GPT-5.1 Codex | `gpt-5.1-codex` |
+| GPT-5.1 Codex Mini | `gpt-5.1-codex-mini` |
+| GPT-5.1 Codex Max | `gpt-5.1-codex-max` |
 | GPT-5.4 | `gpt-5.4` |
-| GPT-5.4 Mini | `gpt-5.4-mini` |
 
 ```bash
 export CLAUDE_CODE_USE_OPENAI=1
