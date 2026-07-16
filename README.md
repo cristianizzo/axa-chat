@@ -84,6 +84,7 @@ Use Anthropic's first-party API directly.
 | Model | ID |
 |---|---|
 | Claude Fable 5 | `claude-fable-5` |
+| Claude Mythos 5 (invite-only) | `claude-mythos-5` |
 | Claude Opus 4.8 (default) | `claude-opus-4-8` |
 | Claude Sonnet 5 | `claude-sonnet-5` |
 | Claude Opus 4.7 | `claude-opus-4-7` |

@@ -397,6 +397,8 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
       return 'Fable 5 (1M context)'
     case getModelStrings().mythos5:
       return 'Mythos 5'
+    case getModelStrings().mythos5 + '[1m]':
+      return 'Mythos 5 (1M context)'
     case getModelStrings().opus48:
       return 'Opus 4.8'
     case getModelStrings().opus48 + '[1m]':
@@ -536,7 +538,7 @@ export function parseUserSpecifiedModel(
       case 'fable':
         return getModelStrings().fable5 + (has1mTag ? '[1m]' : '')
       case 'mythos':
-        return getModelStrings().mythos5
+        return getModelStrings().mythos5 + (has1mTag ? '[1m]' : '')
       case 'best':
         return getBestModel()
       default:
@@ -614,9 +616,6 @@ const LEGACY_OPUS_FIRSTPARTY = [
   'claude-opus-4-1-20250805',
   'claude-opus-4-0',
   'claude-opus-4-1',
-  'claude-opus-4-5-20251101',
-  'claude-opus-4-5',
-  'claude-opus-4-6',
 ]
 
 function isLegacyOpusFirstParty(model: string): boolean {
@@ -657,7 +656,7 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
     return has1m ? 'Fable 5 (with 1M context)' : 'Fable 5'
   }
   if (canonical.includes('claude-mythos-5')) {
-    return 'Mythos 5'
+    return has1m ? 'Mythos 5 (with 1M context)' : 'Mythos 5'
   }
   if (canonical.includes('claude-opus-4-8')) {
     return has1m ? 'Opus 4.8 (with 1M context)' : 'Opus 4.8'
