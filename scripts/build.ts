@@ -107,6 +107,13 @@ for (let i = 0; i < args.length; i += 1) {
     featureSet.add(arg.slice('--feature='.length))
   }
 }
+// Validate feature flags against known list
+const allKnownFeatures = new Set([...defaultFeatures, ...fullExperimentalFeatures])
+for (const f of featureSet) {
+  if (!allKnownFeatures.has(f)) {
+    console.warn(`\x1b[33m[warn]\x1b[0m Unknown feature flag: "${f}" — check for typos`)
+  }
+}
 const features = [...featureSet]
 
 const outfile = compile

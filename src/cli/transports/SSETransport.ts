@@ -686,6 +686,8 @@ export class SSETransport implements Transport {
     this.state = 'closing'
     this.abortController?.abort()
     this.abortController = null
+    this.state = 'closed'
+    this.onCloseCallback?.()
   }
 }
 

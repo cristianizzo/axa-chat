@@ -16,6 +16,7 @@
  */
 
 import { getCodexOAuthTokens } from '../../utils/auth.js'
+import { logForDebugging } from '../../utils/debug.js'
 
 // ── Available Codex models ──────────────────────────────────────────
 export const CODEX_MODELS = [
@@ -371,7 +372,8 @@ async function translateCodexStreamToAnthropic(
             let event: Record<string, unknown>
             try {
               event = JSON.parse(dataStr)
-            } catch {
+            } catch (e) {
+              logForDebugging(`Codex SSE: malformed JSON event: ${dataStr.slice(0, 200)}`, { level: 'debug' })
               continue
             }
 
@@ -768,7 +770,8 @@ export function createCodexFetch(
             ? init.body
             : '{}'
       anthropicBody = JSON.parse(bodyText)
-    } catch {
+    } catch (e) {
+      logForDebugging(`Codex: failed to parse request body: ${String(e)}`, { level: 'warn' })
       anthropicBody = {}
     }
 
