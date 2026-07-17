@@ -11,6 +11,7 @@ import { useAppState, useSetAppState } from '../state/AppState.js';
 import { convertEffortValueToLevel, type EffortLevel, getDefaultEffortForModel, modelSupportsEffort, modelSupportsMaxEffort, resolvePickerEffortPersistence, toPersistableEffort } from '../utils/effort.js';
 import { getDefaultMainLoopModel, type ModelSetting, modelDisplayString, parseUserSpecifiedModel } from '../utils/model/model.js';
 import { getModelPickerOptions, getModelFamilies, FAMILY_PREFIX, type ModelFamily } from '../utils/model/modelOptions.js';
+import { isModelAllowed } from '../utils/model/modelAllowlist.js';
 import { getSettingsForSource, updateSettingsForSource } from '../utils/settings/settings.js';
 import { ConfigurableShortcutHint } from './ConfigurableShortcutHint.js';
 import { Select } from './CustomSelect/index.js';
@@ -50,11 +51,14 @@ function TwoLevelModelPicker(props: Props): React.ReactNode {
   // Version selection screen
   if (browseFamily) {
     const backOption = { value: BACK_TO_MAIN, label: '← Back', description: 'Return to model selection' }
-    const versionOptions = browseFamily.versions.map(v => ({
-      value: v.value ?? '',
-      label: v.label,
-      description: v.description,
-    }))
+    // Filter versions by allowlist
+    const versionOptions = browseFamily.versions
+      .filter(v => !v.value || isModelAllowed(v.value))
+      .map(v => ({
+        value: v.value ?? '',
+        label: v.label,
+        description: v.description,
+      }))
     return (
       <Box flexDirection="column">
         <Box marginBottom={1} flexDirection="column">
@@ -68,6 +72,7 @@ function TwoLevelModelPicker(props: Props): React.ReactNode {
               setBrowseFamily(null)
               return
             }
+            // Route through the full selection pipeline (effort, analytics, settings)
             props.onSelect(value, undefined)
           }}
           onCancel={() => setBrowseFamily(null)}
