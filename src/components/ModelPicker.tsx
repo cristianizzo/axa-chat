@@ -10,7 +10,8 @@ import { useKeybindings } from '../keybindings/useKeybinding.js';
 import { useAppState, useSetAppState } from '../state/AppState.js';
 import { convertEffortValueToLevel, type EffortLevel, getDefaultEffortForModel, modelSupportsEffort, modelSupportsMaxEffort, resolvePickerEffortPersistence, toPersistableEffort } from '../utils/effort.js';
 import { getDefaultMainLoopModel, type ModelSetting, modelDisplayString, parseUserSpecifiedModel } from '../utils/model/model.js';
-import { getModelPickerOptions } from '../utils/model/modelOptions.js';
+import { getModelPickerOptions, getModelFamilies, FAMILY_PREFIX, type ModelFamily } from '../utils/model/modelOptions.js';
+import { isModelAllowed } from '../utils/model/modelAllowlist.js';
 import { getSettingsForSource, updateSettingsForSource } from '../utils/settings/settings.js';
 import { ConfigurableShortcutHint } from './ConfigurableShortcutHint.js';
 import { Select } from './CustomSelect/index.js';
@@ -36,7 +37,76 @@ export type Props = {
   skipSettingsWrite?: boolean;
 };
 const NO_PREFERENCE = '__NO_PREFERENCE__';
-export function ModelPicker(t0) {
+const BACK_TO_MAIN = '__BACK__';
+
+/**
+ * Wraps the base ModelPicker with two-level version selection.
+ * Main screen: Default + family options (Opus, Sonnet, Fable, Haiku)
+ * Selecting a family opens its version list with ← Back.
+ */
+function TwoLevelModelPicker(props: Props): React.ReactNode {
+  const [browseFamily, setBrowseFamily] = useState<ModelFamily | null>(null)
+  const families = getModelFamilies()
+
+  // Version selection screen
+  if (browseFamily) {
+    const backOption = { value: BACK_TO_MAIN, label: '← Back', description: 'Return to model selection' }
+    // Filter versions by allowlist, skip any without a valid model ID
+    const versionOptions = browseFamily.versions
+      .filter(v => v.value && isModelAllowed(v.value))
+      .map(v => ({
+        value: v.value!,
+        label: v.label,
+        description: v.description,
+      }))
+    return (
+      <Box flexDirection="column">
+        <Box marginBottom={1} flexDirection="column">
+          <Text color="remember" bold={true}>Select {browseFamily.label} version</Text>
+          <Text dimColor={true}>{browseFamily.description}</Text>
+        </Box>
+        <Select
+          options={[backOption, ...versionOptions]}
+          onChange={(value: string) => {
+            if (value === BACK_TO_MAIN) {
+              setBrowseFamily(null)
+              return
+            }
+            // Route through the full selection pipeline (effort, analytics, settings)
+            props.onSelect(value, undefined)
+          }}
+          onCancel={() => setBrowseFamily(null)}
+          visibleOptionCount={Math.min(10, versionOptions.length + 1)}
+        />
+      </Box>
+    )
+  }
+
+  // Main screen — intercept family selections
+  const handleFamilyOrSelect = (model: string | null, effort: EffortLevel | undefined) => {
+    if (typeof model === 'string' && model.startsWith(FAMILY_PREFIX)) {
+      const familyKey = model.slice(FAMILY_PREFIX.length)
+      const family = families.find(f => f.key === familyKey)
+      if (family) {
+        if (family.versions.length === 1) {
+          props.onSelect(family.versions[0].value, undefined)
+        } else {
+          setBrowseFamily(family)
+        }
+        return
+      }
+    }
+    props.onSelect(model, effort)
+  }
+
+  return <ModelPickerBase {...props} onSelect={handleFamilyOrSelect} />
+}
+
+export function ModelPicker(props: Props): React.ReactNode {
+  return <TwoLevelModelPicker {...props} />
+}
+
+function ModelPickerBase(t0: Props) {
   const $ = _c(82);
   const {
     initial,
