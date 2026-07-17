@@ -279,7 +279,9 @@ export function LogoV2() {
     }
     let t12;
     if ($[34] === Symbol.for("react.memo_cache_sentinel")) {
-      t12 = <Box marginY={1}><Clawd /></Box>;
+      t12 = <Box marginY={1} flexDirection="column" alignItems="center">
+        <Text color="startupAccent" bold={true}>{"    ▲▲ ╳ ▲▲    "}</Text>
+      </Box>;
       $[34] = t12;
     } else {
       t12 = $[34];
@@ -370,7 +372,9 @@ export function LogoV2() {
   }
   let t19;
   if ($[48] === Symbol.for("react.memo_cache_sentinel")) {
-    t19 = <Clawd />;
+    t19 = <Box flexDirection="column" alignItems="center">
+      <Text color="startupAccent" bold={true}>{"    ▲▲ ╳ ▲▲    "}</Text>
+    </Box>;
     $[48] = t19;
   } else {
     t19 = $[48];
