@@ -92,12 +92,23 @@ function getCustomSonnetOption(): ModelOption | undefined {
   }
 }
 
-// @[MODEL LAUNCH]: Update or add model option functions (getSonnetXXOption, getOpusXXOption, etc.)
-// with the new model's label and description. These appear in the /model picker.
+// ── Helpers to resolve the current marketing name for each model family ──
+function defaultSonnetName(): string {
+  return getMarketingNameForModel(getDefaultSonnetModel()) ?? 'Sonnet'
+}
+function defaultOpusName(): string {
+  return getMarketingNameForModel(getDefaultOpusModel()) ?? 'Opus'
+}
+function defaultHaikuName(): string {
+  return getMarketingNameForModel(getDefaultHaikuModel()) ?? 'Haiku'
+}
+
+// @[MODEL LAUNCH]: Options derive labels dynamically via defaultSonnetName()/defaultOpusName().
+// Add new version entries to getAllVersionOptions() for the picker.
 function getSonnetOption(): ModelOption {
   const is3P = getAPIProvider() !== 'firstParty'
   const sonnetModel = getDefaultSonnetModel()
-  const name = getMarketingNameForModel(sonnetModel) ?? 'Sonnet'
+  const name = defaultSonnetName()
   return {
     value: is3P ? sonnetModel : 'sonnet',
     label: 'Sonnet',
@@ -136,7 +147,7 @@ function getOpus41Option(): ModelOption {
 function getOpusOption(fastMode = false): ModelOption {
   const is3P = getAPIProvider() !== 'firstParty'
   const opusModel = getDefaultOpusModel()
-  const name = getMarketingNameForModel(opusModel) ?? 'Opus'
+  const name = defaultOpusName()
   return {
     value: is3P ? opusModel : 'opus',
     label: 'Opus',
@@ -148,7 +159,7 @@ function getOpusOption(fastMode = false): ModelOption {
 export function getSonnet1MOption(): ModelOption {
   const is3P = getAPIProvider() !== 'firstParty'
   const sonnetModel = getDefaultSonnetModel()
-  const name = getMarketingNameForModel(sonnetModel) ?? 'Sonnet'
+  const name = defaultSonnetName()
   return {
     value: is3P ? sonnetModel + '[1m]' : 'sonnet[1m]',
     label: 'Sonnet (1M context)',
@@ -161,7 +172,7 @@ export function getSonnet1MOption(): ModelOption {
 export function getOpus1MOption(fastMode = false): ModelOption {
   const is3P = getAPIProvider() !== 'firstParty'
   const opusModel = getDefaultOpusModel()
-  const name = getMarketingNameForModel(opusModel) ?? 'Opus'
+  const name = defaultOpusName()
   return {
     value: is3P ? opusModel + '[1m]' : 'opus[1m]',
     label: 'Opus (1M context)',
@@ -246,7 +257,7 @@ function getGpt54MiniOption(): ModelOption {
 }
 
 function getMaxOpusOption(fastMode = false): ModelOption {
-  const name = getMarketingNameForModel(getDefaultOpusModel()) ?? 'Opus'
+  const name = defaultOpusName()
   return {
     value: 'opus',
     label: 'Opus',
@@ -257,7 +268,7 @@ function getMaxOpusOption(fastMode = false): ModelOption {
 export function getMaxSonnet1MOption(): ModelOption {
   const is3P = getAPIProvider() !== 'firstParty'
   const billingInfo = isClaudeAISubscriber() ? ' · Billed as extra usage' : ''
-  const name = getMarketingNameForModel(getDefaultSonnetModel()) ?? 'Sonnet'
+  const name = defaultSonnetName()
   return {
     value: 'sonnet[1m]',
     label: 'Sonnet (1M context)',
@@ -267,7 +278,7 @@ export function getMaxSonnet1MOption(): ModelOption {
 
 export function getMaxOpus1MOption(fastMode = false): ModelOption {
   const billingInfo = isClaudeAISubscriber() ? ' · Billed as extra usage' : ''
-  const name = getMarketingNameForModel(getDefaultOpusModel()) ?? 'Opus'
+  const name = defaultOpusName()
   return {
     value: 'opus[1m]',
     label: 'Opus (1M context)',
@@ -278,7 +289,7 @@ export function getMaxOpus1MOption(fastMode = false): ModelOption {
 function getMergedOpus1MOption(fastMode = false): ModelOption {
   const is3P = getAPIProvider() !== 'firstParty'
   const opusModel = getDefaultOpusModel()
-  const name = getMarketingNameForModel(opusModel) ?? 'Opus'
+  const name = defaultOpusName()
   return {
     value: is3P ? opusModel + '[1m]' : 'opus[1m]',
     label: 'Opus (1M context)',
@@ -289,7 +300,7 @@ function getMergedOpus1MOption(fastMode = false): ModelOption {
 }
 
 function getMaxSonnetOption(): ModelOption {
-  const name = getMarketingNameForModel(getDefaultSonnetModel()) ?? 'Sonnet'
+  const name = defaultSonnetName()
   return {
     value: 'sonnet',
     label: 'Sonnet',
@@ -298,7 +309,7 @@ function getMaxSonnetOption(): ModelOption {
 }
 
 function getMaxHaikuOption(): ModelOption {
-  const name = getMarketingNameForModel(getDefaultHaikuModel()) ?? 'Haiku'
+  const name = defaultHaikuName()
   return {
     value: 'haiku',
     label: 'Haiku',
@@ -307,8 +318,8 @@ function getMaxHaikuOption(): ModelOption {
 }
 
 function getOpusPlanOption(): ModelOption {
-  const opusName = getMarketingNameForModel(getDefaultOpusModel()) ?? 'Opus'
-  const sonnetName = getMarketingNameForModel(getDefaultSonnetModel()) ?? 'Sonnet'
+  const opusName = defaultOpusName()
+  const sonnetName = defaultSonnetName()
   return {
     value: 'opusplan',
     label: 'Opus Plan Mode',
@@ -346,8 +357,8 @@ function getAllVersionOptions(): ModelOption[] {
   ]
 }
 
-// @[MODEL LAUNCH]: Update the model picker lists below to include/reorder options for the new model.
-// Each user tier (ant, Max/Team Premium, Pro/Team Standard/Enterprise, PAYG 1P, PAYG 3P) has its own list.
+// @[MODEL LAUNCH]: Add new version entries to getAllVersionOptions(). Quick picks and defaults
+// derive labels automatically. Each user tier has its own list below.
 function getModelOptionsBase(fastMode = false): ModelOption[] {
   if (process.env.USER_TYPE === 'ant') {
     // Build options from antModels config
@@ -415,7 +426,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     return standardOptions
   }
 
-  // PAYG 1P API: Default (Sonnet) + Sonnet 1M + Opus 4.6 + Opus 1M + Haiku
+  // PAYG 1P API: Default (Sonnet) + Sonnet 1M + Opus + Opus 1M + Haiku + all versions
   if (getAPIProvider() === 'firstParty') {
     const payg1POptions = [getDefaultOptionForUser(fastMode)]
     if (checkSonnet1mAccess()) {
@@ -434,14 +445,14 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     return payg1POptions
   }
 
-  // PAYG 3P: Default (Sonnet 4.5) + Sonnet (3P custom) or Sonnet 4.6/1M + Opus (3P custom) or Opus 4.1/Opus 4.6/Opus1M + Haiku + Opus 4.1
+  // PAYG 3P: Default (Sonnet) + Sonnet (3P custom) or Sonnet/1M + Opus (3P custom) or Opus/1M + Haiku
   const payg3pOptions = [getDefaultOptionForUser(fastMode)]
 
   const customSonnet = getCustomSonnetOption()
   if (customSonnet !== undefined) {
     payg3pOptions.push(customSonnet)
   } else {
-    // Add Sonnet 4.6 since Sonnet 4.5 is the default
+    // Add default Sonnet since older Sonnet is the 3P default
     payg3pOptions.push(getSonnetOption())
     if (checkSonnet1mAccess()) {
       payg3pOptions.push(getSonnet1MOption())
@@ -452,7 +463,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
   if (customOpus !== undefined) {
     payg3pOptions.push(customOpus)
   } else {
-    // Add Opus 4.1, Opus 4.6 and Opus 4.6 1M
+    // Add Opus 4.1 (3P default), current Opus, and Opus 1M
     payg3pOptions.push(getOpus41Option()) // This is the default opus
     payg3pOptions.push(getOpusOption(fastMode))
     if (checkOpus1mAccess()) {
