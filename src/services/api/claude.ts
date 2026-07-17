@@ -1607,10 +1607,10 @@ async function* queryModel(
         'Fable 5 requires adaptive thinking. Ignoring CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING.',
       )
     }
-    const hasThinking =
-      isAlwaysOnThinking ||
-      (thinkingConfig.type !== 'disabled' &&
-      !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING))
+    const hasThinking = isAlwaysOnThinking || (
+      thinkingConfig.type !== 'disabled' &&
+      !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING)
+    )
     let thinking: BetaMessageStreamParams['thinking'] | undefined = undefined
 
     // IMPORTANT: Do not change the adaptive-vs-budget thinking selection below
