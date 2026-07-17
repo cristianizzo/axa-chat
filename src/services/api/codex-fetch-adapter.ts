@@ -304,12 +304,30 @@ async function translateCodexStreamToAnthropic(
       // Safe enqueue with backpressure: buffer chunks when the stream queue
       // is full and drain them on the next successful enqueue.
       const pendingBuffer: Uint8Array[] = []
+      let bufferHead = 0
+      function drainBuffer(): void {
+        while (bufferHead < pendingBuffer.length && controller.desiredSize !== null && controller.desiredSize > 0) {
+          controller.enqueue(pendingBuffer[bufferHead]!)
+          bufferHead++
+        }
+        if (bufferHead > 0 && bufferHead === pendingBuffer.length) {
+          pendingBuffer.length = 0
+          bufferHead = 0
+        }
+      }
       function safeEnqueue(chunk: Uint8Array): void {
         if (controller.desiredSize === null) return // stream closed
         pendingBuffer.push(chunk)
-        while (pendingBuffer.length > 0 && controller.desiredSize !== null && controller.desiredSize > 0) {
-          controller.enqueue(pendingBuffer.shift()!)
+        drainBuffer()
+      }
+      function flushBuffer(): void {
+        // Force-drain remaining chunks before stream close
+        while (bufferHead < pendingBuffer.length && controller.desiredSize !== null) {
+          controller.enqueue(pendingBuffer[bufferHead]!)
+          bufferHead++
         }
+        pendingBuffer.length = 0
+        bufferHead = 0
       }
 
       // Emit Anthropic message_start
@@ -353,6 +371,7 @@ async function translateCodexStreamToAnthropic(
       const reader = codexResponse.body?.getReader()
       if (!reader) {
         emitTextBlock(controller, encoder, contentBlockIndex, 'Error: No response body')
+        flushBuffer()
         finishStream(controller, encoder, outputTokens, inputTokens, false)
         return
       }
@@ -640,6 +659,7 @@ async function translateCodexStreamToAnthropic(
         closeToolCallBlock(controller, encoder, contentBlockIndex, currentToolCallId, currentToolCallName, currentToolCallArgs)
       }
 
+      flushBuffer()
       finishStream(controller, encoder, outputTokens, inputTokens, hadToolCalls)
     },
   })
