@@ -51,11 +51,11 @@ function TwoLevelModelPicker(props: Props): React.ReactNode {
   // Version selection screen
   if (browseFamily) {
     const backOption = { value: BACK_TO_MAIN, label: '← Back', description: 'Return to model selection' }
-    // Filter versions by allowlist
+    // Filter versions by allowlist, skip any without a valid model ID
     const versionOptions = browseFamily.versions
-      .filter(v => !v.value || isModelAllowed(v.value))
+      .filter(v => v.value && isModelAllowed(v.value))
       .map(v => ({
-        value: v.value ?? '',
+        value: v.value!,
         label: v.label,
         description: v.description,
       }))
@@ -83,7 +83,7 @@ function TwoLevelModelPicker(props: Props): React.ReactNode {
   }
 
   // Main screen — intercept family selections
-  const handleFamilyOrSelect = (model: string | null, effort: any) => {
+  const handleFamilyOrSelect = (model: string | null, effort: EffortLevel | undefined) => {
     if (typeof model === 'string' && model.startsWith(FAMILY_PREFIX)) {
       const familyKey = model.slice(FAMILY_PREFIX.length)
       const family = families.find(f => f.key === familyKey)

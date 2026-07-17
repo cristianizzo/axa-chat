@@ -510,9 +510,12 @@ export function getModelPickerOptions(fastMode = false): ModelOption[] {
 
 /**
  * Model options for non-picker consumers (config, settings, CLI).
+ * Strips __family_* sentinel values that are only meaningful in the picker UI.
  */
 export function getModelOptions(fastMode = false): ModelOption[] {
-  return getModelOptionsInternal(fastMode)
+  return getModelOptionsInternal(fastMode).filter(
+    opt => !(typeof opt.value === 'string' && opt.value.startsWith(FAMILY_PREFIX)),
+  )
 }
 
 function getModelOptionsInternal(fastMode = false): ModelOption[] {
