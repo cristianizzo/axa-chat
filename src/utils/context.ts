@@ -45,7 +45,15 @@ export function modelSupports1M(model: string): boolean {
     return false
   }
   const canonical = getCanonicalName(model)
-  return canonical.includes('claude-sonnet-4') || canonical.includes('opus-4-6')
+  return (
+    canonical.includes('claude-sonnet-4') ||
+    canonical.includes('claude-sonnet-5') ||
+    canonical.includes('opus-4-6') ||
+    canonical.includes('opus-4-7') ||
+    canonical.includes('opus-4-8') ||
+    canonical.includes('claude-fable-5') ||
+    canonical.includes('claude-mythos-5')
+  )
 }
 
 export function getContextWindowForModel(
@@ -164,7 +172,14 @@ export function getModelMaxOutputTokens(model: string): {
 
   const m = getCanonicalName(model)
 
-  if (m.includes('opus-4-6')) {
+  if (
+    m.includes('fable-5') ||
+    m.includes('mythos-5') ||
+    m.includes('opus-4-8') ||
+    m.includes('opus-4-7') ||
+    m.includes('sonnet-5') ||
+    m.includes('opus-4-6')
+  ) {
     defaultTokens = 64_000
     upperLimit = 128_000
   } else if (m.includes('sonnet-4-6')) {
