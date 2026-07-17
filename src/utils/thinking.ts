@@ -122,7 +122,7 @@ export function modelSupportsAdaptiveThinking(model: string): boolean {
     return supported3P
   }
   const canonical = getCanonicalName(model)
-  // Supported by a subset of Claude 4 models
+  // Supported by Claude 4.6+ and Claude 5 family models
   if (
     canonical.includes('opus-4-6') ||
     canonical.includes('opus-4-7') ||
