@@ -301,8 +301,19 @@ async function translateCodexStreamToAnthropic(
       let outputTokens = 0
       let inputTokens = 0
 
+      // Safe enqueue with backpressure: buffer chunks when the stream queue
+      // is full and drain them on the next successful enqueue.
+      const pendingBuffer: Uint8Array[] = []
+      function safeEnqueue(chunk: Uint8Array): void {
+        if (controller.desiredSize === null) return // stream closed
+        pendingBuffer.push(chunk)
+        while (pendingBuffer.length > 0 && controller.desiredSize !== null && controller.desiredSize > 0) {
+          controller.enqueue(pendingBuffer.shift()!)
+        }
+      }
+
       // Emit Anthropic message_start
-      controller.enqueue(
+      safeEnqueue(
         encoder.encode(
           formatSSE(
             'message_start',
@@ -324,7 +335,7 @@ async function translateCodexStreamToAnthropic(
       )
 
       // Emit ping
-      controller.enqueue(
+      safeEnqueue(
         encoder.encode(
           formatSSE('ping', JSON.stringify({ type: 'ping' })),
         ),
@@ -384,7 +395,7 @@ async function translateCodexStreamToAnthropic(
               const item = event.item as Record<string, unknown>
               if (item?.type === 'reasoning') {
                 inReasoningBlock = true
-                controller.enqueue(
+                safeEnqueue(
                   encoder.encode(
                     formatSSE(
                       'content_block_start',
@@ -407,7 +418,7 @@ async function translateCodexStreamToAnthropic(
               } else if (item?.type === 'function_call') {
                 // Close text block if open
                 if (currentTextBlockStarted) {
-                  controller.enqueue(
+                  safeEnqueue(
                     encoder.encode(
                       formatSSE('content_block_stop', JSON.stringify({
                         type: 'content_block_stop',
@@ -426,7 +437,7 @@ async function translateCodexStreamToAnthropic(
                 inToolCall = true
                 hadToolCalls = true
 
-                controller.enqueue(
+                safeEnqueue(
                   encoder.encode(
                     formatSSE('content_block_start', JSON.stringify({
                       type: 'content_block_start',
@@ -449,7 +460,7 @@ async function translateCodexStreamToAnthropic(
               if (typeof text === 'string' && text.length > 0) {
                 if (!currentTextBlockStarted) {
                   // Start a new text content block
-                  controller.enqueue(
+                  safeEnqueue(
                     encoder.encode(
                       formatSSE('content_block_start', JSON.stringify({
                         type: 'content_block_start',
@@ -460,7 +471,7 @@ async function translateCodexStreamToAnthropic(
                   )
                   currentTextBlockStarted = true
                 }
-                controller.enqueue(
+                safeEnqueue(
                   encoder.encode(
                     formatSSE('content_block_delta', JSON.stringify({
                       type: 'content_block_delta',
@@ -479,7 +490,7 @@ async function translateCodexStreamToAnthropic(
               if (typeof text === 'string' && text.length > 0) {
                 if (!inReasoningBlock) {
                   inReasoningBlock = true
-                  controller.enqueue(
+                  safeEnqueue(
                     encoder.encode(
                       formatSSE('content_block_start', JSON.stringify({
                         type: 'content_block_start',
@@ -489,7 +500,7 @@ async function translateCodexStreamToAnthropic(
                     ),
                   )
                 }
-                controller.enqueue(
+                safeEnqueue(
                   encoder.encode(
                     formatSSE('content_block_delta', JSON.stringify({
                       type: 'content_block_delta',
@@ -507,7 +518,7 @@ async function translateCodexStreamToAnthropic(
               const argDelta = event.delta as string
               if (typeof argDelta === 'string' && inToolCall) {
                 currentToolCallArgs += argDelta
-                controller.enqueue(
+                safeEnqueue(
                   encoder.encode(
                     formatSSE('content_block_delta', JSON.stringify({
                       type: 'content_block_delta',
@@ -539,7 +550,7 @@ async function translateCodexStreamToAnthropic(
                 currentToolCallArgs = ''
               } else if (item?.type === 'message') {
                 if (currentTextBlockStarted) {
-                  controller.enqueue(
+                  safeEnqueue(
                     encoder.encode(
                       formatSSE('content_block_stop', JSON.stringify({
                         type: 'content_block_stop',
@@ -552,7 +563,7 @@ async function translateCodexStreamToAnthropic(
                 }
               } else if (item?.type === 'reasoning') {
                 if (inReasoningBlock) {
-                  controller.enqueue(
+                  safeEnqueue(
                     encoder.encode(
                       formatSSE('content_block_stop', JSON.stringify({
                         type: 'content_block_stop',
@@ -580,7 +591,7 @@ async function translateCodexStreamToAnthropic(
       } catch (err) {
         // If we're in the middle of a text block, emit the error there
         if (!currentTextBlockStarted) {
-          controller.enqueue(
+          safeEnqueue(
             encoder.encode(
               formatSSE('content_block_start', JSON.stringify({
                 type: 'content_block_start',
@@ -591,7 +602,7 @@ async function translateCodexStreamToAnthropic(
           )
           currentTextBlockStarted = true
         }
-        controller.enqueue(
+        safeEnqueue(
           encoder.encode(
             formatSSE('content_block_delta', JSON.stringify({
               type: 'content_block_delta',
@@ -606,7 +617,7 @@ async function translateCodexStreamToAnthropic(
 
       // Close any remaining open blocks
       if (currentTextBlockStarted) {
-        controller.enqueue(
+        safeEnqueue(
           encoder.encode(
             formatSSE('content_block_stop', JSON.stringify({
               type: 'content_block_stop',
@@ -616,7 +627,7 @@ async function translateCodexStreamToAnthropic(
         )
       }
       if (inReasoningBlock) {
-        controller.enqueue(
+        safeEnqueue(
           encoder.encode(
             formatSSE('content_block_stop', JSON.stringify({
               type: 'content_block_stop',
