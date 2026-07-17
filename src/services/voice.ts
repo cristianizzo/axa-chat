@@ -548,10 +548,14 @@ export function stopRecording(): void {
   }
   if (activeRecorder) {
     const proc = activeRecorder
-    try { proc.kill('SIGTERM') } catch {}
+    try { proc.kill('SIGTERM') } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code !== 'ESRCH') logError(e as Error)
+    }
     // Fallback: if SIGTERM is ignored, escalate to SIGKILL after 500ms
     const killTimer = setTimeout(() => {
-      try { proc.kill('SIGKILL') } catch {}
+      try { proc.kill('SIGKILL') } catch (e: unknown) {
+        if ((e as NodeJS.ErrnoException).code !== 'ESRCH') logError(e as Error)
+      }
     }, 500)
     killTimer.unref()
     const clearKill = () => clearTimeout(killTimer)

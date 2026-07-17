@@ -373,7 +373,7 @@ async function translateCodexStreamToAnthropic(
             try {
               event = JSON.parse(dataStr)
             } catch (e) {
-              logForDebugging(`Codex SSE: malformed JSON event (${dataStr.length} chars): ${String(e)}`, { level: 'debug' })
+              try { logForDebugging(`Codex SSE: malformed JSON event (${dataStr.length} chars): ${String(e)}`, { level: 'debug' }) } catch {}
               continue
             }
 
@@ -771,8 +771,11 @@ export function createCodexFetch(
             : '{}'
       anthropicBody = JSON.parse(bodyText)
     } catch (e) {
-      logForDebugging(`Codex: failed to parse request body: ${String(e)}`, { level: 'warn' })
-      anthropicBody = {}
+      try { logForDebugging(`Codex: failed to parse request body: ${String(e)}`, { level: 'warn' }) } catch {}
+      return new Response(JSON.stringify({ error: { message: 'Failed to parse request body', type: 'invalid_request_error' } }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })
     }
 
     // Get current token (may have been refreshed)
