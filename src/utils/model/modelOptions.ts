@@ -563,7 +563,26 @@ function getKnownModelOption(model: string): ModelOption | null {
   }
 }
 
+function isSeparator(opt: ModelOption): boolean {
+  return typeof opt.value === 'string' && opt.value.startsWith('__sep_')
+}
+
+/**
+ * Model options for the /model picker UI — includes visual separators.
+ */
+export function getModelPickerOptions(fastMode = false): ModelOption[] {
+  return getModelOptionsRaw(fastMode)
+}
+
+/**
+ * Model options for non-picker consumers (config, settings, CLI).
+ * Separators are stripped out.
+ */
 export function getModelOptions(fastMode = false): ModelOption[] {
+  return getModelOptionsRaw(fastMode).filter(opt => !isSeparator(opt))
+}
+
+function getModelOptionsRaw(fastMode = false): ModelOption[] {
   const options = getModelOptionsBase(fastMode)
 
   // Add the custom model from the ANTHROPIC_CUSTOM_MODEL_OPTION env var
@@ -641,7 +660,7 @@ function filterModelOptionsByAllowlist(options: ModelOption[]): ModelOption[] {
   return options.filter(
     opt =>
       opt.value === null ||
-      opt.disabled === true ||
+      (typeof opt.value === 'string' && opt.value.startsWith('__sep_')) ||
       (opt.value !== null && isModelAllowed(opt.value)),
   )
 }
