@@ -177,6 +177,7 @@ import { returnValue } from 'src/utils/generators.js'
 import { headlessProfilerCheckpoint } from 'src/utils/headlessProfiler.js'
 import { isMcpInstructionsDeltaEnabled } from 'src/utils/mcpInstructionsDelta.js'
 import { calculateUSDCost } from 'src/utils/modelCost.js'
+import { getCanonicalName } from 'src/utils/model/model.js'
 import { endQueryProfile, queryCheckpoint } from 'src/utils/queryProfiler.js'
 import {
   modelSupportsAdaptiveThinking,
@@ -1593,9 +1594,13 @@ async function* queryModel(
       options.maxOutputTokensOverride ||
       getMaxOutputTokensForModel(options.model)
 
+    // Models with always-on thinking (e.g., Fable 5) reject { type: 'disabled' }.
+    // Force adaptive thinking regardless of user setting to prevent API 400 errors.
+    const isAlwaysOnThinking = getCanonicalName(options.model).includes('fable-5')
     const hasThinking =
-      thinkingConfig.type !== 'disabled' &&
-      !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING)
+      isAlwaysOnThinking ||
+      (thinkingConfig.type !== 'disabled' &&
+      !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING))
     let thinking: BetaMessageStreamParams['thinking'] | undefined = undefined
 
     // IMPORTANT: Do not change the adaptive-vs-budget thinking selection below

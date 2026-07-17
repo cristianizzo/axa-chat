@@ -29,8 +29,16 @@ export function modelSupportsEffort(model: string): boolean {
   if (supported3P !== undefined) {
     return supported3P
   }
-  // Supported by a subset of Claude 4 models
-  if (m.includes('opus-4-6') || m.includes('sonnet-4-6')) {
+  // Supported by Claude 4.6+ models, Sonnet 5, Fable 5, Mythos 5
+  if (
+    m.includes('opus-4-6') ||
+    m.includes('opus-4-7') ||
+    m.includes('opus-4-8') ||
+    m.includes('sonnet-4-6') ||
+    m.includes('sonnet-5') ||
+    m.includes('fable-5') ||
+    m.includes('mythos-5')
+  ) {
     return true
   }
   // Exclude any other known legacy models (haiku, older opus/sonnet variants)
@@ -55,7 +63,11 @@ export function modelSupportsMaxEffort(model: string): boolean {
   if (supported3P !== undefined) {
     return supported3P
   }
-  if (model.toLowerCase().includes('opus-4-6')) {
+  if (
+    model.toLowerCase().includes('opus-4-6') ||
+    model.toLowerCase().includes('opus-4-7') ||
+    model.toLowerCase().includes('opus-4-8')
+  ) {
     return true
   }
   if (process.env.USER_TYPE === 'ant' && resolveAntModel(model)) {
