@@ -16,6 +16,7 @@
  */
 
 import { getCodexOAuthTokens } from '../../utils/auth.js'
+import { logForDebugging } from '../../utils/debug.js'
 
 // ── Available Codex models ──────────────────────────────────────────
 export const CODEX_MODELS = [
@@ -371,7 +372,8 @@ async function translateCodexStreamToAnthropic(
             let event: Record<string, unknown>
             try {
               event = JSON.parse(dataStr)
-            } catch {
+            } catch (e) {
+              try { logForDebugging(`Codex SSE: malformed JSON event (${dataStr.length} chars): ${String(e)}`, { level: 'debug' }) } catch {}
               continue
             }
 
@@ -768,8 +770,12 @@ export function createCodexFetch(
             ? init.body
             : '{}'
       anthropicBody = JSON.parse(bodyText)
-    } catch {
-      anthropicBody = {}
+    } catch (e) {
+      try { logForDebugging(`Codex: failed to parse request body: ${String(e)}`, { level: 'warn' }) } catch {}
+      return new Response(JSON.stringify({ error: { message: 'Failed to parse request body', type: 'invalid_request_error' } }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })
     }
 
     // Get current token (may have been refreshed)

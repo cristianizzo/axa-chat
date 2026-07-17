@@ -480,13 +480,13 @@ function startSoxRecording(
   child.stderr?.on('data', () => {})
 
   child.on('close', () => {
-    activeRecorder = null
+    if (activeRecorder === child) activeRecorder = null
     onEnd()
   })
 
   child.on('error', err => {
     logError(err)
-    activeRecorder = null
+    if (activeRecorder === child) activeRecorder = null
     onEnd()
   })
 
@@ -527,13 +527,13 @@ function startArecordRecording(
   child.stderr?.on('data', () => {})
 
   child.on('close', () => {
-    activeRecorder = null
+    if (activeRecorder === child) activeRecorder = null
     onEnd()
   })
 
   child.on('error', err => {
     logError(err)
-    activeRecorder = null
+    if (activeRecorder === child) activeRecorder = null
     onEnd()
   })
 
@@ -547,7 +547,20 @@ export function stopRecording(): void {
     return
   }
   if (activeRecorder) {
-    activeRecorder.kill('SIGTERM')
-    activeRecorder = null
+    const proc = activeRecorder
+    try { proc.kill('SIGTERM') } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code !== 'ESRCH') logError(e as Error)
+    }
+    // Fallback: if SIGTERM is ignored, escalate to SIGKILL after 500ms
+    const killTimer = setTimeout(() => {
+      try { proc.kill('SIGKILL') } catch (e: unknown) {
+        if ((e as NodeJS.ErrnoException).code !== 'ESRCH') logError(e as Error)
+      }
+    }, 500)
+    killTimer.unref()
+    const clearKill = () => clearTimeout(killTimer)
+    proc.once('close', clearKill)
+    proc.once('error', clearKill)
+    // Let the existing 'close' handler null out activeRecorder
   }
 }
