@@ -1595,7 +1595,9 @@ async function* queryModel(
       getMaxOutputTokensForModel(options.model)
 
     // Models with always-on thinking (e.g., Fable 5) reject { type: 'disabled' }.
-    // Force adaptive thinking regardless of user setting to prevent API 400 errors.
+    // Force thinking to be enabled to prevent API 400 errors. The adaptive vs
+    // budget selection below still applies (CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING
+    // can force budget-based thinking even for always-on models).
     const isAlwaysOnThinking = getCanonicalName(options.model) === 'claude-fable-5'
     const hasThinking =
       isAlwaysOnThinking ||
