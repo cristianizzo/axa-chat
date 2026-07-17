@@ -1047,39 +1047,27 @@ export const connectToServer = memoize(
         }
       }
 
-      const connectPromise = client.connect(transport)
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        const timeoutId = setTimeout(() => {
-          const elapsed = Date.now() - connectStartTime
-          logMCPDebug(
-            name,
-            `Connection timeout triggered after ${elapsed}ms (limit: ${getConnectionTimeoutMs()}ms)`,
-          )
-          if (inProcessServer) {
-            inProcessServer.close().catch(() => {})
-          }
-          transport.close().catch(() => {})
-          reject(
-            new TelemetrySafeError_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS(
-              `MCP server "${name}" connection timed out after ${getConnectionTimeoutMs()}ms`,
-              'MCP connection timeout',
-            ),
-          )
-        }, getConnectionTimeoutMs())
-
-        // Clean up timeout if connect resolves or rejects
-        connectPromise.then(
-          () => {
-            clearTimeout(timeoutId)
-          },
-          _error => {
-            clearTimeout(timeoutId)
-          },
+      // Use AbortController for clean timeout cancellation — properly cancels
+      // the in-flight connection instead of just racing past it.
+      const timeoutMs = getConnectionTimeoutMs()
+      const abortController = new AbortController()
+      const timeoutId = setTimeout(() => {
+        const elapsed = Date.now() - connectStartTime
+        logMCPDebug(
+          name,
+          `Connection timeout triggered after ${elapsed}ms (limit: ${timeoutMs}ms)`,
         )
-      })
+        abortController.abort(
+          new TelemetrySafeError_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS(
+            `MCP server "${name}" connection timed out after ${timeoutMs}ms`,
+            'MCP connection timeout',
+          ),
+        )
+      }, timeoutMs)
 
       try {
-        await Promise.race([connectPromise, timeoutPromise])
+        await client.connect(transport, { signal: abortController.signal })
+        clearTimeout(timeoutId)
         if (stderrOutput) {
           logMCPError(name, `Server stderr: ${stderrOutput}`)
           stderrOutput = '' // Release accumulated string to prevent memory growth
@@ -1090,6 +1078,12 @@ export const connectToServer = memoize(
           `Successfully connected (transport: ${serverRef.type || 'stdio'}) in ${elapsed}ms`,
         )
       } catch (error) {
+        clearTimeout(timeoutId)
+        // Clean up transport and in-process server on failure
+        if (inProcessServer) {
+          inProcessServer.close().catch(() => {})
+        }
+        transport.close().catch(() => {})
         const elapsed = Date.now() - connectStartTime
         // SSE-specific error logging
         if (serverRef.type === 'sse' && error instanceof Error) {
