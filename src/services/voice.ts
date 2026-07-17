@@ -480,13 +480,13 @@ function startSoxRecording(
   child.stderr?.on('data', () => {})
 
   child.on('close', () => {
-    activeRecorder = null
+    if (activeRecorder === child) activeRecorder = null
     onEnd()
   })
 
   child.on('error', err => {
     logError(err)
-    activeRecorder = null
+    if (activeRecorder === child) activeRecorder = null
     onEnd()
   })
 
@@ -527,13 +527,13 @@ function startArecordRecording(
   child.stderr?.on('data', () => {})
 
   child.on('close', () => {
-    activeRecorder = null
+    if (activeRecorder === child) activeRecorder = null
     onEnd()
   })
 
   child.on('error', err => {
     logError(err)
-    activeRecorder = null
+    if (activeRecorder === child) activeRecorder = null
     onEnd()
   })
 
@@ -557,6 +557,6 @@ export function stopRecording(): void {
     const clearKill = () => clearTimeout(killTimer)
     proc.once('close', clearKill)
     proc.once('error', clearKill)
-    // Let the 'close' handler on line 529 null out activeRecorder
+    // Let the existing 'close' handler null out activeRecorder
   }
 }

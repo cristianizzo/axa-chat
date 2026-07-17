@@ -683,7 +683,13 @@ export class SSETransport implements Transport {
     }
     this.clearLivenessTimer()
 
-    if (this.state === 'closed') return
+    if (this.state === 'closed') {
+      // Still clean up abortController in case a previous path set 'closed'
+      // without clearing it (e.g. permanent HTTP error in connect())
+      this.abortController?.abort()
+      this.abortController = null
+      return
+    }
     this.state = 'closing'
     this.abortController?.abort()
     this.abortController = null
