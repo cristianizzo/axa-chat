@@ -373,7 +373,7 @@ async function translateCodexStreamToAnthropic(
             try {
               event = JSON.parse(dataStr)
             } catch (e) {
-              logForDebugging(`Codex SSE: malformed JSON event: ${dataStr.slice(0, 200)}`, { level: 'debug' })
+              logForDebugging(`Codex SSE: malformed JSON event (${dataStr.length} chars): ${String(e)}`, { level: 'debug' })
               continue
             }
 

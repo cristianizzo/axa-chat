@@ -683,6 +683,7 @@ export class SSETransport implements Transport {
     }
     this.clearLivenessTimer()
 
+    if (this.state === 'closed') return
     this.state = 'closing'
     this.abortController?.abort()
     this.abortController = null

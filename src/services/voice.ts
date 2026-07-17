@@ -548,12 +548,15 @@ export function stopRecording(): void {
   }
   if (activeRecorder) {
     const proc = activeRecorder
-    proc.kill('SIGTERM')
+    try { proc.kill('SIGTERM') } catch {}
     // Fallback: if SIGTERM is ignored, escalate to SIGKILL after 500ms
     const killTimer = setTimeout(() => {
       try { proc.kill('SIGKILL') } catch {}
     }, 500)
-    proc.once('close', () => clearTimeout(killTimer))
+    killTimer.unref()
+    const clearKill = () => clearTimeout(killTimer)
+    proc.once('close', clearKill)
+    proc.once('error', clearKill)
     // Let the 'close' handler on line 529 null out activeRecorder
   }
 }
