@@ -316,58 +316,33 @@ function getOpusPlanOption(): ModelOption {
   }
 }
 
-// ── Version-specific model options ──────────────────────────────
-// These let users pick an exact model version rather than the latest default.
+// ── All model versions grouped by family ──────────────────────────────
 
-function getVersionOption(modelKey: string, modelId: string, desc: string): ModelOption {
+function versionOption(modelId: string, desc: string): ModelOption {
   const name = getMarketingNameForModel(modelId)
   return {
     value: modelId,
-    label: name ?? modelId,
+    label: `  ${name ?? modelId}`,
     description: desc,
     descriptionForModel: `${name ?? modelId} - ${desc}`,
   }
 }
 
-function getFable5Option(): ModelOption {
-  return getVersionOption('fable5', getModelStrings().fable5,
-    'Next-gen intelligence for long-running agents · $10/$50 per MTok · 1M context · 128k output')
-}
-
-function getOpus48Option(): ModelOption {
-  return getVersionOption('opus48', getModelStrings().opus48,
-    'Complex agentic coding and enterprise work · $5/$25 per MTok · 1M context · 128k output')
-}
-
-function getOpus47Option(): ModelOption {
-  return getVersionOption('opus47', getModelStrings().opus47,
-    'Agentic coding · $5/$25 per MTok · 1M context · 128k output')
-}
-
-function getOpus46VersionOption(): ModelOption {
-  return getVersionOption('opus46', getModelStrings().opus46,
-    'Previous default Opus · $5/$25 per MTok · 1M context · 128k output')
-}
-
-function getSonnet5Option(): ModelOption {
-  return getVersionOption('sonnet5', getModelStrings().sonnet5,
-    'Best speed and intelligence balance · $3/$15 per MTok · 1M context · 128k output')
-}
-
-function getSonnet46VersionOption(): ModelOption {
-  return getVersionOption('sonnet46', getModelStrings().sonnet46,
-    'Previous default Sonnet · $3/$15 per MTok · 1M context · 128k output')
-}
-
-/** All version-specific options for the "More models" section of the picker. */
 function getAllVersionOptions(): ModelOption[] {
+  const s = getModelStrings()
   return [
-    getFable5Option(),
-    getOpus48Option(),
-    getOpus47Option(),
-    getOpus46VersionOption(),
-    getSonnet5Option(),
-    getSonnet46VersionOption(),
+    // Opus family
+    { value: '', label: '─ Opus versions', description: '$5/$25 · Most capable for complex work' },
+    versionOption(s.opus48, '1M ctx · 128k out · Agentic coding & enterprise'),
+    versionOption(s.opus47, '1M ctx · 128k out · Agentic coding'),
+    versionOption(s.opus46, '1M ctx · 128k out · Previous default'),
+    // Sonnet family
+    { value: '', label: '─ Sonnet versions', description: '$3/$15 · Best speed/intelligence balance' },
+    versionOption(s.sonnet5, '1M ctx · 128k out · Latest'),
+    versionOption(s.sonnet46, '1M ctx · 128k out · Previous default'),
+    // Fable family
+    { value: '', label: '─ Fable', description: '$10/$50 · Next-gen long-running agents' },
+    versionOption(s.fable5, '1M ctx · 128k out · Most advanced'),
   ]
 }
 
