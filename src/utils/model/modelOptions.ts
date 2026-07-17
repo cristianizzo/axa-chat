@@ -316,6 +316,61 @@ function getOpusPlanOption(): ModelOption {
   }
 }
 
+// ── Version-specific model options ──────────────────────────────
+// These let users pick an exact model version rather than the latest default.
+
+function getVersionOption(modelKey: string, modelId: string, desc: string): ModelOption {
+  const name = getMarketingNameForModel(modelId)
+  return {
+    value: modelId,
+    label: name ?? modelId,
+    description: desc,
+    descriptionForModel: `${name ?? modelId} - ${desc}`,
+  }
+}
+
+function getFable5Option(): ModelOption {
+  return getVersionOption('fable5', getModelStrings().fable5,
+    'Next-gen intelligence for long-running agents · $10/$50 per MTok · 1M context · 128k output')
+}
+
+function getOpus48Option(): ModelOption {
+  return getVersionOption('opus48', getModelStrings().opus48,
+    'Complex agentic coding and enterprise work · $5/$25 per MTok · 1M context · 128k output')
+}
+
+function getOpus47Option(): ModelOption {
+  return getVersionOption('opus47', getModelStrings().opus47,
+    'Agentic coding · $5/$25 per MTok · 1M context · 128k output')
+}
+
+function getOpus46VersionOption(): ModelOption {
+  return getVersionOption('opus46', getModelStrings().opus46,
+    'Previous default Opus · $5/$25 per MTok · 1M context · 128k output')
+}
+
+function getSonnet5Option(): ModelOption {
+  return getVersionOption('sonnet5', getModelStrings().sonnet5,
+    'Best speed and intelligence balance · $3/$15 per MTok · 1M context · 128k output')
+}
+
+function getSonnet46VersionOption(): ModelOption {
+  return getVersionOption('sonnet46', getModelStrings().sonnet46,
+    'Previous default Sonnet · $3/$15 per MTok · 1M context · 128k output')
+}
+
+/** All version-specific options for the "More models" section of the picker. */
+function getAllVersionOptions(): ModelOption[] {
+  return [
+    getFable5Option(),
+    getOpus48Option(),
+    getOpus47Option(),
+    getOpus46VersionOption(),
+    getSonnet5Option(),
+    getSonnet46VersionOption(),
+  ]
+}
+
 // @[MODEL LAUNCH]: Update the model picker lists below to include/reorder options for the new model.
 // Each user tier (ant, Max/Team Premium, Pro/Team Standard/Enterprise, PAYG 1P, PAYG 3P) has its own list.
 function getModelOptionsBase(fastMode = false): ModelOption[] {
@@ -361,6 +416,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
       }
 
       premiumOptions.push(getMaxHaikuOption())
+      premiumOptions.push(...getAllVersionOptions())
       return premiumOptions
     }
 
@@ -380,6 +436,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     }
 
     standardOptions.push(getMaxHaikuOption())
+    standardOptions.push(...getAllVersionOptions())
     return standardOptions
   }
 
@@ -398,6 +455,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
       }
     }
     payg1POptions.push(getHaiku45Option())
+    payg1POptions.push(...getAllVersionOptions())
     return payg1POptions
   }
 
