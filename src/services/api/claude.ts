@@ -83,6 +83,7 @@ import {
   stripToolReferenceBlocksFromUserMessage,
 } from '../../utils/messages.js'
 import {
+  getCanonicalName,
   getDefaultOpusModel,
   getDefaultSonnetModel,
   getSmallFastModel,
@@ -1593,9 +1594,23 @@ async function* queryModel(
       options.maxOutputTokensOverride ||
       getMaxOutputTokensForModel(options.model)
 
-    const hasThinking =
+    // Models with always-on thinking (e.g., Fable 5) reject { type: 'disabled' }
+    // and require adaptive thinking. Log warnings when user env vars are overridden.
+    const isAlwaysOnThinking = getCanonicalName(options.model) === 'claude-fable-5'
+    if (isAlwaysOnThinking && isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING)) {
+      logForDebugging(
+        'Fable 5 requires thinking to be enabled (API rejects disabled). Ignoring CLAUDE_CODE_DISABLE_THINKING. Use a different model to disable thinking.',
+      )
+    }
+    if (isAlwaysOnThinking && isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING)) {
+      logForDebugging(
+        'Fable 5 requires adaptive thinking. Ignoring CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING.',
+      )
+    }
+    const hasThinking = isAlwaysOnThinking || (
       thinkingConfig.type !== 'disabled' &&
       !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING)
+    )
     let thinking: BetaMessageStreamParams['thinking'] | undefined = undefined
 
     // IMPORTANT: Do not change the adaptive-vs-budget thinking selection below
@@ -1603,7 +1618,7 @@ async function* queryModel(
     // setting that can greatly affect model quality and bashing.
     if (hasThinking && modelSupportsThinking(options.model)) {
       if (
-        !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING) &&
+        (isAlwaysOnThinking || !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING)) &&
         modelSupportsAdaptiveThinking(options.model)
       ) {
         // For models that support adaptive thinking, always use adaptive
