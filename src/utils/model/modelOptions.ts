@@ -41,7 +41,6 @@ export type ModelOption = {
   label: string
   description: string
   descriptionForModel?: string
-  disabled?: boolean
 }
 
 export function getDefaultOptionForUser(fastMode = false): ModelOption {
@@ -328,58 +327,73 @@ function getOpusPlanOption(): ModelOption {
   }
 }
 
-// ── All model versions grouped by family ──────────────────────────────
+// ── Model family & version structure for two-level picker ──────────────
 
-function versionOption(modelId: string, desc: string): ModelOption {
-  const name = getMarketingNameForModel(modelId)
-  return {
-    value: modelId,
-    label: `  ${name ?? modelId}`,
-    description: desc,
-    descriptionForModel: `${name ?? modelId} - ${desc}`,
-  }
+export type ModelFamily = {
+  key: string
+  label: string
+  description: string
+  versions: ModelOption[]
 }
 
-function getAllVersionOptions(): ModelOption[] {
+export function getModelFamilies(): ModelFamily[] {
   const s = getModelStrings()
   return [
-    // Opus family
-    { value: '__sep_opus__', label: '─ Opus versions', description: '$5/$25 · Most capable for complex work', disabled: true },
-    versionOption(s.opus48, '1M ctx · 128k out · Agentic coding & enterprise'),
-    versionOption(s.opus47, '1M ctx · 128k out · Agentic coding'),
-    versionOption(s.opus46, '1M ctx · 128k out · Previous default'),
-    // Sonnet family
-    { value: '__sep_sonnet__', label: '─ Sonnet versions', description: '$3/$15 · Best speed/intelligence balance', disabled: true },
-    versionOption(s.sonnet5, '1M ctx · 128k out · Latest'),
-    versionOption(s.sonnet46, '1M ctx · 128k out · Previous default'),
-    // Fable family
-    { value: '__sep_fable__', label: '─ Fable', description: '$10/$50 · Next-gen long-running agents', disabled: true },
-    versionOption(s.fable5, '1M ctx · 128k out · Most advanced'),
+    {
+      key: 'opus',
+      label: 'Opus',
+      description: '$5/$25 · Most capable for complex work',
+      versions: [
+        { value: s.opus48, label: 'Opus 4.8', description: '1M context · 128k output · Agentic coding & enterprise' },
+        { value: s.opus47, label: 'Opus 4.7', description: '1M context · 128k output · Agentic coding' },
+        { value: s.opus46, label: 'Opus 4.6', description: '1M context · 128k output · Previous default' },
+      ],
+    },
+    {
+      key: 'sonnet',
+      label: 'Sonnet',
+      description: '$3/$15 · Best speed/intelligence balance',
+      versions: [
+        { value: s.sonnet5, label: 'Sonnet 5', description: '1M context · 128k output · Latest' },
+        { value: s.sonnet46, label: 'Sonnet 4.6', description: '1M context · 128k output · Previous default' },
+      ],
+    },
+    {
+      key: 'fable',
+      label: 'Fable',
+      description: '$10/$50 · Next-gen long-running agents',
+      versions: [
+        { value: s.fable5, label: 'Fable 5', description: '1M context · 128k output · Most advanced' },
+      ],
+    },
+    {
+      key: 'haiku',
+      label: 'Haiku',
+      description: '$1/$5 · Fastest for quick answers',
+      versions: [
+        { value: s.haiku45, label: 'Haiku 4.5', description: '200k context · 64k output' },
+      ],
+    },
   ]
 }
 
-// @[MODEL LAUNCH]: Add new version entries to getAllVersionOptions(). Quick picks and defaults
-// derive labels automatically. Each user tier has its own list below.
+/** Family option values — intercepted by the two-level picker to show versions. */
+export const FAMILY_PREFIX = '__family_'
+
+// @[MODEL LAUNCH]: Add new families to getModelOptionsBase() and getModelFamilies().
 function getModelOptionsBase(fastMode = false): ModelOption[] {
   if (process.env.USER_TYPE === 'ant') {
-    // Build options from antModels config
     const antModelOptions: ModelOption[] = getAntModels().map(m => ({
       value: m.alias,
       label: m.label,
       description: m.description ?? `[ANT-ONLY] ${m.label} (${m.model})`,
     }))
-
     return [
       getDefaultOptionForUser(),
       ...antModelOptions,
-      getMergedOpus1MOption(fastMode),
-      getSonnetOption(),
-      getSonnet1MOption(),
-      getHaiku45Option(),
     ]
   }
 
-  // Codex subscribers get OpenAI model options
   if (isCodexSubscriber()) {
     return [
       getDefaultOptionForUser(),
@@ -389,95 +403,18 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     ]
   }
 
-  if (isClaudeAISubscriber()) {
-    if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
-      // Max and Team Premium users: Opus is default, show Sonnet as alternative
-      const premiumOptions = [getDefaultOptionForUser(fastMode)]
-      if (!isOpus1mMergeEnabled() && checkOpus1mAccess()) {
-        premiumOptions.push(getMaxOpus1MOption(fastMode))
-      }
+  // All Claude users (subscribers + PAYG): Default + family pickers
+  const families = getModelFamilies()
+  const familyOptions: ModelOption[] = families.map(f => ({
+    value: `${FAMILY_PREFIX}${f.key}`,
+    label: f.label,
+    description: `${f.description} · Select version`,
+  }))
 
-      premiumOptions.push(getMaxSonnetOption())
-      if (checkSonnet1mAccess()) {
-        premiumOptions.push(getMaxSonnet1MOption())
-      }
-
-      premiumOptions.push(getMaxHaikuOption())
-      premiumOptions.push(...getAllVersionOptions())
-      return premiumOptions
-    }
-
-    // Pro/Team Standard/Enterprise users: Sonnet is default, show Opus as alternative
-    const standardOptions = [getDefaultOptionForUser(fastMode)]
-    if (checkSonnet1mAccess()) {
-      standardOptions.push(getMaxSonnet1MOption())
-    }
-
-    if (isOpus1mMergeEnabled()) {
-      standardOptions.push(getMergedOpus1MOption(fastMode))
-    } else {
-      standardOptions.push(getMaxOpusOption(fastMode))
-      if (checkOpus1mAccess()) {
-        standardOptions.push(getMaxOpus1MOption(fastMode))
-      }
-    }
-
-    standardOptions.push(getMaxHaikuOption())
-    standardOptions.push(...getAllVersionOptions())
-    return standardOptions
-  }
-
-  // PAYG 1P API: Default (Sonnet) + Sonnet 1M + Opus + Opus 1M + Haiku + all versions
-  if (getAPIProvider() === 'firstParty') {
-    const payg1POptions = [getDefaultOptionForUser(fastMode)]
-    if (checkSonnet1mAccess()) {
-      payg1POptions.push(getSonnet1MOption())
-    }
-    if (isOpus1mMergeEnabled()) {
-      payg1POptions.push(getMergedOpus1MOption(fastMode))
-    } else {
-      payg1POptions.push(getOpusOption(fastMode))
-      if (checkOpus1mAccess()) {
-        payg1POptions.push(getOpus1MOption(fastMode))
-      }
-    }
-    payg1POptions.push(getHaiku45Option())
-    payg1POptions.push(...getAllVersionOptions())
-    return payg1POptions
-  }
-
-  // PAYG 3P: Default (Sonnet) + Sonnet (3P custom) or Sonnet/1M + Opus (3P custom) or Opus/1M + Haiku
-  const payg3pOptions = [getDefaultOptionForUser(fastMode)]
-
-  const customSonnet = getCustomSonnetOption()
-  if (customSonnet !== undefined) {
-    payg3pOptions.push(customSonnet)
-  } else {
-    // Add default Sonnet since older Sonnet is the 3P default
-    payg3pOptions.push(getSonnetOption())
-    if (checkSonnet1mAccess()) {
-      payg3pOptions.push(getSonnet1MOption())
-    }
-  }
-
-  const customOpus = getCustomOpusOption()
-  if (customOpus !== undefined) {
-    payg3pOptions.push(customOpus)
-  } else {
-    // Add Opus 4.1 (3P default), current Opus, and Opus 1M
-    payg3pOptions.push(getOpus41Option()) // This is the default opus
-    payg3pOptions.push(getOpusOption(fastMode))
-    if (checkOpus1mAccess()) {
-      payg3pOptions.push(getOpus1MOption(fastMode))
-    }
-  }
-  const customHaiku = getCustomHaikuOption()
-  if (customHaiku !== undefined) {
-    payg3pOptions.push(customHaiku)
-  } else {
-    payg3pOptions.push(getHaikuOption())
-  }
-  return payg3pOptions
+  return [
+    getDefaultOptionForUser(fastMode),
+    ...familyOptions,
+  ]
 }
 
 // @[MODEL LAUNCH]: Add the new model ID to the appropriate family pattern below
@@ -563,26 +500,22 @@ function getKnownModelOption(model: string): ModelOption | null {
   }
 }
 
-function isSeparator(opt: ModelOption): boolean {
-  return typeof opt.value === 'string' && opt.value.startsWith('__sep_')
-}
-
 /**
- * Model options for the /model picker UI — includes visual separators.
+ * Model options for the /model picker UI — quick picks (family defaults).
+ * Version selection is handled by the two-level picker via getModelFamilies().
  */
 export function getModelPickerOptions(fastMode = false): ModelOption[] {
-  return getModelOptionsRaw(fastMode)
+  return getModelOptionsInternal(fastMode)
 }
 
 /**
  * Model options for non-picker consumers (config, settings, CLI).
- * Separators are stripped out.
  */
 export function getModelOptions(fastMode = false): ModelOption[] {
-  return getModelOptionsRaw(fastMode).filter(opt => !isSeparator(opt))
+  return getModelOptionsInternal(fastMode)
 }
 
-function getModelOptionsRaw(fastMode = false): ModelOption[] {
+function getModelOptionsInternal(fastMode = false): ModelOption[] {
   const options = getModelOptionsBase(fastMode)
 
   // Add the custom model from the ANTHROPIC_CUSTOM_MODEL_OPTION env var
@@ -659,8 +592,6 @@ function filterModelOptionsByAllowlist(options: ModelOption[]): ModelOption[] {
   }
   return options.filter(
     opt =>
-      opt.value === null ||
-      (typeof opt.value === 'string' && opt.value.startsWith('__sep_')) ||
-      (opt.value !== null && isModelAllowed(opt.value)),
+      opt.value === null || (opt.value !== null && isModelAllowed(opt.value)),
   )
 }
