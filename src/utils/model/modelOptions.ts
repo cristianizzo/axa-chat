@@ -41,6 +41,7 @@ export type ModelOption = {
   label: string
   description: string
   descriptionForModel?: string
+  disabled?: boolean
 }
 
 export function getDefaultOptionForUser(fastMode = false): ModelOption {
@@ -343,16 +344,16 @@ function getAllVersionOptions(): ModelOption[] {
   const s = getModelStrings()
   return [
     // Opus family
-    { value: '', label: '─ Opus versions', description: '$5/$25 · Most capable for complex work' },
+    { value: '__sep_opus__', label: '─ Opus versions', description: '$5/$25 · Most capable for complex work', disabled: true },
     versionOption(s.opus48, '1M ctx · 128k out · Agentic coding & enterprise'),
     versionOption(s.opus47, '1M ctx · 128k out · Agentic coding'),
     versionOption(s.opus46, '1M ctx · 128k out · Previous default'),
     // Sonnet family
-    { value: '', label: '─ Sonnet versions', description: '$3/$15 · Best speed/intelligence balance' },
+    { value: '__sep_sonnet__', label: '─ Sonnet versions', description: '$3/$15 · Best speed/intelligence balance', disabled: true },
     versionOption(s.sonnet5, '1M ctx · 128k out · Latest'),
     versionOption(s.sonnet46, '1M ctx · 128k out · Previous default'),
     // Fable family
-    { value: '', label: '─ Fable', description: '$10/$50 · Next-gen long-running agents' },
+    { value: '__sep_fable__', label: '─ Fable', description: '$10/$50 · Next-gen long-running agents', disabled: true },
     versionOption(s.fable5, '1M ctx · 128k out · Most advanced'),
   ]
 }
@@ -639,6 +640,8 @@ function filterModelOptionsByAllowlist(options: ModelOption[]): ModelOption[] {
   }
   return options.filter(
     opt =>
-      opt.value === null || (opt.value !== null && isModelAllowed(opt.value)),
+      opt.value === null ||
+      opt.disabled === true ||
+      (opt.value !== null && isModelAllowed(opt.value)),
   )
 }
