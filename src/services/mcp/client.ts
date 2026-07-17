@@ -1079,11 +1079,6 @@ export const connectToServer = memoize(
         )
       } catch (error) {
         clearTimeout(timeoutId)
-        // Clean up transport and in-process server on failure
-        if (inProcessServer) {
-          inProcessServer.close().catch(() => {})
-        }
-        transport.close().catch(() => {})
         const elapsed = Date.now() - connectStartTime
         // SSE-specific error logging
         if (serverRef.type === 'sse' && error instanceof Error) {
