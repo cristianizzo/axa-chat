@@ -365,16 +365,12 @@ export class SSETransport implements Transport {
                 logForDiagnosticsNoPII('warn', 'cli_sse_duplicate_sequence')
               } else {
                 this.seenSequenceNums.add(seqNum)
-                // Prevent unbounded growth: once we have many entries, prune
-                // old sequence numbers that are well below the high-water mark.
-                // Only sequence numbers near lastSequenceNum matter for dedup.
-                if (this.seenSequenceNums.size > 1000) {
-                  const threshold = this.lastSequenceNum - 200
-                  for (const s of this.seenSequenceNums) {
-                    if (s < threshold) {
-                      this.seenSequenceNums.delete(s)
-                    }
-                  }
+                // Cap at 200 entries — only recent sequence numbers matter
+                // for dedup. Delete the oldest when over the cap.
+                if (this.seenSequenceNums.size > 200) {
+                  // Sets iterate in insertion order — first value is oldest
+                  const oldest = this.seenSequenceNums.values().next().value
+                  if (oldest !== undefined) this.seenSequenceNums.delete(oldest)
                 }
               }
               if (seqNum > this.lastSequenceNum) {
