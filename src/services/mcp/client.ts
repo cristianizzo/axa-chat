@@ -273,7 +273,9 @@ function getMcpAuthCache(): Promise<McpAuthCacheData> {
     authCachePromise = readFile(getMcpAuthCachePath(), 'utf-8')
       .then(data => jsonParse(data) as McpAuthCacheData)
       .catch((e) => {
-        logForDebugging(`MCP auth cache read failed: ${String(e)}`, { level: 'debug' })
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+          logForDebugging(`MCP auth cache read failed: ${String(e)}`, { level: 'debug' })
+        }
         return {}
       })
   }
@@ -314,7 +316,9 @@ function setMcpAuthCacheEntry(serverId: string): void {
 export function clearMcpAuthCache(): void {
   authCachePromise = null
   void unlink(getMcpAuthCachePath()).catch((e) => {
-    logForDebugging(`MCP auth cache delete failed: ${String(e)}`, { level: 'debug' })
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logForDebugging(`MCP auth cache delete failed: ${String(e)}`, { level: 'debug' })
+    }
   })
 }
 
