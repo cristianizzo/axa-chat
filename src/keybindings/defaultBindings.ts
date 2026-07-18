@@ -67,6 +67,11 @@ export const DEFAULT_BINDINGS: KeybindingBlock[] = [
       // ctrl+x chord prefix avoids shadowing readline editing keys (ctrl+a/b/e/f/...).
       'ctrl+x ctrl+k': 'chat:killAgents',
       [MODE_CYCLE_KEY]: 'chat:cycleMode',
+      // Open the approval-level picker (Manual / Auto / Skip all).
+      // Cmd+M on Kitty-keyboard-protocol terminals (iTerm2, Ghostty, kitty,
+      // WezTerm) — 'super' is how those report the Command key over the pty.
+      'cmd+m': 'chat:approvalsPicker',
+      'super+m': 'chat:approvalsPicker',
       'meta+p': 'chat:modelPicker',
       'meta+o': 'chat:fastMode',
       'meta+t': 'chat:thinkingToggle',

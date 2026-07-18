@@ -15,6 +15,7 @@ import type { AssistantMessage } from '../../types/message.js'
 import { extractOutputRedirections } from '../bash/commands.js'
 import { logForDebugging } from '../debug.js'
 import { AbortError, toError } from '../errors.js'
+import { isLocallyRiskyAction } from './localAutoApprove.js'
 import { logError } from '../log.js'
 import { SandboxManager } from '../sandbox/sandbox-adapter.js'
 import {
@@ -513,6 +514,48 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
           mode: 'dontAsk',
         },
         message: DONT_ASK_REJECT_MESSAGE(tool.name),
+      }
+    }
+    // Auto approvals (fork-local, no remote classifier): run autonomously by
+    // turning `ask` into `allow`, while still pausing on genuine questions,
+    // plan changes, and locally-detected risky actions. Checked BEFORE
+    // shouldAvoidPermissionPrompts so it also applies to headless/background
+    // agents. This returns for every `mode === 'auto'` case, so the dormant
+    // classifier block below (compiled out via feature('TRANSCRIPT_CLASSIFIER'))
+    // is never reached.
+    if (appState.toolPermissionContext.mode === 'auto') {
+      // Genuine user-interaction tools (AskUserQuestion, ExitPlanMode) always
+      // prompt — auto-approving permissions must never suppress real questions.
+      if (tool.requiresUserInteraction?.()) {
+        return result
+      }
+
+      // Locally-detected risky actions keep prompting: sensitive files,
+      // destructive shell commands, PowerShell. When there's no one to prompt
+      // (headless), deny with guidance rather than silently allowing.
+      if (isLocallyRiskyAction(tool.name, input, result.decisionReason)) {
+        if (appState.toolPermissionContext.shouldAvoidPermissionPrompts) {
+          return {
+            behavior: 'deny',
+            message: result.message,
+            decisionReason: {
+              type: 'asyncAgent',
+              reason:
+                'Risky action requires interactive approval and permission prompts are not available in this context',
+            },
+          }
+        }
+        return result
+      }
+
+      // Everything else runs on its own.
+      return {
+        behavior: 'allow',
+        updatedInput: result.updatedInput ?? input,
+        decisionReason: {
+          type: 'mode',
+          mode: 'auto',
+        },
       }
     }
     // Apply auto mode: use AI classifier instead of prompting user
