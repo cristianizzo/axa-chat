@@ -272,7 +272,12 @@ function getMcpAuthCache(): Promise<McpAuthCacheData> {
   if (!authCachePromise) {
     authCachePromise = readFile(getMcpAuthCachePath(), 'utf-8')
       .then(data => jsonParse(data) as McpAuthCacheData)
-      .catch(() => ({}))
+      .catch((e) => {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+          logForDebugging(`MCP auth cache read failed: ${String(e)}`, { level: 'debug' })
+        }
+        return {}
+      })
   }
   return authCachePromise
 }
@@ -303,15 +308,17 @@ function setMcpAuthCacheEntry(serverId: string): void {
       // getMcpAuthCache() call will re-read the file with this entry present.
       authCachePromise = null
     })
-    .catch(() => {
-      // Best-effort cache write
+    .catch((e) => {
+      logForDebugging(`MCP auth cache write failed: ${String(e)}`, { level: 'debug' })
     })
 }
 
 export function clearMcpAuthCache(): void {
   authCachePromise = null
-  void unlink(getMcpAuthCachePath()).catch(() => {
-    // Cache file may not exist
+  void unlink(getMcpAuthCachePath()).catch((e) => {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logForDebugging(`MCP auth cache delete failed: ${String(e)}`, { level: 'debug' })
+    }
   })
 }
 
@@ -1136,9 +1143,13 @@ export const connectToServer = memoize(
           })
         }
         if (inProcessServer) {
-          inProcessServer.close().catch(() => {})
+          inProcessServer.close().catch((e) => {
+            logForDebugging(`MCP in-process server close failed: ${String(e)}`, { level: 'debug' })
+          })
         }
-        transport.close().catch(() => {})
+        transport.close().catch((e) => {
+          logForDebugging(`MCP transport close failed: ${String(e)}`, { level: 'debug' })
+        })
         if (stderrOutput) {
           logMCPError(name, `Server stderr: ${stderrOutput}`)
         }
