@@ -1,4 +1,3 @@
-import { feature } from 'bun:bundle'
 import z from 'zod/v4'
 import { PAUSE_ICON } from '../../constants/figures.js'
 // Types extracted to src/types/permissions.ts to break import cycles
@@ -43,8 +42,8 @@ const PERMISSION_MODE_CONFIG: Partial<
   Record<PermissionMode, PermissionModeConfig>
 > = {
   default: {
-    title: 'Default',
-    shortTitle: 'Default',
+    title: 'Manual approvals',
+    shortTitle: 'Manual',
     symbol: '',
     color: 'text',
     external: 'default',
@@ -64,8 +63,8 @@ const PERMISSION_MODE_CONFIG: Partial<
     external: 'acceptEdits',
   },
   bypassPermissions: {
-    title: 'Bypass Permissions',
-    shortTitle: 'Bypass',
+    title: 'Skip all approvals',
+    shortTitle: 'Skip all',
     symbol: '⏵⏵',
     color: 'error',
     external: 'bypassPermissions',
@@ -77,30 +76,28 @@ const PERMISSION_MODE_CONFIG: Partial<
     color: 'error',
     external: 'dontAsk',
   },
-  ...(feature('TRANSCRIPT_CLASSIFIER')
-    ? {
-        auto: {
-          title: 'Auto mode',
-          shortTitle: 'Auto',
-          symbol: '⏵⏵',
-          color: 'warning' as ModeColorKey,
-          external: 'default' as ExternalPermissionMode,
-        },
-      }
-    : {}),
+  // "Auto approvals": always available in this fork. Runs autonomously with
+  // local risk detection (see localAutoApprove.ts). external maps to 'default'
+  // because 'auto' is not part of the external SDK mode set.
+  auto: {
+    title: 'Auto approvals',
+    shortTitle: 'Auto',
+    symbol: '⏵',
+    color: 'warning',
+    external: 'default',
+  },
 }
 
 /**
  * Type guard to check if a PermissionMode is an ExternalPermissionMode.
- * auto is ant-only and excluded from external modes.
+ * `auto` and `bubble` are internal-only modes. This fork makes `auto`
+ * user-addressable regardless of USER_TYPE, so classify by the mode value
+ * itself — otherwise `toExternalPermissionMode('auto')` would silently coerce
+ * a user's Auto mode back to `default` on config-write / sync paths.
  */
 export function isExternalPermissionMode(
   mode: PermissionMode,
 ): mode is ExternalPermissionMode {
-  // External users can't have auto, so always true for them
-  if (process.env.USER_TYPE !== 'ant') {
-    return true
-  }
   return mode !== 'auto' && mode !== 'bubble'
 }
 

@@ -74,6 +74,7 @@ import { logError } from '../../utils/log.js';
 import { isOpus1mMergeEnabled, modelDisplayString } from '../../utils/model/model.js';
 import { setAutoModeActive } from '../../utils/permissions/autoModeState.js';
 import { cyclePermissionMode, getNextPermissionMode } from '../../utils/permissions/getNextPermissionMode.js';
+import { permissionModeTitle } from '../../utils/permissions/PermissionMode.js';
 import { transitionPermissionMode } from '../../utils/permissions/permissionSetup.js';
 import { getPlatform } from '../../utils/platform.js';
 import type { ProcessUserInputContext } from '../../utils/processUserInput/processUserInput.js';
@@ -102,6 +103,7 @@ import { getFastIconString } from '../FastIcon.js';
 import { GlobalSearchDialog } from '../GlobalSearchDialog.js';
 import { HistorySearchDialog } from '../HistorySearchDialog.js';
 import { ModelPicker } from '../ModelPicker.js';
+import { ApprovalModePicker } from '../ApprovalModePicker.js';
 import { QuickOpenDialog } from '../QuickOpenDialog.js';
 import TextInput from '../TextInput.js';
 import { ThinkingToggle } from '../ThinkingToggle.js';
@@ -404,6 +406,7 @@ function PromptInput({
   const [isPasting, setIsPasting] = useState(false);
   const [isExternalEditorActive, setIsExternalEditorActive] = useState(false);
   const [showModelPicker, setShowModelPicker] = useState(false);
+  const [showApprovalsPicker, setShowApprovalsPicker] = useState(false);
   const [showQuickOpen, setShowQuickOpen] = useState(false);
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
   const [showHistoryPicker, setShowHistoryPicker] = useState(false);
@@ -1390,6 +1393,41 @@ function PromptInput({
     }
   }, [helpOpen]);
 
+  // Handler for chat:approvalsPicker - toggle the approval-level picker (⌘M)
+  const handleApprovalsPicker = useCallback(() => {
+    setShowApprovalsPicker(prev => !prev);
+    if (helpOpen) {
+      setHelpOpen(false);
+    }
+  }, [helpOpen]);
+
+  const handleApprovalsSelect = useCallback((nextMode: PermissionMode) => {
+    setShowApprovalsPicker(false);
+    if (nextMode === toolPermissionContext.mode) {
+      return;
+    }
+    const preparedContext = transitionPermissionMode(
+      toolPermissionContext.mode,
+      nextMode,
+      toolPermissionContext,
+    );
+    setAppState(prev => ({
+      ...prev,
+      toolPermissionContext: { ...preparedContext, mode: nextMode }
+    }));
+    setToolPermissionContext({ ...preparedContext, mode: nextMode });
+    addNotification({
+      key: 'approval-mode-switched',
+      jsx: <Text>{`Switched to ${permissionModeTitle(nextMode)}`}</Text>,
+      priority: 'immediate',
+      timeoutMs: 3000
+    });
+  }, [toolPermissionContext, setAppState, setToolPermissionContext, addNotification]);
+
+  const handleApprovalsCancel = useCallback(() => {
+    setShowApprovalsPicker(false);
+  }, []);
+
   // Handler for chat:fastMode - toggle fast mode picker
   const handleFastModePicker = useCallback(() => {
     setShowFastModePicker(prev => !prev);
@@ -1663,10 +1701,11 @@ function PromptInput({
     'chat:externalEditor': handleExternalEditor,
     'chat:stash': handleStash,
     'chat:modelPicker': handleModelPicker,
+    'chat:approvalsPicker': handleApprovalsPicker,
     'chat:thinkingToggle': handleThinkingToggle,
     'chat:cycleMode': handleCycleMode,
     'chat:imagePaste': handleImagePaste
-  }), [handleUndo, handleNewline, handleExternalEditor, handleStash, handleModelPicker, handleThinkingToggle, handleCycleMode, handleImagePaste]);
+  }), [handleUndo, handleNewline, handleExternalEditor, handleStash, handleModelPicker, handleApprovalsPicker, handleThinkingToggle, handleCycleMode, handleImagePaste]);
   useKeybindings(chatHandlers, {
     context: 'Chat',
     isActive: !isModalOverlayActive
@@ -2064,6 +2103,12 @@ function PromptInput({
         <ModelPicker initial={mainLoopModel_} sessionModel={mainLoopModelForSession} onSelect={handleModelSelect} onCancel={handleModelCancel} isStandaloneCommand showFastModeNotice={isFastModeEnabled() && isFastMode && isFastModeSupportedByModel(mainLoopModel_) && isFastModeAvailable()} />
       </Box>;
   }, [showModelPicker, mainLoopModel_, mainLoopModelForSession, handleModelSelect, handleModelCancel]);
+  const approvalsPickerElement = useMemo(() => {
+    if (!showApprovalsPicker) return null;
+    return <Box flexDirection="column" marginTop={1}>
+        <ApprovalModePicker currentMode={toolPermissionContext.mode} isBypassAvailable={toolPermissionContext.isBypassPermissionsModeAvailable} onSelect={handleApprovalsSelect} onCancel={handleApprovalsCancel} />
+      </Box>;
+  }, [showApprovalsPicker, toolPermissionContext, handleApprovalsSelect, handleApprovalsCancel]);
   const handleFastModeSelect = useCallback((result?: string) => {
     setShowFastModePicker(false);
     if (result) {
@@ -2156,6 +2201,9 @@ function PromptInput({
   // Show loop mode menu when requested (ant-only, eliminated from external builds)
   if (modelPickerElement) {
     return modelPickerElement;
+  }
+  if (approvalsPickerElement) {
+    return approvalsPickerElement;
   }
   if (fastModePickerElement) {
     return fastModePickerElement;
