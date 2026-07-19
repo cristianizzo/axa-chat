@@ -50,12 +50,16 @@ export function ApprovalModePicker({
     }
   })
 
+  // Only preselect when the current mode is one of the three tiers. When the
+  // caller is in plan/acceptEdits/dontAsk, there is no matching tier to focus.
+  const isTier = TIERS.some(tier => tier.value === currentMode)
+
   return (
     <Box flexDirection="column">
       <Text bold>Approval level</Text>
       <Select
         options={options}
-        defaultValue={currentMode}
+        defaultValue={isTier ? currentMode : undefined}
         onChange={onSelect}
         onCancel={onCancel}
       />

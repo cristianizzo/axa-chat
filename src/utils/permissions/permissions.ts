@@ -531,9 +531,17 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       }
 
       // Locally-detected risky actions keep prompting: sensitive files,
-      // destructive shell commands, PowerShell. When there's no one to prompt
-      // (headless), deny with guidance rather than silently allowing.
-      if (isLocallyRiskyAction(tool.name, input, result.decisionReason)) {
+      // destructive shell commands, PowerShell. Use the tool's normalized
+      // input (updatedInput) so destructive-command detection sees the actual
+      // command. When there's no one to prompt (headless), deny with guidance
+      // rather than silently allowing.
+      if (
+        isLocallyRiskyAction(
+          tool.name,
+          result.updatedInput ?? input,
+          result.decisionReason,
+        )
+      ) {
         if (appState.toolPermissionContext.shouldAvoidPermissionPrompts) {
           return {
             behavior: 'deny',

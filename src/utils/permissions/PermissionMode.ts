@@ -90,15 +90,14 @@ const PERMISSION_MODE_CONFIG: Partial<
 
 /**
  * Type guard to check if a PermissionMode is an ExternalPermissionMode.
- * auto is ant-only and excluded from external modes.
+ * `auto` and `bubble` are internal-only modes. This fork makes `auto`
+ * user-addressable regardless of USER_TYPE, so classify by the mode value
+ * itself — otherwise `toExternalPermissionMode('auto')` would silently coerce
+ * a user's Auto mode back to `default` on config-write / sync paths.
  */
 export function isExternalPermissionMode(
   mode: PermissionMode,
 ): mode is ExternalPermissionMode {
-  // External users can't have auto, so always true for them
-  if (process.env.USER_TYPE !== 'ant') {
-    return true
-  }
   return mode !== 'auto' && mode !== 'bubble'
 }
 

@@ -16,25 +16,30 @@ export async function call(
   context: ModeCommandContext,
   _args: string,
 ): Promise<React.ReactNode> {
-  const ctx = context.getAppState().toolPermissionContext
+  // Snapshot for the initial render only; the actual transition below reads
+  // fresh state from the setAppState updater so it can't act on stale context.
+  const initialCtx = context.getAppState().toolPermissionContext
 
   function onSelect(next: PermissionMode) {
-    if (next === ctx.mode) {
-      onDone(`Already in ${permissionModeTitle(ctx.mode)}.`)
+    if (next === context.getAppState().toolPermissionContext.mode) {
+      onDone(`Already in ${permissionModeTitle(next)}.`)
       return
     }
-    const preparedCtx = transitionPermissionMode(ctx.mode, next, ctx)
-    context.setAppState(prev => ({
-      ...prev,
-      toolPermissionContext: { ...preparedCtx, mode: next },
-    }))
+    context.setAppState(prev => {
+      const prevCtx = prev.toolPermissionContext
+      const preparedCtx = transitionPermissionMode(prevCtx.mode, next, prevCtx)
+      return {
+        ...prev,
+        toolPermissionContext: { ...preparedCtx, mode: next },
+      }
+    })
     onDone(`Switched to ${permissionModeTitle(next)}.`)
   }
 
   return (
     <ApprovalModePicker
-      currentMode={ctx.mode}
-      isBypassAvailable={ctx.isBypassPermissionsModeAvailable}
+      currentMode={initialCtx.mode}
+      isBypassAvailable={initialCtx.isBypassPermissionsModeAvailable}
       onSelect={onSelect}
       onCancel={() => onDone()}
     />
