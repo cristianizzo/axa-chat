@@ -126,6 +126,17 @@ build_binary() {
   ok "Binary built: $INSTALL_DIR/cli-dev"
 }
 
+cleanup() {
+  # The compiled binary is standalone — node_modules is only needed to build.
+  # Removing it frees ~400MB. `bun run update` (or /update in the CLI) will
+  # reinstall it automatically on the next update.
+  if [ -d "$INSTALL_DIR/node_modules" ]; then
+    info "Removing build-time dependencies (node_modules)..."
+    rm -rf "$INSTALL_DIR/node_modules"
+    ok "Cleaned up node_modules (binary is standalone)"
+  fi
+}
+
 link_binary() {
   local link_dir="$HOME/.local/bin"
   mkdir -p "$link_dir"
@@ -159,6 +170,7 @@ clone_repo
 install_deps
 build_binary
 link_binary
+cleanup
 
 echo ""
 printf "${GREEN}${BOLD}  Installation complete!${RESET}\n"

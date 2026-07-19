@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import type { LocalCommandCall } from '../../types/command.js'
@@ -96,6 +97,14 @@ export const call: LocalCommandCall = async () => {
     }
   }
 
+  // Trim build-time deps: the compiled binary is standalone, so node_modules
+  // (~400MB) isn't needed at runtime. Best-effort — a future update reinstalls
+  // it via `bun install`. Don't fail the update if cleanup can't complete.
+  await rm(join(repoDir, 'node_modules'), {
+    recursive: true,
+    force: true,
+  }).catch(() => {})
+
   const after = await gitLine(repoDir, ['rev-parse', '--short', 'HEAD'])
   const head = await gitLine(repoDir, ['log', '-1', '--oneline'])
   const changed = before !== '' && after !== '' && before !== after
@@ -103,7 +112,7 @@ export const call: LocalCommandCall = async () => {
   return {
     type: 'text',
     value: changed
-      ? `Updated ${before} → ${after} and rebuilt.\n${head}\nRestart axa to run the new build.`
-      : `Already on the latest commit (${after || 'unknown'}); rebuilt anyway.\nRestart axa to be safe.`,
+      ? `Updated ${before} → ${after}, rebuilt, and trimmed node_modules.\n${head}\nRestart axa to run the new build.`
+      : `Already on the latest commit (${after || 'unknown'}); rebuilt and trimmed node_modules.\nRestart axa to be safe.`,
   }
 }
