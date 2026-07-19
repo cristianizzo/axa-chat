@@ -21,6 +21,7 @@ import ctx_viz from './commands/ctx_viz/index.js'
 import doctor from './commands/doctor/index.js'
 import memory from './commands/memory/index.js'
 import mode from './commands/mode/index.js'
+import update from './commands/update/index.js'
 import help from './commands/help/index.js'
 import ide from './commands/ide/index.js'
 import init from './commands/init.js'
@@ -330,6 +331,7 @@ const COMMANDS = memoize((): Command[] => [
   thinkbackPlay,
   permissions,
   mode,
+  update,
   plan,
   privacySettings,
   hooks,
