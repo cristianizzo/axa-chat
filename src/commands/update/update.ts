@@ -14,6 +14,22 @@ const pexec = promisify(execFile)
  * package.json / .git (true for both the dev checkout and installer-based
  * installs under ~/axa-chat).
  */
+function isRepoRoot(dir: string): boolean {
+  return existsSync(join(dir, '.git')) && existsSync(join(dir, 'package.json'))
+}
+
+/** Walk up from `start` until a repo root (.git + package.json) or fs root. */
+function walkUpToRepoRoot(start: string): string | null {
+  let dir = start
+  while (dir) {
+    if (isRepoRoot(dir)) return dir
+    const parent = dirname(dir)
+    if (parent === dir) return null // reached filesystem root
+    dir = parent
+  }
+  return null
+}
+
 function findRepoDir(): string | null {
   const candidates: string[] = []
   try {
@@ -28,9 +44,8 @@ function findRepoDir(): string | null {
   candidates.push(process.cwd())
 
   for (const dir of candidates) {
-    if (existsSync(join(dir, '.git')) && existsSync(join(dir, 'package.json'))) {
-      return dir
-    }
+    const root = walkUpToRepoRoot(dir)
+    if (root) return root
   }
   return null
 }
@@ -98,21 +113,28 @@ export const call: LocalCommandCall = async () => {
   }
 
   // Trim build-time deps: the compiled binary is standalone, so node_modules
-  // (~400MB) isn't needed at runtime. Best-effort — a future update reinstalls
-  // it via `bun install`. Don't fail the update if cleanup can't complete.
-  await rm(join(repoDir, 'node_modules'), {
-    recursive: true,
-    force: true,
-  }).catch(() => {})
+  // (~400MB) isn't needed at runtime. Only do this for the compiled binary —
+  // in source mode (`bun run dev`) node_modules is required by the running
+  // process. Best-effort; a future update reinstalls it via `bun install`.
+  let trimmed = false
+  if (isInBundledMode()) {
+    trimmed = await rm(join(repoDir, 'node_modules'), {
+      recursive: true,
+      force: true,
+    })
+      .then(() => true)
+      .catch(() => false)
+  }
 
   const after = await gitLine(repoDir, ['rev-parse', '--short', 'HEAD'])
   const head = await gitLine(repoDir, ['log', '-1', '--oneline'])
   const changed = before !== '' && after !== '' && before !== after
+  const trimNote = trimmed ? ', and trimmed node_modules' : ''
 
   return {
     type: 'text',
     value: changed
-      ? `Updated ${before} → ${after}, rebuilt, and trimmed node_modules.\n${head}\nRestart axa to run the new build.`
-      : `Already on the latest commit (${after || 'unknown'}); rebuilt and trimmed node_modules.\nRestart axa to be safe.`,
+      ? `Updated ${before} → ${after}, rebuilt${trimNote}.\n${head}\nRestart axa to run the new build.`
+      : `Already on the latest commit (${after || 'unknown'}); rebuilt${trimNote}.\nRestart axa to be safe.`,
   }
 }
