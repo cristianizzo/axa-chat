@@ -96,10 +96,21 @@ export const call: LocalCommandCall = async () => {
 
   const before = await gitLine(repoDir, ['rev-parse', '--short', 'HEAD'])
 
+  // The `update` script (and build:dev) call `bun` by bare name in a subshell,
+  // so bun's own directory must be on the child's PATH — axa's inherited PATH
+  // may not include it (e.g. ~/.bun/bin). Prepend it when we resolved bun to an
+  // absolute path.
+  const bunDir = dirname(bun)
+  const childEnv =
+    bunDir && bunDir !== '.'
+      ? { ...process.env, PATH: `${bunDir}:${process.env.PATH ?? ''}` }
+      : process.env
+
   // Reuse the canonical `update` script: git pull && bun install && build:dev.
   try {
     await pexec(bun, ['run', 'update'], {
       cwd: repoDir,
+      env: childEnv,
       maxBuffer: 64 * 1024 * 1024,
       timeout: 5 * 60 * 1000,
     })
