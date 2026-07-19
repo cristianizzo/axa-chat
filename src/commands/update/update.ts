@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { delimiter as pathDelimiter, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import type { LocalCommandCall } from '../../types/command.js'
 import { isInBundledMode } from '../../utils/bundledMode.js'
@@ -99,12 +99,18 @@ export const call: LocalCommandCall = async () => {
   // The `update` script (and build:dev) call `bun` by bare name in a subshell,
   // so bun's own directory must be on the child's PATH — axa's inherited PATH
   // may not include it (e.g. ~/.bun/bin). Prepend it when we resolved bun to an
-  // absolute path.
+  // absolute path. Use the platform path delimiter and the existing PATH key's
+  // casing (Windows uses `Path`).
   const bunDir = dirname(bun)
-  const childEnv =
-    bunDir && bunDir !== '.'
-      ? { ...process.env, PATH: `${bunDir}:${process.env.PATH ?? ''}` }
-      : process.env
+  let childEnv: NodeJS.ProcessEnv = process.env
+  if (bunDir && bunDir !== '.') {
+    const pathKey =
+      Object.keys(process.env).find(k => k.toLowerCase() === 'path') ?? 'PATH'
+    childEnv = {
+      ...process.env,
+      [pathKey]: `${bunDir}${pathDelimiter}${process.env[pathKey] ?? ''}`,
+    }
+  }
 
   // Reuse the canonical `update` script: git pull && bun install && build:dev.
   try {
