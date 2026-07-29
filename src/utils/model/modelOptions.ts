@@ -1,5 +1,6 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { getInitialMainLoopModel } from '../../bootstrap/state.js'
+import { CODEX_MODELS } from '../../services/api/codex-fetch-adapter.js'
 import {
   isClaudeAISubscriber,
   isCodexSubscriber,
@@ -229,32 +230,15 @@ function getHaikuOption(): ModelOption {
     : getHaiku35Option()
 }
 
-// OpenAI Codex model options
-function getGpt54Option(): ModelOption {
-  return {
-    value: 'gpt-5.4',
-    label: 'GPT-5.4',
-    description: 'GPT-5.4 · Advanced reasoning and code generation',
-    descriptionForModel: 'GPT-5.4 - advanced reasoning and code generation capabilities',
-  }
-}
-
-function getGpt53CodexOption(): ModelOption {
-  return {
-    value: 'gpt-5.3-codex',
-    label: 'GPT-5.3 Codex',
-    description: 'GPT-5.3 Codex · Optimized for code generation and understanding',
-    descriptionForModel: 'GPT-5.3 Codex - specialized for code generation and understanding',
-  }
-}
-
-function getGpt54MiniOption(): ModelOption {
-  return {
-    value: 'gpt-5.4-mini',
-    label: 'GPT-5.4 Mini',
-    description: 'GPT-5.4 Mini · Fast and efficient for simple tasks',
-    descriptionForModel: 'GPT-5.4 Mini - fast and efficient for simple coding tasks',
-  }
+// OpenAI Codex model options, derived from CODEX_MODELS so the picker can
+// never drift from the list the fetch adapter recognises.
+function getCodexModelOptions(): ModelOption[] {
+  return CODEX_MODELS.map(m => ({
+    value: m.id,
+    label: m.label,
+    description: `${m.label} · ${m.description}`,
+    descriptionForModel: `${m.label} - ${m.description}`,
+  }))
 }
 
 function getMaxOpusOption(fastMode = false): ModelOption {
@@ -399,9 +383,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
   if (isCodexSubscriber()) {
     return [
       getDefaultOptionForUser(),
-      getGpt54Option(),
-      getGpt53CodexOption(),
-      getGpt54MiniOption(),
+      ...getCodexModelOptions(),
     ]
   }
 

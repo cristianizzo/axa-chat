@@ -19,36 +19,68 @@ import { getCodexOAuthTokens } from '../../utils/auth.js'
 import { logForDebugging } from '../../utils/debug.js'
 
 // ── Available Codex models ──────────────────────────────────────────
+// Single source of truth for the `/model` picker (see getCodexModelOptions in
+// utils/model/modelOptions.ts). Adding an entry here surfaces it in the picker.
+// Not exhaustive: any other `gpt-*` ID the user types is passed through to the
+// backend untouched (see mapClaudeModelToCodex), so a newly launched model
+// works without a code change.
 export const CODEX_MODELS = [
-  { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', description: 'Frontier agentic coding model' },
-  { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex', description: 'Codex coding model' },
-  { id: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini', description: 'Fast Codex model' },
+  { id: 'gpt-5.4', label: 'GPT-5.4', description: 'Latest frontier model · reasoning, coding and agentic work' },
+  { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: 'Fast and efficient for simple tasks' },
+  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', description: 'Agentic coding model' },
+  { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', description: 'Previous agentic coding model' },
   { id: 'gpt-5.1-codex-max', label: 'GPT-5.1 Codex Max', description: 'Max Codex model' },
-  { id: 'gpt-5.4', label: 'GPT-5.4', description: 'Latest GPT' },
-  { id: 'gpt-5.2', label: 'GPT-5.2', description: 'GPT-5.2' },
+  { id: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini', description: 'Fast Codex model' },
 ] as const
 
-export const DEFAULT_CODEX_MODEL = 'gpt-5.2-codex'
+export const DEFAULT_CODEX_MODEL = 'gpt-5.3-codex'
 
 /**
- * Maps Claude model names to corresponding Codex model names.
- * @param claudeModel - The Claude model name to map
- * @returns The corresponding Codex model ID
+ * Resolves the model ID to send to the Codex backend.
+ *
+ * Claude model names are heuristically mapped to a comparable Codex model —
+ * this is the legitimate case where the user is in Codex mode with a Claude
+ * model still selected. Any other ID (i.e. an explicitly chosen `gpt-*` model)
+ * is passed through untouched so that models newer than {@link CODEX_MODELS}
+ * still work; the backend rejects genuinely invalid IDs.
+ *
+ * @param claudeModel - The currently selected model ID
+ * @returns The model ID to send to Codex
  */
 export function mapClaudeModelToCodex(claudeModel: string | null): string {
   if (!claudeModel) return DEFAULT_CODEX_MODEL
-  if (isCodexModel(claudeModel)) return claudeModel
+
   const lower = claudeModel.toLowerCase()
-  if (lower.includes('opus')) return 'gpt-5.1-codex-max'
-  if (lower.includes('haiku')) return 'gpt-5.1-codex-mini'
-  if (lower.includes('sonnet')) return 'gpt-5.2-codex'
-  return DEFAULT_CODEX_MODEL
+  const mapped = lower.includes('opus')
+    ? 'gpt-5.1-codex-max'
+    : lower.includes('haiku')
+      ? 'gpt-5.1-codex-mini'
+      : lower.includes('sonnet')
+        ? 'gpt-5.3-codex'
+        : // Other Claude models (e.g. claude-fable-5, claude-mythos-5) have no
+          // natural counterpart, but must not be forwarded verbatim — Codex
+          // would reject them.
+          lower.includes('claude')
+          ? DEFAULT_CODEX_MODEL
+          : null
+
+  if (mapped) {
+    logForDebugging(`Codex: mapped Claude model '${claudeModel}' to '${mapped}'`)
+    return mapped
+  }
+
+  return claudeModel
 }
 
 /**
- * Checks if a given model string is a valid Codex model.
+ * Checks if a given model string is a known Codex model.
+ *
+ * Used by model validation to skip the Anthropic-API round trip. Unknown
+ * `gpt-*` models are still usable — they just don't get the validation
+ * shortcut.
+ *
  * @param model - The model string to check
- * @returns True if the model is a Codex model, false otherwise
+ * @returns True if the model is a known Codex model, false otherwise
  */
 export function isCodexModel(model: string): boolean {
   return CODEX_MODELS.some(m => m.id === model)
@@ -251,6 +283,8 @@ function translateToCodexBody(anthropicBody: Record<string, unknown>): {
   // Convert messages
   const input = translateMessages(anthropicMessages)
 
+  // Always stream upstream: Codex is streaming-native and the non-streaming
+  // Anthropic response is reconstructed from the stream by the caller.
   const codexBody: Record<string, unknown> = {
     model: codexModel,
     store: false,
@@ -266,7 +300,83 @@ function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     codexBody.tools = translateTools(anthropicTools)
   }
 
+  // Anthropic caps output with max_tokens; the Responses API uses
+  // max_output_tokens. Without this the model ignores the caller's limit.
+  const maxTokens = anthropicBody.max_tokens
+  if (typeof maxTokens === 'number') {
+    codexBody.max_output_tokens = maxTokens
+  }
+
+  if (typeof anthropicBody.temperature === 'number') {
+    codexBody.temperature = anthropicBody.temperature
+  }
+
+  const reasoningEffort = resolveReasoningEffort(anthropicBody)
+  if (reasoningEffort) {
+    codexBody.reasoning = { effort: reasoningEffort }
+  }
+
+  // Deliberately not forwarded: `cache_control` (Anthropic prompt caching has
+  // no Responses API equivalent and unknown fields are rejected) and
+  // `metadata` (Anthropic-specific shape).
+
   return { codexBody, codexModel }
+}
+
+type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh'
+
+/**
+ * Derives a Codex reasoning effort from an Anthropic request.
+ *
+ * The user's `/effort` choice arrives as `output_config.effort` — that is the
+ * primary signal, since `modelSupportsEffort()` is true for `gpt-*` IDs.
+ * `thinking` is only a fallback: these models also report adaptive-thinking
+ * support, so `thinking` is normally `{ type: 'adaptive' }` with no budget,
+ * and a budget only appears under CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING.
+ *
+ * @param anthropicBody - The parsed Anthropic request body
+ * @returns A Codex reasoning effort level, or null to let Codex decide
+ */
+function resolveReasoningEffort(
+  anthropicBody: Record<string, unknown>,
+): CodexReasoningEffort | null {
+  const outputConfig = anthropicBody.output_config as
+    | { effort?: unknown }
+    | undefined
+  const effort = outputConfig?.effort
+  if (typeof effort === 'string') {
+    // Anthropic's top level is 'max'; the Codex equivalent is 'xhigh'.
+    if (effort === 'max') return 'xhigh'
+    if (effort === 'low' || effort === 'medium' || effort === 'high') {
+      return effort
+    }
+  }
+
+  return thinkingToReasoningEffort(anthropicBody.thinking)
+}
+
+/**
+ * Translates an Anthropic thinking config into a Codex reasoning effort.
+ *
+ * Anthropic expresses reasoning as a token budget; Codex uses discrete effort
+ * levels. Adaptive thinking carries no budget, so it maps to the middle level.
+ *
+ * @param thinking - The Anthropic `thinking` config from the request body
+ * @returns A Codex reasoning effort level, or null when thinking is disabled
+ */
+function thinkingToReasoningEffort(
+  thinking: unknown,
+): CodexReasoningEffort | null {
+  if (!thinking || typeof thinking !== 'object') return null
+  const config = thinking as { type?: string; budget_tokens?: number }
+  if (config.type === 'adaptive') return 'medium'
+  if (config.type !== 'enabled') return null
+
+  const budget = config.budget_tokens
+  if (typeof budget !== 'number') return 'medium'
+  if (budget <= 4_000) return 'low'
+  if (budget <= 16_000) return 'medium'
+  return 'high'
 }
 
 // ── Response translation: Codex SSE → Anthropic SSE ─────────────────
@@ -367,10 +477,36 @@ async function translateCodexStreamToAnthropic(
       let inToolCall = false
       let hadToolCalls = false
       let inReasoningBlock = false
+      // Whether the current tool call's arguments have already been streamed
+      // as input_json_delta events.
+      let toolArgsDeltaSent = false
+
+      /**
+       * Emits the tool call's arguments as a single delta when Codex supplied
+       * them whole (on `output_item.added` or `function_call_arguments.done`)
+       * rather than streaming them. Without this the consumer — streaming SDK
+       * or aggregateStreamToMessage — reconstructs an empty tool input.
+       */
+      function flushToolArgs(): void {
+        if (toolArgsDeltaSent || !currentToolCallArgs) return
+        safeEnqueue(
+          encoder.encode(
+            formatSSE('content_block_delta', JSON.stringify({
+              type: 'content_block_delta',
+              index: contentBlockIndex,
+              delta: {
+                type: 'input_json_delta',
+                partial_json: currentToolCallArgs,
+              },
+            })),
+          ),
+        )
+        toolArgsDeltaSent = true
+      }
 
       const reader = codexResponse.body?.getReader()
       if (!reader) {
-        emitTextBlock(controller, encoder, contentBlockIndex, 'Error: No response body')
+        emitTextBlock(safeEnqueue, encoder, contentBlockIndex, 'Error: No response body')
         flushBuffer()
         finishStream(controller, encoder, outputTokens, inputTokens, false)
         return
@@ -430,7 +566,8 @@ async function translateCodexStreamToAnthropic(
                 // New text message block starting
                 if (inToolCall) {
                   // Close the previous tool call block
-                  closeToolCallBlock(controller, encoder, contentBlockIndex, currentToolCallId, currentToolCallName, currentToolCallArgs)
+                  flushToolArgs()
+                  closeToolCallBlock(safeEnqueue, encoder, contentBlockIndex)
                   contentBlockIndex++
                   inToolCall = false
                 }
@@ -453,6 +590,7 @@ async function translateCodexStreamToAnthropic(
                 currentToolCallId = (item.call_id as string) || `toolu_${Date.now()}`
                 currentToolCallName = (item.name as string) || ''
                 currentToolCallArgs = (item.arguments as string) || ''
+                toolArgsDeltaSent = false
                 inToolCall = true
                 hadToolCalls = true
 
@@ -537,6 +675,7 @@ async function translateCodexStreamToAnthropic(
               const argDelta = event.delta as string
               if (typeof argDelta === 'string' && inToolCall) {
                 currentToolCallArgs += argDelta
+                toolArgsDeltaSent = true
                 safeEnqueue(
                   encoder.encode(
                     formatSSE('content_block_delta', JSON.stringify({
@@ -563,7 +702,8 @@ async function translateCodexStreamToAnthropic(
             else if (eventType === 'response.output_item.done') {
               const item = event.item as Record<string, unknown>
               if (item?.type === 'function_call') {
-                closeToolCallBlock(controller, encoder, contentBlockIndex, currentToolCallId, currentToolCallName, currentToolCallArgs)
+                flushToolArgs()
+                closeToolCallBlock(safeEnqueue, encoder, contentBlockIndex)
                 contentBlockIndex++
                 inToolCall = false
                 currentToolCallArgs = ''
@@ -656,7 +796,8 @@ async function translateCodexStreamToAnthropic(
         )
       }
       if (inToolCall) {
-        closeToolCallBlock(controller, encoder, contentBlockIndex, currentToolCallId, currentToolCallName, currentToolCallArgs)
+        flushToolArgs()
+        closeToolCallBlock(safeEnqueue, encoder, contentBlockIndex)
       }
 
       flushBuffer()
@@ -664,15 +805,16 @@ async function translateCodexStreamToAnthropic(
     },
   })
 
+  // These take the caller's buffered `enqueue` rather than the controller:
+  // enqueueing directly would bypass the backpressure buffer and let these
+  // events overtake still-buffered ones, emitting e.g. a content_block_stop
+  // before its content_block_start.
   function closeToolCallBlock(
-    controller: ReadableStreamDefaultController,
+    enqueue: (chunk: Uint8Array) => void,
     encoder: TextEncoder,
     index: number,
-    _toolCallId: string,
-    _toolCallName: string,
-    _toolCallArgs: string,
   ) {
-    controller.enqueue(
+    enqueue(
       encoder.encode(
         formatSSE('content_block_stop', JSON.stringify({
           type: 'content_block_stop',
@@ -683,12 +825,12 @@ async function translateCodexStreamToAnthropic(
   }
 
   function emitTextBlock(
-    controller: ReadableStreamDefaultController,
+    enqueue: (chunk: Uint8Array) => void,
     encoder: TextEncoder,
     index: number,
     text: string,
   ) {
-    controller.enqueue(
+    enqueue(
       encoder.encode(
         formatSSE('content_block_start', JSON.stringify({
           type: 'content_block_start',
@@ -697,7 +839,7 @@ async function translateCodexStreamToAnthropic(
         })),
       ),
     )
-    controller.enqueue(
+    enqueue(
       encoder.encode(
         formatSSE('content_block_delta', JSON.stringify({
           type: 'content_block_delta',
@@ -706,7 +848,7 @@ async function translateCodexStreamToAnthropic(
         })),
       ),
     )
-    controller.enqueue(
+    enqueue(
       encoder.encode(
         formatSSE('content_block_stop', JSON.stringify({
           type: 'content_block_stop',
@@ -769,6 +911,195 @@ async function translateCodexStreamToAnthropic(
   })
 }
 
+// ── Non-streaming + token counting ──────────────────────────────────
+
+/**
+ * Builds an Anthropic-shaped `count_tokens` response from a local estimate.
+ *
+ * Codex has no token-counting endpoint. Rather than issue a real generation
+ * request (the previous behaviour, which also returned SSE where the SDK
+ * expected JSON), estimate from the serialised prompt.
+ *
+ * `roughTokenCountEstimation` is imported dynamically because
+ * `tokenEstimation.ts` imports `client.ts`, which imports this module — a
+ * static import would close that cycle at module-evaluation time.
+ *
+ * @param anthropicBody - The parsed Anthropic count_tokens request body
+ * @returns A Response containing `{ input_tokens }`
+ */
+async function estimateTokenCountResponse(
+  anthropicBody: Record<string, unknown>,
+): Promise<Response> {
+  const { roughTokenCountEstimation } = await import('../tokenEstimation.js')
+  const countable = JSON.stringify(
+    [anthropicBody.system ?? '', anthropicBody.messages ?? [], anthropicBody.tools ?? []],
+    // Base64 image payloads are orders of magnitude larger than the tokens
+    // they represent; counting them verbatim would inflate the estimate
+    // enough to trigger spurious compaction.
+    (key, value) => (key === 'data' ? undefined : value),
+  )
+  const inputTokens = roughTokenCountEstimation(countable)
+
+  return new Response(JSON.stringify({ input_tokens: inputTokens }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+/**
+ * Collapses an Anthropic SSE stream into a single Anthropic Message response.
+ *
+ * Re-parsing our own translated stream (rather than translating the Codex
+ * response a second, non-streaming way) keeps one translation path, so the
+ * streaming and non-streaming results cannot drift apart.
+ *
+ * @param streamResponse - An Anthropic-format SSE Response
+ * @param codexModel - The Codex model used, echoed back in the message
+ * @returns A Response containing a complete Anthropic Message JSON
+ */
+async function aggregateStreamToMessage(
+  streamResponse: Response,
+  codexModel: string,
+): Promise<Response> {
+  const message: Record<string, unknown> = {
+    id: `msg_codex_${Date.now()}`,
+    type: 'message',
+    role: 'assistant',
+    model: codexModel,
+    content: [],
+    stop_reason: 'end_turn',
+    stop_sequence: null,
+    usage: { input_tokens: 0, output_tokens: 0 },
+  }
+  const blocks: AnthropicContentBlock[] = []
+  // Accumulates partial tool-call JSON, which arrives as input_json_delta
+  // fragments and is only parseable once the block is complete.
+  const partialJson = new Map<number, string>()
+
+  for await (const { event, data } of iterateSSE(streamResponse)) {
+    switch (event) {
+      case 'message_start': {
+        const startMessage = data.message as Record<string, unknown> | undefined
+        if (startMessage?.id) message.id = startMessage.id
+        if (startMessage?.usage) message.usage = startMessage.usage
+        break
+      }
+      case 'content_block_start': {
+        const index = data.index as number
+        blocks[index] = { ...(data.content_block as AnthropicContentBlock) }
+        if (blocks[index]?.type === 'tool_use') partialJson.set(index, '')
+        break
+      }
+      case 'content_block_delta': {
+        const index = data.index as number
+        const delta = data.delta as Record<string, unknown>
+        const block = blocks[index]
+        if (!block) break
+        if (delta.type === 'text_delta') {
+          block.text = (block.text ?? '') + String(delta.text ?? '')
+        } else if (delta.type === 'thinking_delta') {
+          block.thinking = String(block.thinking ?? '') + String(delta.thinking ?? '')
+        } else if (delta.type === 'input_json_delta') {
+          partialJson.set(index, (partialJson.get(index) ?? '') + String(delta.partial_json ?? ''))
+        }
+        break
+      }
+      case 'content_block_stop': {
+        const index = data.index as number
+        const block = blocks[index]
+        const json = partialJson.get(index)
+        if (block && json !== undefined) {
+          try {
+            block.input = json ? JSON.parse(json) : {}
+          } catch {
+            // A tool call we can't parse is worse than none: surface an empty
+            // input rather than silently dropping the block.
+            logForDebugging(
+              `Codex: failed to parse tool input JSON for block ${index}`,
+              { level: 'warn' },
+            )
+            block.input = {}
+          }
+        }
+        break
+      }
+      case 'message_delta': {
+        const delta = data.delta as Record<string, unknown> | undefined
+        if (delta?.stop_reason) message.stop_reason = delta.stop_reason
+        if (delta?.stop_sequence !== undefined) message.stop_sequence = delta.stop_sequence
+        if (data.usage) {
+          message.usage = { ...(message.usage as object), ...(data.usage as object) }
+        }
+        break
+      }
+      // message_delta carries only output_tokens; message_stop is the only
+      // frame with the real input_tokens.
+      case 'message_stop': {
+        if (data.usage) {
+          message.usage = { ...(message.usage as object), ...(data.usage as object) }
+        }
+        break
+      }
+    }
+  }
+
+  message.content = blocks.filter(Boolean)
+
+  return new Response(JSON.stringify(message), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+/**
+ * Parses an SSE response body into `{ event, data }` pairs.
+ *
+ * @param response - A Response whose body is an SSE stream
+ * @yields Each event name paired with its parsed JSON payload
+ */
+async function* iterateSSE(
+  response: Response,
+): AsyncGenerator<{ event: string; data: Record<string, unknown> }> {
+  const reader = response.body?.getReader()
+  if (!reader) return
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      // SSE frames are separated by a blank line.
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary !== -1) {
+        const frame = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
+        boundary = buffer.indexOf('\n\n')
+
+        let eventName = ''
+        let dataText = ''
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('event:')) eventName = line.slice(6).trim()
+          else if (line.startsWith('data:')) dataText += line.slice(5).trim()
+        }
+        if (!eventName || !dataText) continue
+        try {
+          yield { event: eventName, data: JSON.parse(dataText) }
+        } catch {
+          logForDebugging(`Codex: failed to parse SSE frame for '${eventName}'`, {
+            level: 'warn',
+          })
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+}
+
 // ── Main fetch interceptor ──────────────────────────────────────────
 
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex/responses'
@@ -786,8 +1117,19 @@ export function createCodexFetch(
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : String(input)
 
-    // Only intercept Anthropic API message calls
-    if (!url.includes('/v1/messages')) {
+    // Only intercept the message-creation endpoint. Note `/v1/messages` is a
+    // prefix of `/v1/messages/count_tokens`, which must NOT be translated into
+    // a full Responses call — it's handled separately below.
+    let pathname: string
+    try {
+      pathname = new URL(url).pathname
+    } catch {
+      // Not an absolute URL, so not something we route to Codex.
+      return globalThis.fetch(input, init)
+    }
+    const isCountTokens = pathname.endsWith('/v1/messages/count_tokens')
+    const isMessages = pathname.endsWith('/v1/messages')
+    if (!isMessages && !isCountTokens) {
       return globalThis.fetch(input, init)
     }
 
@@ -809,6 +1151,12 @@ export function createCodexFetch(
       })
     }
 
+    // Codex exposes no token-counting endpoint, so answer locally rather than
+    // billing a full generation request to find out how long a prompt is.
+    if (isCountTokens) {
+      return estimateTokenCountResponse(anthropicBody)
+    }
+
     // Get current token (may have been refreshed)
     const tokens = getCodexOAuthTokens()
     const currentToken = tokens?.accessToken || accessToken
@@ -828,6 +1176,10 @@ export function createCodexFetch(
         'OpenAI-Beta': 'responses=experimental',
       },
       body: JSON.stringify(codexBody),
+      // Forward the SDK's abort signal so timeouts and Ctrl-C can cancel the
+      // upstream request — otherwise the non-streaming path, which blocks
+      // until the stream ends, cannot be interrupted.
+      ...(init?.signal && { signal: init.signal }),
     })
 
     if (!codexResponse.ok) {
@@ -845,7 +1197,12 @@ export function createCodexFetch(
       })
     }
 
-    // Translate streaming response
-    return translateCodexStreamToAnthropic(codexResponse, codexModel)
+    // Translate streaming response. Codex is always streamed upstream, so when
+    // the caller asked for a non-streaming response we collapse the translated
+    // events back into a single Anthropic Message.
+    const anthropicStream = await translateCodexStreamToAnthropic(codexResponse, codexModel)
+    return anthropicBody.stream === true
+      ? anthropicStream
+      : aggregateStreamToMessage(anthropicStream, codexModel)
   }
 }
