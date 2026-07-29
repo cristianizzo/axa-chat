@@ -15,7 +15,7 @@
  * Endpoint: https://chatgpt.com/backend-api/codex/responses
  */
 
-import { getCodexOAuthTokens } from '../../utils/auth.js'
+import { getCodexOAuthTokens, saveCodexOAuthTokens } from '../../utils/auth.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { CODEX_MODELS, DEFAULT_CODEX_MODEL } from '../../utils/model/codexModels.js'
 
@@ -414,6 +414,61 @@ function formatSSE(event: string, data: string): string {
  * @param codexModel - The Codex model used for the request
  * @returns Transformed Response object with Anthropic-format stream
  */
+/** Refresh this long before expiry, so a token cannot lapse mid-request. */
+const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000
+
+/** In-flight refresh, shared so concurrent requests do not each refresh. */
+let codexRefreshInFlight: Promise<string> | null = null
+
+/**
+ * Returns a currently-valid Codex access token, refreshing it near expiry.
+ *
+ * Codex access tokens last about an hour and nothing else refreshes them: the
+ * SDK's 401 handler only knows about Anthropic's credentials, so it would
+ * refresh the wrong provider. Without this a session simply starts returning
+ * 401s partway through and never recovers.
+ *
+ * `refreshCodexToken` is imported dynamically to keep the OAuth client — and
+ * its analytics and browser dependencies — out of this module's import graph,
+ * which is loaded on every request.
+ *
+ * @param fallback - The token captured when the adapter was created
+ * @returns An access token to send to Codex
+ */
+async function getFreshCodexToken(fallback: string): Promise<string> {
+  const tokens = getCodexOAuthTokens()
+  if (!tokens) return fallback
+  if (tokens.expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) return tokens.accessToken
+
+  if (!codexRefreshInFlight) {
+    codexRefreshInFlight = (async () => {
+      // Re-read: another request may have refreshed while this one waited.
+      const latest = getCodexOAuthTokens() ?? tokens
+      if (latest.expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) return latest.accessToken
+
+      const { refreshCodexToken } = await import('../oauth/codex-client.js')
+      const refreshed = await refreshCodexToken(latest.refreshToken)
+      saveCodexOAuthTokens(refreshed)
+      logForDebugging('Codex: refreshed access token')
+      return refreshed.accessToken
+    })().finally(() => {
+      codexRefreshInFlight = null
+    })
+  }
+
+  try {
+    return await codexRefreshInFlight
+  } catch (e) {
+    // Send the stale token anyway: the 401 that follows carries a clearer
+    // message than anything synthesised here, and re-login is the only real
+    // remedy either way.
+    logForDebugging(`Codex: token refresh failed, using existing token: ${String(e)}`, {
+      level: 'error',
+    })
+    return tokens.accessToken
+  }
+}
+
 /**
  * Maps an HTTP status onto the Anthropic error `type` the SDK expects.
  *
@@ -1385,9 +1440,7 @@ export function createCodexFetch(
       return estimateTokenCountResponse(anthropicBody)
     }
 
-    // Get current token (may have been refreshed)
-    const tokens = getCodexOAuthTokens()
-    const currentToken = tokens?.accessToken || accessToken
+    const currentToken = await getFreshCodexToken(accessToken)
 
     // Translate to Codex format
     const { codexBody, codexModel } = translateToCodexBody(anthropicBody)
