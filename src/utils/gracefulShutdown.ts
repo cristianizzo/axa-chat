@@ -172,9 +172,7 @@ function printResumeHint(): void {
 
       writeSync(
         1,
-        chalk.dim(
-          `\nResume this session with:\nclaude --resume ${resumeArg}\n`,
-        ),
+        `\n${chalk.dim('↩ Resume this session with')}\n  ${chalk.cyan('axa --resume')} ${chalk.cyan.bold(resumeArg)}\n`,
       )
       resumeHintPrinted = true
     } catch {
