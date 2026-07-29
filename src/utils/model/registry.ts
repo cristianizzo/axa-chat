@@ -55,7 +55,7 @@ export type ModelDescriptor = {
   maxEffort: boolean
   adaptiveThinking: boolean
   structuredOutputs: boolean
-  maxOutput: { default: number; upperLimit: number }
+  maxOutput: { readonly default: number; readonly upperLimit: number }
   /** Knowledge cutoff string for the system prompt, or null if none. */
   knowledgeCutoff: string | null
   /**
@@ -278,15 +278,34 @@ function assertRegistryInvariants(): void {
       `[model registry] ${fastModeCount} descriptors have fastMode=true; expected at most 1`,
     )
   }
+  // These families back user-facing "latest models" copy (getLatestModelForFamily);
+  // a missing one would silently degrade the system prompt, so fail loudly here.
+  for (const family of ['opus', 'sonnet', 'haiku'] as const) {
+    if (!MODEL_REGISTRY.some(d => d.family === family)) {
+      throw new Error(
+        `[model registry] no descriptor for required family '${family}'`,
+      )
+    }
+  }
 }
 assertRegistryInvariants()
 
-// Longest canonical first so the most specific match wins (e.g. a hypothetical
-// 'claude-opus-5-1' would be preferred over 'claude-opus-5'). Also guards
-// against any future canonical being a substring of another.
-const REGISTRY_BY_SPECIFICITY = [...MODEL_REGISTRY].sort(
-  (a, b) => b.canonical.length - a.canonical.length,
-)
+// Order so the most specific canonical is matched first. If one canonical is a
+// substring of another (e.g. a hypothetical 'claude-opus-5-1' vs 'claude-opus-5'),
+// the container must be tried first regardless of length; length is the tiebreak
+// otherwise. This keeps `getModelDescriptor`'s substring match unambiguous.
+const REGISTRY_BY_SPECIFICITY = [...MODEL_REGISTRY].sort((a, b) => {
+  if (a.canonical === b.canonical) {
+    return 0
+  }
+  if (b.canonical.includes(a.canonical)) {
+    return 1
+  }
+  if (a.canonical.includes(b.canonical)) {
+    return -1
+  }
+  return b.canonical.length - a.canonical.length
+})
 
 /**
  * Resolve a model string to its registry descriptor, or undefined for

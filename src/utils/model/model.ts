@@ -406,7 +406,7 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
   // ARN still resolves; keep the [1m] check on the original string.
   const descriptor = getModelDescriptor(getCanonicalName(model))
   if (descriptor) {
-    const is1m = /\[1m\]$/i.test(model)
+    const is1m = has1mContext(model)
     return is1m && descriptor.supports1M
       ? `${descriptor.displayName} (1M context)`
       : descriptor.displayName
@@ -671,7 +671,7 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
     return undefined
   }
 
-  const has1m = modelId.toLowerCase().includes('[1m]')
+  const has1m = has1mContext(modelId)
   const canonical = getCanonicalName(modelId)
 
   // Registry-first: 4.5+/5-series marketing names (and 1M variant) come from
