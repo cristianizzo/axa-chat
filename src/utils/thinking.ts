@@ -110,6 +110,7 @@ export function modelSupportsThinking(model: string): boolean {
     canonical.includes('sonnet-4') ||
     canonical.includes('sonnet-5') ||
     canonical.includes('opus-4') ||
+    canonical.includes('opus-5') ||
     canonical.includes('fable-5') ||
     canonical.includes('mythos-5')
   )
@@ -127,6 +128,7 @@ export function modelSupportsAdaptiveThinking(model: string): boolean {
     canonical.includes('opus-4-6') ||
     canonical.includes('opus-4-7') ||
     canonical.includes('opus-4-8') ||
+    canonical.includes('opus-5') ||
     canonical.includes('sonnet-4-6') ||
     canonical.includes('sonnet-5') ||
     canonical.includes('fable-5') ||

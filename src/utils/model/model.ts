@@ -47,7 +47,8 @@ export function isNonCustomOpusModel(model: ModelName): boolean {
     model === getModelStrings().opus45 ||
     model === getModelStrings().opus46 ||
     model === getModelStrings().opus47 ||
-    model === getModelStrings().opus48
+    model === getModelStrings().opus48 ||
+    model === getModelStrings().opus5
   )
 }
 
@@ -402,6 +403,10 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
       return 'Mythos 5'
     case getModelStrings().mythos5 + '[1m]':
       return 'Mythos 5 (1M context)'
+    case getModelStrings().opus5:
+      return 'Opus 5'
+    case getModelStrings().opus5 + '[1m]':
+      return 'Opus 5 (1M context)'
     case getModelStrings().opus48:
       return 'Opus 4.8'
     case getModelStrings().opus48 + '[1m]':
@@ -660,6 +665,9 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   }
   if (canonical.includes('claude-mythos-5')) {
     return has1m ? 'Mythos 5 (with 1M context)' : 'Mythos 5'
+  }
+  if (canonical.includes('claude-opus-5')) {
+    return has1m ? 'Opus 5 (with 1M context)' : 'Opus 5'
   }
   if (canonical.includes('claude-opus-4-8')) {
     return has1m ? 'Opus 4.8 (with 1M context)' : 'Opus 4.8'

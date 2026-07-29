@@ -110,6 +110,14 @@ export const CLAUDE_OPUS_4_8_CONFIG = {
   openai: 'claude-opus-4-8',
 } as const satisfies ModelConfig
 
+export const CLAUDE_OPUS_5_CONFIG = {
+  firstParty: 'claude-opus-5',
+  bedrock: 'anthropic.claude-opus-5',
+  vertex: 'claude-opus-5',
+  foundry: 'claude-opus-5',
+  openai: 'claude-opus-5',
+} as const satisfies ModelConfig
+
 export const CLAUDE_SONNET_5_CONFIG = {
   firstParty: 'claude-sonnet-5',
   bedrock: 'anthropic.claude-sonnet-5',
@@ -179,6 +187,7 @@ export const ALL_MODEL_CONFIGS = {
   opus46: CLAUDE_OPUS_4_6_CONFIG,
   opus47: CLAUDE_OPUS_4_7_CONFIG,
   opus48: CLAUDE_OPUS_4_8_CONFIG,
+  opus5: CLAUDE_OPUS_5_CONFIG,
   sonnet5: CLAUDE_SONNET_5_CONFIG,
   fable5: CLAUDE_FABLE_5_CONFIG,
   mythos5: CLAUDE_MYTHOS_5_CONFIG,

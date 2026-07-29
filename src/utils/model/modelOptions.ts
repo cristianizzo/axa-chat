@@ -344,6 +344,7 @@ export function getModelFamilies(): ModelFamily[] {
       label: 'Opus',
       description: '$5/$25 · Most capable for complex work',
       versions: [
+        { value: s.opus5, label: 'Opus 5', description: '1M context · 128k output · Most capable' },
         { value: s.opus48, label: 'Opus 4.8', description: '1M context · 128k output · Agentic coding & enterprise' },
         { value: s.opus47, label: 'Opus 4.7', description: '1M context · 128k output · Agentic coding' },
         { value: s.opus46, label: 'Opus 4.6', description: '1M context · 128k output · Previous default' },

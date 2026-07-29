@@ -34,6 +34,7 @@ export function modelSupportsEffort(model: string): boolean {
     m.includes('opus-4-6') ||
     m.includes('opus-4-7') ||
     m.includes('opus-4-8') ||
+    m.includes('opus-5') ||
     m.includes('sonnet-4-6') ||
     m.includes('sonnet-5') ||
     m.includes('fable-5') ||
@@ -66,7 +67,8 @@ export function modelSupportsMaxEffort(model: string): boolean {
   if (
     model.toLowerCase().includes('opus-4-6') ||
     model.toLowerCase().includes('opus-4-7') ||
-    model.toLowerCase().includes('opus-4-8')
+    model.toLowerCase().includes('opus-4-8') ||
+    model.toLowerCase().includes('opus-5')
   ) {
     return true
   }

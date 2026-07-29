@@ -51,6 +51,7 @@ export function modelSupports1M(model: string): boolean {
     canonical.includes('opus-4-6') ||
     canonical.includes('opus-4-7') ||
     canonical.includes('opus-4-8') ||
+    canonical.includes('claude-opus-5') ||
     canonical.includes('claude-fable-5') ||
     canonical.includes('claude-mythos-5')
   )
