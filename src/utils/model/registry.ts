@@ -259,10 +259,16 @@ function assertRegistryInvariants(): void {
         `[model registry] '${d.key}': config is not ALL_MODEL_CONFIGS['${d.key}']`,
       )
     }
-    if (!d.config.firstParty.includes(d.canonical)) {
-      throw new Error(
-        `[model registry] '${d.key}': canonical '${d.canonical}' is not a substring of firstParty '${d.config.firstParty}'`,
-      )
+    // getModelDescriptor matches by canonical substring against whatever
+    // provider ID form it's given, so the canonical must be a substring of
+    // EVERY provider's ID — not just firstParty — or capability resolution
+    // silently breaks for that provider.
+    for (const providerId of Object.values(d.config)) {
+      if (!providerId.includes(d.canonical)) {
+        throw new Error(
+          `[model registry] '${d.key}': canonical '${d.canonical}' is not a substring of provider ID '${providerId}'`,
+        )
+      }
     }
     if (d.maxOutput.default > d.maxOutput.upperLimit) {
       throw new Error(
