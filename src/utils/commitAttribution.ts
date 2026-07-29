@@ -10,6 +10,7 @@ import { getCwd } from './cwd.js'
 import { logForDebugging } from './debug.js'
 import { execFileNoThrowWithCwd } from './execFileNoThrow.js'
 import { getFsImplementation } from './fsOperations.js'
+import { getModelDescriptor } from './model/registry.js'
 import { isGeneratedFile } from './generatedFiles.js'
 import { getRemoteUrlForDir, resolveGitDir } from './git/gitFilesystem.js'
 import { findGitRoot, gitExe } from './git.js'
@@ -152,6 +153,12 @@ export function sanitizeSurfaceKey(surfaceKey: string): string {
  * Maps internal variants to their public names based on model family.
  */
 export function sanitizeModelName(shortName: string): string {
+  // Registry-first: 4.5+/5-series map to their public canonical (e.g.
+  // 'claude-opus-5'). Covers newer models the substring ladder below misses.
+  const descriptor = getModelDescriptor(shortName)
+  if (descriptor) {
+    return descriptor.canonical
+  }
   // Map internal variants to public equivalents based on model family
   if (shortName.includes('opus-4-6')) return 'claude-opus-4-6'
   if (shortName.includes('opus-4-5')) return 'claude-opus-4-5'

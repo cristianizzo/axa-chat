@@ -16,6 +16,7 @@ import {
   isCodexSubscriber,
 } from '../auth.js'
 import { getAntModelOverrideConfig, resolveAntModel } from './antModels.js'
+import { getModelDescriptor } from './registry.js'
 import {
   has1mContext,
   is1mContextDisabled,
@@ -47,7 +48,8 @@ export function isNonCustomOpusModel(model: ModelName): boolean {
     model === getModelStrings().opus45 ||
     model === getModelStrings().opus46 ||
     model === getModelStrings().opus47 ||
-    model === getModelStrings().opus48
+    model === getModelStrings().opus48 ||
+    model === getModelStrings().opus5
   )
 }
 
@@ -116,7 +118,7 @@ export function getDefaultOpusModel(): ModelName {
   if (getAPIProvider() !== 'firstParty') {
     return getModelStrings().opus46
   }
-  return getModelStrings().opus48
+  return getModelStrings().opus5
 }
 
 // @[MODEL LAUNCH]: Update the default Sonnet model (3P providers may lag so keep defaults unchanged).
@@ -224,6 +226,12 @@ export function getDefaultMainLoopModel(): ModelName {
  */
 export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   name = name.toLowerCase()
+  // Registry-first: 4.5+/5-series models declare their canonical name. Falls
+  // through to the legacy ladder below for pre-4.5 and non-Claude models.
+  const descriptor = getModelDescriptor(name)
+  if (descriptor) {
+    return descriptor.canonical
+  }
   // Special cases for Claude 4+ models to differentiate versions
   // Order matters: check more specific versions first (4-5 before 4)
   if (name.includes('claude-fable-5')) {
@@ -324,7 +332,7 @@ export function getClaudeAiUserDefaultModelDescription(
   }
   if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
     const contextNote = isOpus1mMergeEnabled() ? ' (1M context)' : ''
-    return `Opus 4.8${contextNote} · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
+    return `Opus 5${contextNote} · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
   }
   return 'Sonnet 5 · Best for everyday tasks'
 }
@@ -391,6 +399,17 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
     if (model === 'gpt-5.4') return 'GPT 5.4'
     if (model === 'gpt-5.2') return 'GPT 5.2'
     return model
+  }
+
+  // Registry-first: 4.5+/5-series models derive their display name (and 1M
+  // variant) from the registry. Match on canonical so a settings modelOverrides
+  // ARN still resolves; keep the [1m] check on the original string.
+  const descriptor = getModelDescriptor(getCanonicalName(model))
+  if (descriptor) {
+    const is1m = has1mContext(model)
+    return is1m && descriptor.supports1M
+      ? `${descriptor.displayName} (1M context)`
+      : descriptor.displayName
   }
 
   switch (model) {
@@ -652,8 +671,17 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
     return undefined
   }
 
-  const has1m = modelId.toLowerCase().includes('[1m]')
+  const has1m = has1mContext(modelId)
   const canonical = getCanonicalName(modelId)
+
+  // Registry-first: 4.5+/5-series marketing names (and 1M variant) come from
+  // the registry. Legacy/GPT models fall through to the checks below.
+  const descriptor = getModelDescriptor(canonical)
+  if (descriptor) {
+    return has1m && descriptor.supports1M
+      ? `${descriptor.displayName} (with 1M context)`
+      : descriptor.displayName
+  }
 
   if (canonical.includes('claude-fable-5')) {
     return has1m ? 'Fable 5 (with 1M context)' : 'Fable 5'

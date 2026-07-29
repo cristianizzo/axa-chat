@@ -1,6 +1,7 @@
 import { feature } from 'bun:bundle'
 import { relative } from 'path'
 import {
+  getIsNonInteractiveSession,
   getOriginalCwd,
   handleAutoModeTransition,
   handlePlanModeTransition,
@@ -796,11 +797,13 @@ export function initialPermissionModeFromCLI({
   }
 
   if (!result) {
-    result = { mode: 'default', notification }
-  }
-
-  if (!result) {
-    result = { mode: 'default', notification }
+    // No explicit mode (flag/settings/bypass) resolved — fall back to the
+    // default approval mode. In the AXA fork this is Auto for interactive local
+    // sessions (see isDefaultPermissionModeAuto), otherwise Manual ('default').
+    result = {
+      mode: isDefaultPermissionModeAuto() ? 'auto' : 'default',
+      notification,
+    }
   }
 
   if (feature('TRANSCRIPT_CLASSIFIER') && result.mode === 'auto') {
@@ -1431,11 +1434,27 @@ export async function checkAndDisableBypassPermissions(
 }
 
 export function isDefaultPermissionModeAuto(): boolean {
+  const settings = getSettings_DEPRECATED() || {}
   if (feature('TRANSCRIPT_CLASSIFIER')) {
-    const settings = getSettings_DEPRECATED() || {}
     return settings.permissions?.defaultMode === 'auto'
   }
-  return false
+  // AXA fork: Auto is the default approval mode for new interactive local
+  // sessions (auto-approves routine ops, still prompts on sensitive files and
+  // destructive commands via localAutoApprove.ts). Guardrails:
+  // - respect an explicit non-auto defaultMode from settings,
+  // - never force auto in remote (CLAUDE_CODE_REMOTE) environments,
+  // - never force auto in non-interactive/print sessions (they can't prompt).
+  const explicit = settings.permissions?.defaultMode
+  if (explicit && explicit !== 'auto') {
+    return false
+  }
+  if (isEnvTruthy(process.env.CLAUDE_CODE_REMOTE)) {
+    return false
+  }
+  if (getIsNonInteractiveSession()) {
+    return false
+  }
+  return true
 }
 
 /**

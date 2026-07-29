@@ -30,6 +30,7 @@ import {
   getPublicModelDisplayName,
   getPublicModelName,
 } from './model/model.js'
+import { getLatestModelForFamily } from './model/registry.js'
 import { isMemoryFileAccess } from './sessionFileAccessHooks.js'
 import { getTranscriptPath } from './sessionStorage.js'
 import { readTranscriptForLoad } from './sessionStoragePortable.js'
@@ -75,7 +76,7 @@ export function getAttributionTexts(): AttributionTexts {
   const modelName =
     isInternalModelRepoCached() || isKnownPublicModel
       ? getPublicModelName(model)
-      : 'Claude Opus 4.6'
+      : `Claude ${getLatestModelForFamily('opus')?.displayName ?? 'Opus'}`
   const defaultAttribution = `🤖 Generated with [Claude Code](${PRODUCT_URL})`
   const defaultCommit = `Co-Authored-By: ${modelName} <noreply@anthropic.com>`
 
