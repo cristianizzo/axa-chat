@@ -403,42 +403,102 @@ async function translateCodexStreamToAnthropic(
   codexModel: string,
 ): Promise<Response> {
   const messageId = `msg_codex_${Date.now()}`
+  const encoder = new TextEncoder()
+
+  // ── Backpressure plumbing ────────────────────────────────────────────
+  // The pump fills `pendingBuffer`; the stream's pull() drains it when the
+  // consumer is ready. A ReadableStream never calls pull() until start()
+  // settles, so start() launches the pump without awaiting it — otherwise
+  // pull() would not fire until the entire upstream response had been read
+  // and the buffer would grow unbounded.
+  const pendingBuffer: Uint8Array[] = []
+  let bufferHead = 0
+  let streamController: ReadableStreamDefaultController | null = null
+  let upstreamReader: ReadableStreamDefaultReader<Uint8Array> | null = null
+  let finished = false
+  // Resolved once the consumer has taken everything buffered so far.
+  let notifyDrained: (() => void) | null = null
+  // Resolves a pending pull() once the pump produces something to deliver.
+  let notifyProduced: (() => void) | null = null
+
+  function isBuffered(): boolean {
+    return bufferHead < pendingBuffer.length
+  }
+
+  function drainBuffer(): void {
+    const controller = streamController
+    if (!controller) return
+    while (isBuffered() && controller.desiredSize !== null && controller.desiredSize > 0) {
+      controller.enqueue(pendingBuffer[bufferHead]!)
+      bufferHead++
+    }
+    if (!isBuffered()) {
+      pendingBuffer.length = 0
+      bufferHead = 0
+      notifyDrained?.()
+      notifyDrained = null
+    }
+  }
+
+  function safeEnqueue(chunk: Uint8Array): void {
+    if (finished || streamController?.desiredSize === null) return // stream closed
+    pendingBuffer.push(chunk)
+    drainBuffer()
+    notifyProduced?.()
+    notifyProduced = null
+  }
+
+  /**
+   * Applies backpressure to the pump: resolves once the consumer has taken
+   * everything buffered so far, or immediately if the stream is finished.
+   * Awaiting this between upstream chunks is what stops a fast Codex response
+   * from accumulating in memory ahead of a slow reader.
+   */
+  async function waitForDrain(): Promise<void> {
+    if (finished || !isBuffered()) return
+    await new Promise<void>(resolve => {
+      notifyDrained = resolve
+    })
+  }
+
+  /** Wakes both waiters — used when the stream ends or is cancelled. */
+  function releaseWaiters(): void {
+    notifyDrained?.()
+    notifyDrained = null
+    notifyProduced?.()
+    notifyProduced = null
+  }
 
   const readable = new ReadableStream({
-    async start(controller) {
-      const encoder = new TextEncoder()
+    start(controller) {
+      streamController = controller
+      void pump()
+    },
+    pull() {
+      drainBuffer()
+      if (isBuffered() || finished) return undefined
+      // Nothing left to hand over: keep this pull() pending until the pump
+      // produces more, otherwise the stream spins calling pull() on an empty
+      // buffer.
+      return new Promise<void>(resolve => {
+        notifyProduced = resolve
+      })
+    },
+    async cancel(reason) {
+      finished = true
+      releaseWaiters()
+      try {
+        await upstreamReader?.cancel(reason)
+      } catch {
+        // The reader may already be released or errored — nothing to undo.
+      }
+    },
+  })
+
+  async function pump(): Promise<void> {
       let contentBlockIndex = 0
       let outputTokens = 0
       let inputTokens = 0
-
-      // Safe enqueue with backpressure: buffer chunks when the stream queue
-      // is full and drain them on the next successful enqueue.
-      const pendingBuffer: Uint8Array[] = []
-      let bufferHead = 0
-      function drainBuffer(): void {
-        while (bufferHead < pendingBuffer.length && controller.desiredSize !== null && controller.desiredSize > 0) {
-          controller.enqueue(pendingBuffer[bufferHead]!)
-          bufferHead++
-        }
-        if (bufferHead > 0 && bufferHead === pendingBuffer.length) {
-          pendingBuffer.length = 0
-          bufferHead = 0
-        }
-      }
-      function safeEnqueue(chunk: Uint8Array): void {
-        if (controller.desiredSize === null) return // stream closed
-        pendingBuffer.push(chunk)
-        drainBuffer()
-      }
-      function flushBuffer(): void {
-        // Force-drain remaining chunks before stream close
-        while (bufferHead < pendingBuffer.length && controller.desiredSize !== null) {
-          controller.enqueue(pendingBuffer[bufferHead]!)
-          bufferHead++
-        }
-        pendingBuffer.length = 0
-        bufferHead = 0
-      }
 
       // Emit Anthropic message_start
       safeEnqueue(
@@ -477,6 +537,7 @@ async function translateCodexStreamToAnthropic(
       let inToolCall = false
       let hadToolCalls = false
       let inReasoningBlock = false
+      let streamErrored = false
       // Whether the current tool call's arguments have already been streamed
       // as input_json_delta events.
       let toolArgsDeltaSent = false
@@ -507,16 +568,21 @@ async function translateCodexStreamToAnthropic(
       const reader = codexResponse.body?.getReader()
       if (!reader) {
         emitTextBlock(safeEnqueue, encoder, contentBlockIndex, 'Error: No response body')
-        flushBuffer()
-        finishStream(controller, encoder, outputTokens, inputTokens, false)
+        await finishStream(outputTokens, inputTokens, false, true)
         return
       }
+      upstreamReader = reader
 
       try {
         const decoder = new TextDecoder()
         let buffer = ''
 
         while (true) {
+          // Hold off on reading more from Codex until the consumer has taken
+          // what we already translated.
+          await waitForDrain()
+          if (finished) break
+
           const { done, value } = await reader.read()
           if (done) break
 
@@ -748,30 +814,47 @@ async function translateCodexStreamToAnthropic(
           }
         }
       } catch (err) {
-        // If we're in the middle of a text block, emit the error there
-        if (!currentTextBlockStarted) {
+        streamErrored = true
+        const errorText = `\n\n[Error: ${String(err)}]`
+        if (currentTextBlockStarted) {
+          // A text block already owns this index — append the error to it and
+          // let the close-out below emit its content_block_stop.
           safeEnqueue(
             encoder.encode(
-              formatSSE('content_block_start', JSON.stringify({
-                type: 'content_block_start',
+              formatSSE('content_block_delta', JSON.stringify({
+                type: 'content_block_delta',
                 index: contentBlockIndex,
-                content_block: { type: 'text', text: '' },
+                delta: { type: 'text_delta', text: errorText },
               })),
             ),
           )
-          currentTextBlockStarted = true
+        } else {
+          // A tool_use or thinking block may own this index. Close it first and
+          // report the error in a block of its own: reusing the index would
+          // emit two content_block_starts for one block, which no Anthropic
+          // client can parse.
+          if (inToolCall) {
+            flushToolArgs()
+            closeToolCallBlock(safeEnqueue, encoder, contentBlockIndex)
+            inToolCall = false
+            contentBlockIndex++
+          } else if (inReasoningBlock) {
+            safeEnqueue(
+              encoder.encode(
+                formatSSE('content_block_stop', JSON.stringify({
+                  type: 'content_block_stop',
+                  index: contentBlockIndex,
+                })),
+              ),
+            )
+            inReasoningBlock = false
+            contentBlockIndex++
+          }
+          emitTextBlock(safeEnqueue, encoder, contentBlockIndex, errorText)
         }
-        safeEnqueue(
-          encoder.encode(
-            formatSSE('content_block_delta', JSON.stringify({
-              type: 'content_block_delta',
-              index: contentBlockIndex,
-              delta: { type: 'text_delta', text: `\n\n[Error: ${String(err)}]` },
-            })),
-          ),
-        )
       } finally {
         reader.releaseLock()
+        upstreamReader = null
       }
 
       // Close any remaining open blocks
@@ -800,10 +883,8 @@ async function translateCodexStreamToAnthropic(
         closeToolCallBlock(safeEnqueue, encoder, contentBlockIndex)
       }
 
-      flushBuffer()
-      finishStream(controller, encoder, outputTokens, inputTokens, hadToolCalls)
-    },
-  })
+      await finishStream(outputTokens, inputTokens, hadToolCalls, streamErrored)
+  }
 
   // These take the caller's buffered `enqueue` rather than the controller:
   // enqueueing directly would bypass the backpressure buffer and let these
@@ -858,17 +939,19 @@ async function translateCodexStreamToAnthropic(
     )
   }
 
-  function finishStream(
-    controller: ReadableStreamDefaultController,
-    encoder: TextEncoder,
+  async function finishStream(
     outputTokens: number,
     inputTokens: number,
     hadToolCalls: boolean,
-  ) {
-    // Use 'tool_use' stop reason when model made tool calls
-    const stopReason = hadToolCalls ? 'tool_use' : 'end_turn'
+    errored: boolean,
+  ): Promise<void> {
+    // Use 'tool_use' stop reason when the model made tool calls — but never
+    // after an error: the open tool call was closed with whatever arguments
+    // had arrived, and reporting 'tool_use' would make the client execute a
+    // truncated call.
+    const stopReason = hadToolCalls && !errored ? 'tool_use' : 'end_turn'
 
-    controller.enqueue(
+    safeEnqueue(
       encoder.encode(
         formatSSE(
           'message_delta',
@@ -880,7 +963,7 @@ async function translateCodexStreamToAnthropic(
         ),
       ),
     )
-    controller.enqueue(
+    safeEnqueue(
       encoder.encode(
         formatSSE(
           'message_stop',
@@ -897,7 +980,14 @@ async function translateCodexStreamToAnthropic(
         ),
       ),
     )
-    controller.close()
+
+    // Wait for the consumer to take the trailing events before closing;
+    // closing with chunks still buffered would truncate the response.
+    await waitForDrain()
+    if (finished) return // cancelled while draining
+    finished = true
+    releaseWaiters()
+    streamController?.close()
   }
 
   return new Response(readable, {
