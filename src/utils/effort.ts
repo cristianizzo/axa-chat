@@ -5,6 +5,8 @@ import { isProSubscriber, isMaxSubscriber, isTeamSubscriber } from './auth.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js'
 import { getAPIProvider } from './model/providers.js'
 import { get3PModelCapabilityOverride } from './model/modelSupportOverrides.js'
+import { getCanonicalName } from './model/model.js'
+import { getModelDescriptor } from './model/registry.js'
 import { isEnvTruthy } from './envUtils.js'
 import type { EffortLevel } from 'src/entrypoints/sdk/runtimeTypes.js'
 
@@ -28,6 +30,12 @@ export function modelSupportsEffort(model: string): boolean {
   const supported3P = get3PModelCapabilityOverride(model, 'effort')
   if (supported3P !== undefined) {
     return supported3P
+  }
+  // Registry-first: 4.5+/5-series models declare effort support. Resolve to
+  // canonical so a settings modelOverrides ARN still matches the registry.
+  const descriptor = getModelDescriptor(getCanonicalName(model))
+  if (descriptor) {
+    return descriptor.effort
   }
   // Supported by Claude 4.6+ models, Sonnet 5, Fable 5, Mythos 5
   if (
@@ -63,12 +71,11 @@ export function modelSupportsMaxEffort(model: string): boolean {
   if (supported3P !== undefined) {
     return supported3P
   }
-  if (
-    model.toLowerCase().includes('opus-4-6') ||
-    model.toLowerCase().includes('opus-4-7') ||
-    model.toLowerCase().includes('opus-4-8')
-  ) {
-    return true
+  // Registry-first: 4.5+/5-series models declare 'max' effort support. Resolve
+  // to canonical so a settings modelOverrides ARN still matches the registry.
+  const descriptor = getModelDescriptor(getCanonicalName(model))
+  if (descriptor) {
+    return descriptor.maxEffort
   }
   if (process.env.USER_TYPE === 'ant' && resolveAntModel(model)) {
     return true

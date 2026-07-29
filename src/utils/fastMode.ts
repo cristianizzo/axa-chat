@@ -21,12 +21,17 @@ import { getGlobalConfig, saveGlobalConfig } from './config.js'
 import { logForDebugging } from './debug.js'
 import { isEnvTruthy } from './envUtils.js'
 import {
+  getCanonicalName,
   getDefaultMainLoopModelSetting,
   isOpus1mMergeEnabled,
   type ModelSetting,
   parseUserSpecifiedModel,
 } from './model/model.js'
 import { getAPIProvider } from './model/providers.js'
+import {
+  getFastModeModelDescriptor,
+  getModelDescriptor,
+} from './model/registry.js'
 import { isEssentialTrafficOnly } from './privacyLevel.js'
 import {
   getInitialSettings,
@@ -139,8 +144,11 @@ export function getFastModeUnavailableReason(): string | null {
   return null
 }
 
-// @[MODEL LAUNCH]: Update supported Fast Mode models.
-export const FAST_MODE_MODEL_DISPLAY = 'Opus 4.6'
+// Fast mode targets a single premium model, declared via the `fastMode` flag in
+// the model registry. Deriving the display name here means a fast-infra move is
+// a one-line registry change instead of editing this string.
+export const FAST_MODE_MODEL_DISPLAY =
+  getFastModeModelDescriptor()?.displayName ?? 'Opus'
 
 export function getFastModeModel(): string {
   return 'opus' + (isOpus1mMergeEnabled() ? '[1m]' : '')
@@ -172,7 +180,7 @@ export function isFastModeSupportedByModel(
   }
   const model = modelSetting ?? getDefaultMainLoopModelSetting()
   const parsedModel = parseUserSpecifiedModel(model)
-  return parsedModel.toLowerCase().includes('opus-4-6')
+  return getModelDescriptor(getCanonicalName(parsedModel))?.fastMode === true
 }
 
 // --- Fast mode runtime state ---

@@ -4,6 +4,7 @@ import { feature } from 'bun:bundle'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import { getCanonicalName } from './model/model.js'
 import { get3PModelCapabilityOverride } from './model/modelSupportOverrides.js'
+import { getModelDescriptor } from './model/registry.js'
 import { getAPIProvider } from './model/providers.js'
 import { getSettingsWithErrors } from './settings/settings.js'
 
@@ -121,7 +122,13 @@ export function modelSupportsAdaptiveThinking(model: string): boolean {
   if (supported3P !== undefined) {
     return supported3P
   }
+  // Registry-first: 4.5+/5-series models declare adaptive-thinking support.
+  // Resolve to canonical so a settings modelOverrides ARN still matches.
   const canonical = getCanonicalName(model)
+  const descriptor = getModelDescriptor(canonical)
+  if (descriptor) {
+    return descriptor.adaptiveThinking
+  }
   // Supported by Claude 4.6+ and Claude 5 family models
   if (
     canonical.includes('opus-4-6') ||

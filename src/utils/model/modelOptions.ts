@@ -33,6 +33,7 @@ import {
 } from './model.js'
 import { has1mContext } from '../context.js'
 import { getGlobalConfig } from '../config.js'
+import { getModelDescriptor } from './registry.js'
 
 // @[MODEL LAUNCH]: Update all the available and default model option strings below.
 
@@ -344,9 +345,10 @@ export function getModelFamilies(): ModelFamily[] {
       label: 'Opus',
       description: '$5/$25 · Most capable for complex work',
       versions: [
-        { value: s.opus48, label: 'Opus 4.8', description: '1M context · 128k output · Agentic coding & enterprise' },
+        { value: s.opus5, label: 'Opus 5', description: '1M context · 128k output · Latest, most capable' },
+        { value: s.opus48, label: 'Opus 4.8', description: '1M context · 128k output · Previous default' },
         { value: s.opus47, label: 'Opus 4.7', description: '1M context · 128k output · Agentic coding' },
-        { value: s.opus46, label: 'Opus 4.6', description: '1M context · 128k output · Previous default' },
+        { value: s.opus46, label: 'Opus 4.6', description: '1M context · 128k output' },
       ],
     },
     {
@@ -429,8 +431,15 @@ function getModelFamilyInfo(
 ): { alias: string; currentVersionName: string } | null {
   const canonical = getCanonicalName(model)
 
+  // Registry-first: 4.5+/5-series models map to their family via the registry,
+  // so opus-5 (which breaks the 'claude-opus-4' prefix) is handled correctly.
+  // `canonical` (above) is override-resolved so an ARN override still matches.
+  const descriptor = getModelDescriptor(canonical)
+  const family = descriptor?.family
+
   // Sonnet family
   if (
+    family === 'sonnet' ||
     canonical.includes('claude-sonnet-4-6') ||
     canonical.includes('claude-sonnet-4-5') ||
     canonical.includes('claude-sonnet-4-') ||
@@ -444,7 +453,7 @@ function getModelFamilyInfo(
   }
 
   // Opus family
-  if (canonical.includes('claude-opus-4')) {
+  if (family === 'opus' || canonical.includes('claude-opus-4')) {
     const currentName = getMarketingNameForModel(getDefaultOpusModel())
     if (currentName) {
       return { alias: 'Opus', currentVersionName: currentName }
@@ -453,6 +462,7 @@ function getModelFamilyInfo(
 
   // Haiku family
   if (
+    family === 'haiku' ||
     canonical.includes('claude-haiku') ||
     canonical.includes('claude-3-5-haiku')
   ) {

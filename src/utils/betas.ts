@@ -27,6 +27,7 @@ import { has1mContext } from './context.js'
 import { isEnvDefinedFalsy, isEnvTruthy } from './envUtils.js'
 import { getCanonicalName } from './model/model.js'
 import { get3PModelCapabilityOverride } from './model/modelSupportOverrides.js'
+import { getModelDescriptor } from './model/registry.js'
 import { getAPIProvider } from './model/providers.js'
 import { getInitialSettings } from './settings/settings.js'
 
@@ -145,6 +146,12 @@ export function modelSupportsStructuredOutputs(model: string): boolean {
   // Structured outputs only supported on firstParty and Foundry (not Bedrock/Vertex yet)
   if (provider !== 'firstParty' && provider !== 'foundry') {
     return false
+  }
+  // Registry-first: 4.5+/5-series models declare structured-outputs support.
+  // `canonical` (above) is override-resolved, so an ARN override still matches.
+  const descriptor = getModelDescriptor(canonical)
+  if (descriptor) {
+    return descriptor.structuredOutputs
   }
   return (
     canonical.includes('claude-sonnet-4-6') ||

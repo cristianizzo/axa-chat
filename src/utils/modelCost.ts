@@ -27,6 +27,7 @@ import {
   getDefaultMainLoopModelSetting,
   type ModelShortName,
 } from './model/model.js'
+import { getModelDescriptor, type PricingTier } from './model/registry.js'
 
 // @see https://platform.claude.com/docs/en/about-claude/pricing
 export type ModelCosts = {
@@ -102,6 +103,16 @@ export const COST_TIER_10_50 = {
 
 const DEFAULT_UNKNOWN_MODEL_COST = COST_TIER_5_25
 
+/** Maps a registry model's pricing tier name to its concrete costs. */
+export const PRICING_TIER_COSTS: Record<PricingTier, ModelCosts> = {
+  tier_3_15: COST_TIER_3_15,
+  tier_5_25: COST_TIER_5_25,
+  tier_15_75: COST_TIER_15_75,
+  tier_10_50: COST_TIER_10_50,
+  haiku_35: COST_HAIKU_35,
+  haiku_45: COST_HAIKU_45,
+}
+
 /**
  * Get the cost tier for Opus 4.6 based on fast mode.
  */
@@ -168,12 +179,21 @@ function tokensToUSDCost(modelCosts: ModelCosts, usage: Usage): number {
 export function getModelCosts(model: string, usage: Usage): ModelCosts {
   const shortName = getCanonicalName(model)
 
-  // Check if this is an Opus 4.6 model with fast mode active.
+  // Check if this is an Opus 4.6 model with fast mode active. Must run before
+  // the registry lookup, which returns the flat (non-fast) tier for Opus 4.6.
   if (
     shortName === firstPartyNameToCanonical(CLAUDE_OPUS_4_6_CONFIG.firstParty)
   ) {
     const isFastMode = usage.speed === 'fast'
     return getOpus46CostTier(isFastMode)
+  }
+
+  // Registry-first: 4.5+/5-series models price via their declared tier.
+  // `shortName` is override-resolved, so an ARN override prices correctly (and
+  // doesn't trip the unknown-model telemetry below).
+  const descriptor = getModelDescriptor(shortName)
+  if (descriptor) {
+    return PRICING_TIER_COSTS[descriptor.pricingTier]
   }
 
   const costs = MODEL_COSTS[shortName]
@@ -249,6 +269,10 @@ export function formatModelPricing(costs: ModelCosts): string {
  */
 export function getModelPricingString(model: string): string | undefined {
   const shortName = getCanonicalName(model)
+  const descriptor = getModelDescriptor(shortName)
+  if (descriptor) {
+    return formatModelPricing(PRICING_TIER_COSTS[descriptor.pricingTier])
+  }
   const costs = MODEL_COSTS[shortName]
   if (!costs) return undefined
   return formatModelPricing(costs)

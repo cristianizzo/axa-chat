@@ -4,6 +4,7 @@ import { getGlobalConfig } from './config.js'
 import { isEnvTruthy } from './envUtils.js'
 import { getCanonicalName } from './model/model.js'
 import { getModelCapability } from './model/modelCapabilities.js'
+import { getModelDescriptor } from './model/registry.js'
 
 // Model context window size (200k tokens for all models right now)
 export const MODEL_CONTEXT_WINDOW_DEFAULT = 200_000
@@ -44,7 +45,14 @@ export function modelSupports1M(model: string): boolean {
   if (is1mContextDisabled()) {
     return false
   }
+  // Registry-first: 4.5+/5-series models declare 1M-context support.
+  // Resolve to canonical so settings modelOverrides (e.g. a Bedrock ARN) still
+  // match the registry instead of silently falling through and losing 1M.
   const canonical = getCanonicalName(model)
+  const descriptor = getModelDescriptor(canonical)
+  if (descriptor) {
+    return descriptor.supports1M
+  }
   return (
     canonical.includes('claude-sonnet-4') ||
     canonical.includes('claude-sonnet-5') ||
@@ -171,6 +179,21 @@ export function getModelMaxOutputTokens(model: string): {
   }
 
   const m = getCanonicalName(model)
+
+  // Registry-first: 4.5+/5-series models declare their output-token limits.
+  // Match on the canonical name so modelOverrides resolve correctly. The
+  // API-reported capability cap (below) still applies as an upper bound.
+  const descriptor = getModelDescriptor(m)
+  if (descriptor) {
+    let defaultTokens = descriptor.maxOutput.default
+    let upperLimit = descriptor.maxOutput.upperLimit
+    const cap = getModelCapability(model)
+    if (cap?.max_tokens && cap.max_tokens >= 4_096) {
+      upperLimit = cap.max_tokens
+      defaultTokens = Math.min(defaultTokens, upperLimit)
+    }
+    return { default: defaultTokens, upperLimit }
+  }
 
   if (
     m.includes('fable-5') ||
