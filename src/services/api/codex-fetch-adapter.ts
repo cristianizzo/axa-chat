@@ -175,22 +175,54 @@ function translateMessages(
               })
               .join('\n')
           }
+          // The Responses API has no error flag on function_call_output, so
+          // mark it inline — otherwise the model cannot tell a failed tool
+          // call from a successful one and will happily build on the error
+          // text as if it were a result.
+          const isError = (block as { is_error?: unknown }).is_error === true
           codexInput.push({
             type: 'function_call_output',
             call_id: callId,
-            output: outputText || '',
+            output: isError ? `[tool error] ${outputText}` : outputText || '',
           })
         } else if (block.type === 'text' && typeof block.text === 'string') {
           contentArr.push({ type: 'input_text', text: block.text })
-        } else if (
-          block.type === 'image' &&
-          typeof block.source === 'object' &&
-          block.source !== null &&
-          (block.source as any).type === 'base64'
-        ) {
-          contentArr.push({
-            type: 'input_image',
-            image_url: `data:${(block.source as any).media_type};base64,${(block.source as any).data}`,
+        } else if (block.type === 'image' || block.type === 'document') {
+          const source = block.source as Record<string, unknown> | null | undefined
+          const imageUrl =
+            source?.type === 'base64'
+              ? `data:${String(source.media_type)};base64,${String(source.data)}`
+              : source?.type === 'url' && typeof source.url === 'string'
+                ? source.url
+                : null
+          if (imageUrl && block.type === 'image') {
+            contentArr.push({ type: 'input_image', image_url: imageUrl })
+          } else if (imageUrl && source?.type === 'base64') {
+            // Codex accepts PDFs as a file input rather than an image.
+            contentArr.push({
+              type: 'input_file',
+              filename:
+                typeof (block as { title?: unknown }).title === 'string'
+                  ? String((block as { title?: unknown }).title)
+                  : 'document.pdf',
+              file_data: imageUrl,
+            })
+          } else {
+            // Nothing sensible to send. Say so in the transcript rather than
+            // dropping it: the model would otherwise answer confidently about
+            // an attachment it never received.
+            contentArr.push({
+              type: 'input_text',
+              text: `[unsupported ${block.type} attachment omitted]`,
+            })
+            logForDebugging(
+              `Codex: dropped unsupported ${block.type} block (source type ${String(source?.type)})`,
+              { level: 'warn' },
+            )
+          }
+        } else if (block.type !== 'thinking' && block.type !== 'redacted_thinking') {
+          logForDebugging(`Codex: dropped unsupported user content block '${String(block.type)}'`, {
+            level: 'warn',
           })
         }
       }
@@ -382,6 +414,58 @@ function formatSSE(event: string, data: string): string {
  * @param codexModel - The Codex model used for the request
  * @returns Transformed Response object with Anthropic-format stream
  */
+/**
+ * Maps an HTTP status onto the Anthropic error `type` the SDK expects.
+ *
+ * The SDK and the retry layer branch on this string, so reporting everything
+ * as `api_error` made an expired token look like a transient server fault —
+ * retried several times, then surfaced without the "log in again" hint.
+ *
+ * @param status - The upstream HTTP status code
+ * @returns The matching Anthropic error type
+ */
+function anthropicErrorType(status: number): string {
+  switch (status) {
+    case 400:
+      return 'invalid_request_error'
+    case 401:
+      return 'authentication_error'
+    case 403:
+      return 'permission_error'
+    case 404:
+      return 'not_found_error'
+    case 413:
+      return 'request_too_large'
+    case 429:
+      return 'rate_limit_error'
+    case 529:
+      return 'overloaded_error'
+    default:
+      return 'api_error'
+  }
+}
+
+/**
+ * Pulls a human-readable message out of a Codex `response.failed` / `error`
+ * event. The Responses API is inconsistent about where it puts this, so try
+ * each known shape before falling back to the raw event type.
+ *
+ * @param event - The parsed SSE event
+ * @returns A message suitable for showing to the user
+ */
+function describeStreamError(event: Record<string, unknown>): string {
+  const response = event.response as { error?: { message?: unknown } } | undefined
+  const candidates = [
+    response?.error?.message,
+    (event.error as { message?: unknown } | undefined)?.message,
+    event.message,
+  ]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate) return candidate
+  }
+  return String(event.type ?? 'unknown error')
+}
+
 async function translateCodexStreamToAnthropic(
   codexResponse: Response,
   codexModel: string,
@@ -522,6 +606,7 @@ async function translateCodexStreamToAnthropic(
       let hadToolCalls = false
       let inReasoningBlock = false
       let streamErrored = false
+      let stopReasonOverride: string | null = null
       // Whether the current tool call's arguments have already been streamed
       // as input_json_delta events.
       let toolArgsDeltaSent = false
@@ -552,7 +637,12 @@ async function translateCodexStreamToAnthropic(
       const reader = codexResponse.body?.getReader()
       if (!reader) {
         emitTextBlock(safeEnqueue, encoder, contentBlockIndex, 'Error: No response body')
-        await finishStream(outputTokens, inputTokens, false, true)
+        await finishStream({
+          outputTokens,
+          inputTokens,
+          hadToolCalls: false,
+          errored: true,
+        })
         return
       }
       upstreamReader = reader
@@ -795,6 +885,31 @@ async function translateCodexStreamToAnthropic(
                 inputTokens = usage.input_tokens || inputTokens
               }
             }
+
+            // Upstream reported a failure. Throwing routes it through the
+            // catch below, which closes any open block and surfaces the text
+            // to the user. Falling through instead would end the turn with
+            // stop_reason 'end_turn' — presenting a failure as a finished
+            // answer, which is the worst possible outcome here.
+            else if (eventType === 'response.failed' || eventType === 'error') {
+              throw new Error(`Codex stream failed: ${describeStreamError(event)}`)
+            }
+
+            // Codex stopped early, normally because max_output_tokens was
+            // reached. Anthropic expresses that as stop_reason 'max_tokens',
+            // which the CLI already surfaces as a truncation warning; without
+            // this the turn looks like it ended by choice.
+            else if (eventType === 'response.incomplete') {
+              const response = event.response as Record<string, unknown> | undefined
+              const usage = response?.usage as Record<string, number> | undefined
+              if (usage) {
+                outputTokens = usage.output_tokens || outputTokens
+                inputTokens = usage.input_tokens || inputTokens
+              }
+              const reason = (response?.incomplete_details as { reason?: string } | undefined)
+                ?.reason
+              stopReasonOverride = reason === 'max_output_tokens' ? 'max_tokens' : 'end_turn'
+            }
           }
         }
       } catch (err) {
@@ -867,7 +982,13 @@ async function translateCodexStreamToAnthropic(
         closeToolCallBlock(safeEnqueue, encoder, contentBlockIndex)
       }
 
-      await finishStream(outputTokens, inputTokens, hadToolCalls, streamErrored)
+      await finishStream({
+        outputTokens,
+        inputTokens,
+        hadToolCalls,
+        errored: streamErrored,
+        stopReasonOverride,
+      })
   }
 
   // These take the caller's buffered `enqueue` rather than the controller:
@@ -923,17 +1044,21 @@ async function translateCodexStreamToAnthropic(
     )
   }
 
-  async function finishStream(
-    outputTokens: number,
-    inputTokens: number,
-    hadToolCalls: boolean,
-    errored: boolean,
-  ): Promise<void> {
+  async function finishStream(opts: {
+    outputTokens: number
+    inputTokens: number
+    hadToolCalls: boolean
+    errored: boolean
+    stopReasonOverride?: string | null
+  }): Promise<void> {
+    const { outputTokens, inputTokens, hadToolCalls, errored } = opts
     // Use 'tool_use' stop reason when the model made tool calls — but never
     // after an error: the open tool call was closed with whatever arguments
     // had arrived, and reporting 'tool_use' would make the client execute a
-    // truncated call.
-    const stopReason = hadToolCalls && !errored ? 'tool_use' : 'end_turn'
+    // truncated call. An explicit override (e.g. 'max_tokens' from
+    // response.incomplete) wins over both.
+    const stopReason =
+      opts.stopReasonOverride ?? (hadToolCalls && !errored ? 'tool_use' : 'end_turn')
 
     safeEnqueue(
       encoder.encode(
@@ -942,7 +1067,11 @@ async function translateCodexStreamToAnthropic(
           JSON.stringify({
             type: 'message_delta',
             delta: { stop_reason: stopReason, stop_sequence: null },
-            usage: { output_tokens: outputTokens },
+            // input_tokens belongs here, not only on message_stop: the CLI
+            // accumulates usage from message_start and message_delta and
+            // ignores message_stop, so omitting it reports every Codex turn
+            // as costing zero input tokens — which also skews compaction.
+            usage: { input_tokens: inputTokens, output_tokens: outputTokens },
           }),
         ),
       ),
@@ -1056,6 +1185,7 @@ async function aggregateStreamToMessage(
   // Accumulates partial tool-call JSON, which arrives as input_json_delta
   // fragments and is only parseable once the block is complete.
   const partialJson = new Map<number, string>()
+  const malformedToolCalls: string[] = []
 
   for await (const { event, data } of iterateSSE(streamResponse)) {
     switch (event) {
@@ -1093,13 +1223,20 @@ async function aggregateStreamToMessage(
           try {
             block.input = json ? JSON.parse(json) : {}
           } catch {
-            // A tool call we can't parse is worse than none: surface an empty
-            // input rather than silently dropping the block.
+            // Leaving `input` empty would run the tool with no arguments —
+            // a delete or a write with a blank target is far worse than a
+            // failed turn. Replace the call with a visible message instead.
             logForDebugging(
               `Codex: failed to parse tool input JSON for block ${index}`,
               { level: 'warn' },
             )
-            block.input = {}
+            malformedToolCalls.push(String(block.name ?? 'unknown'))
+            blocks[index] = {
+              type: 'text',
+              text: `[Codex returned an unparseable argument list for tool '${String(
+                block.name ?? 'unknown',
+              )}'; the call was not made.]`,
+            } as AnthropicContentBlock
           }
         }
         break
@@ -1125,6 +1262,16 @@ async function aggregateStreamToMessage(
   }
 
   message.content = blocks.filter(Boolean)
+
+  // With the malformed call removed there may be no tool_use left, so a
+  // 'tool_use' stop reason would leave the caller waiting for a tool result
+  // that can never arrive.
+  if (
+    malformedToolCalls.length > 0 &&
+    !(message.content as AnthropicContentBlock[]).some(b => b.type === 'tool_use')
+  ) {
+    message.stop_reason = 'end_turn'
+  }
 
   return new Response(JSON.stringify(message), {
     status: 200,
@@ -1268,13 +1415,21 @@ export function createCodexFetch(
       const errorBody = {
         type: 'error',
         error: {
-          type: 'api_error',
+          type: anthropicErrorType(codexResponse.status),
           message: `Codex API error (${codexResponse.status}): ${errorText}`,
         },
       }
+      // Carry the upstream headers over. `Retry-After` and the rate-limit
+      // headers drive backoff, the fast-mode cooldown and the overage check;
+      // dropping them made every 429 look like it had no retry hint, which
+      // silently turned a short pause into a long one.
+      const headers = new Headers(codexResponse.headers)
+      headers.set('Content-Type', 'application/json')
+      headers.delete('Content-Encoding')
+      headers.delete('Content-Length')
       return new Response(JSON.stringify(errorBody), {
         status: codexResponse.status,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
       })
     }
 
