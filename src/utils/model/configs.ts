@@ -170,9 +170,11 @@ function codexConfig<T extends CodexModelId>(id: T) {
   } as const satisfies ModelConfig
 }
 
-export const GPT_5_4_CONFIG = codexConfig('gpt-5.4')
-export const GPT_5_3_CODEX_CONFIG = codexConfig(DEFAULT_CODEX_MODEL)
-export const GPT_5_4_MINI_CONFIG = codexConfig('gpt-5.4-mini')
+export const GPT_5_6_SOL_CONFIG = codexConfig('gpt-5.6-sol')
+export const GPT_5_6_TERRA_CONFIG = codexConfig(DEFAULT_CODEX_MODEL)
+export const GPT_5_6_LUNA_CONFIG = codexConfig('gpt-5.6-luna')
+export const GPT_5_5_CONFIG = codexConfig('gpt-5.5')
+export const GPT_5_2_CONFIG = codexConfig('gpt-5.2')
 
 // @[MODEL LAUNCH]: Register the new config here.
 export const ALL_MODEL_CONFIGS = {
@@ -194,9 +196,11 @@ export const ALL_MODEL_CONFIGS = {
   fable5: CLAUDE_FABLE_5_CONFIG,
   mythos5: CLAUDE_MYTHOS_5_CONFIG,
   // OpenAI Codex models
-  gpt54: GPT_5_4_CONFIG,
-  gpt53codex: GPT_5_3_CODEX_CONFIG,
-  gpt54mini: GPT_5_4_MINI_CONFIG,
+  gpt56sol: GPT_5_6_SOL_CONFIG,
+  gpt56terra: GPT_5_6_TERRA_CONFIG,
+  gpt56luna: GPT_5_6_LUNA_CONFIG,
+  gpt55: GPT_5_5_CONFIG,
+  gpt52: GPT_5_2_CONFIG,
 } as const satisfies Record<string, ModelConfig>
 
 export type ModelKey = keyof typeof ALL_MODEL_CONFIGS

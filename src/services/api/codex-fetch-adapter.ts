@@ -22,7 +22,9 @@ import {
   CODEX_BASE_URL,
   CODEX_JWT_AUTH_CLAIM,
   CODEX_MODELS,
+  type CodexReasoningEffort,
   DEFAULT_CODEX_MODEL,
+  resolveCodexEffort,
 } from 'src/config/codex.js'
 
 /**
@@ -371,7 +373,7 @@ function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     codexBody.temperature = anthropicBody.temperature
   }
 
-  const reasoningEffort = resolveReasoningEffort(anthropicBody)
+  const reasoningEffort = resolveReasoningEffort(anthropicBody, codexModel)
   if (reasoningEffort) {
     codexBody.reasoning = { effort: reasoningEffort }
   }
@@ -383,8 +385,6 @@ function translateToCodexBody(anthropicBody: Record<string, unknown>): {
   return { codexBody, codexModel }
 }
 
-type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh'
-
 /**
  * Derives a Codex reasoning effort from an Anthropic request.
  *
@@ -393,25 +393,25 @@ type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh'
  * is false for every model under the `openai` provider, so a Codex request
  * never carries one.
  *
+ * Takes the resolved Codex model, not the Anthropic one, because the accepted
+ * ladder differs per model and is keyed on the ID actually being sent.
+ *
  * @param anthropicBody - The parsed Anthropic request body
+ * @param codexModel - The Codex model ID this request will be sent to
  * @returns A Codex reasoning effort level, or null to let Codex decide
  */
 function resolveReasoningEffort(
   anthropicBody: Record<string, unknown>,
+  codexModel: string,
 ): CodexReasoningEffort | null {
   const outputConfig = anthropicBody.output_config as
     | { effort?: unknown }
     | undefined
   const effort = outputConfig?.effort
-  if (typeof effort === 'string') {
-    // Anthropic's top level is 'max'; the Codex equivalent is 'xhigh'.
-    if (effort === 'max') return 'xhigh'
-    if (effort === 'low' || effort === 'medium' || effort === 'high') {
-      return effort
-    }
+  if (typeof effort !== 'string') {
+    return null
   }
-
-  return null
+  return resolveCodexEffort(codexModel, effort)
 }
 
 // ── Response translation: Codex SSE → Anthropic SSE ─────────────────

@@ -187,7 +187,7 @@ export function getRuntimeMainLoopModel(params: {
  */
 export function getDefaultMainLoopModelSetting(): ModelName | ModelAlias {
   if (isCodexSubscriber()) {
-    return getModelStrings().gpt53codex
+    return getModelStrings().gpt56terra
   }
 
   // Ants default to defaultModel from flag config, or Opus 1M if not configured

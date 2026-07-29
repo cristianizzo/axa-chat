@@ -10,24 +10,91 @@
 
 // ── Models ──────────────────────────────────────────────────────────
 
-// Single source of truth for the `/model` picker (see getCodexModelOptions in
-// modelOptions.ts). Adding an entry here surfaces it in the picker.
-// Not exhaustive: any other `gpt-*` ID the user types is passed through to the
-// backend untouched (see mapClaudeModelToCodex), so a newly launched model
-// works without a code change.
-export const CODEX_MODELS = [
-  { id: 'gpt-5.4', label: 'GPT-5.4', description: 'Latest frontier model · reasoning, coding and agentic work' },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: 'Fast and efficient for simple tasks' },
-  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', description: 'Agentic coding model' },
-  { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', description: 'Previous agentic coding model' },
-  { id: 'gpt-5.1-codex-max', label: 'GPT-5.1 Codex Max', description: 'Max Codex model' },
-  { id: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini', description: 'Fast Codex model' },
+/**
+ * Reasoning efforts the Codex backend accepts, weakest first. Our own `/effort`
+ * vocabulary is narrower (low/medium/high/max — see EFFORT_LEVELS in
+ * utils/effort.ts); {@link resolveCodexEffort} bridges the two.
+ */
+export const CODEX_EFFORTS = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra',
 ] as const
+
+export type CodexReasoningEffort = (typeof CODEX_EFFORTS)[number]
+
+/**
+ * Single source of truth for the `/model` picker (see getCodexModelOptions in
+ * modelOptions.ts). Adding an entry here surfaces it in the picker.
+ *
+ * Every field is transcribed from OpenAI's own catalog — `models.json` in
+ * codex-rs/models-manager — restricted to entries whose `visibility` is `list`
+ * and whose `available_in_plans` includes `plus`/`pro`. That restriction is the
+ * whole point: the ChatGPT-subscription backend serves a *different, smaller*
+ * set of models than the metered platform API, and requesting one it does not
+ * serve fails the turn outright with
+ *   "The '<id>' model is not supported when using Codex with a ChatGPT account."
+ * So do not add an ID here from an OpenAI announcement or the platform API docs
+ * without first confirming that catalog lists it for ChatGPT plans.
+ *
+ * `efforts` is each model's `supported_reasoning_levels`. These genuinely differ
+ * per model, so it cannot be hoisted into a shared constant.
+ *
+ * Not exhaustive: any other `gpt-*` ID the user types is passed through to the
+ * backend untouched (see mapClaudeModelToCodex), so a newly launched model works
+ * without a code change — at the cost of no label and no effort clamping.
+ */
+export const CODEX_MODELS = [
+  {
+    id: 'gpt-5.6-sol',
+    label: 'GPT-5.6-Sol',
+    description: 'Latest frontier agentic coding model.',
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  },
+  {
+    id: 'gpt-5.6-terra',
+    label: 'GPT-5.6-Terra',
+    description: 'Balanced agentic coding model for everyday work.',
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  },
+  {
+    id: 'gpt-5.6-luna',
+    label: 'GPT-5.6-Luna',
+    description: 'Fast and affordable agentic coding model.',
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
+    id: 'gpt-5.5',
+    label: 'GPT-5.5',
+    description:
+      'Frontier model for complex coding, research, and real-world work.',
+    efforts: ['low', 'medium', 'high', 'xhigh'],
+  },
+  {
+    id: 'gpt-5.2',
+    label: 'GPT-5.2',
+    description: 'Optimized for professional work and long-running agents.',
+    efforts: ['low', 'medium', 'high', 'xhigh'],
+  },
+] as const satisfies readonly {
+  id: string
+  label: string
+  description: string
+  efforts: readonly CodexReasoningEffort[]
+}[]
 
 /** The ID of any model listed above. */
 export type CodexModelId = (typeof CODEX_MODELS)[number]['id']
 
-export const DEFAULT_CODEX_MODEL: CodexModelId = 'gpt-5.3-codex'
+/**
+ * Codex's own catalog ranks `terra` second behind `sol`, describing it as the
+ * balanced everyday model — the role Sonnet plays as our default. Defaulting to
+ * the balanced tier rather than the most expensive one matches both.
+ */
+export const DEFAULT_CODEX_MODEL: CodexModelId = 'gpt-5.6-terra'
 
 /**
  * Capability tiers, used to pick a Codex counterpart when the user is in Codex
@@ -39,9 +106,9 @@ export const DEFAULT_CODEX_MODEL: CodexModelId = 'gpt-5.3-codex'
  * build here instead of silently mapping Opus onto a model we no longer offer.
  */
 export const CLAUDE_FAMILY_TO_CODEX_MODEL = {
-  opus: 'gpt-5.1-codex-max',
+  opus: 'gpt-5.6-sol',
   sonnet: DEFAULT_CODEX_MODEL,
-  haiku: 'gpt-5.1-codex-mini',
+  haiku: 'gpt-5.6-luna',
 } as const satisfies Record<string, CodexModelId>
 
 // ── Limits ──────────────────────────────────────────────────────────
@@ -54,9 +121,9 @@ export const CLAUDE_FAMILY_TO_CODEX_MODEL = {
  * Input-only: the API docs quote a *total* of 400k, which is this plus 128k of
  * output. Do not conflate the two.
  *
- * Note this is the subscription figure. gpt-5.4 allows 922k input on the
- * metered platform API, but the ChatGPT backend caps it here and bills 2x
- * beyond it, so the larger number must not be used on this path.
+ * Note this is the subscription figure, which has been lower than the metered
+ * platform API's for past model generations. Take the catalog's number, not the
+ * one in a platform API announcement.
  */
 export const CODEX_CONTEXT_WINDOW = 272_000
 
@@ -119,7 +186,7 @@ export const CODEX_PROVIDER_ID = 'openai-codex' as const
  *
  * Broader than a CODEX_MODELS lookup on purpose: `mapClaudeModelToCodex`
  * forwards any other `gpt-*` ID untouched, so capability checks must agree
- * with that rather than only recognising the six listed models.
+ * with that rather than only recognising the listed models.
  *
  * @param model - A model ID
  * @returns Whether the model runs on Codex
@@ -144,9 +211,11 @@ export function getCodexModelLabel(model: string): string | undefined {
 }
 
 /**
- * Longest ID first, so a prefix never shadows a more specific model.
- * 'gpt-5.4-mini' contains 'gpt-5.4'; scanning in list order would resolve the
- * mini model to the flagship.
+ * Longest ID first, so a prefix never shadows a more specific model. No current
+ * pair collides, but a bare 'gpt-5.6' alongside 'gpt-5.6-sol' would, and the
+ * retired 'gpt-5.4'/'gpt-5.4-mini' pair did — matching in list order resolved
+ * the mini model to the flagship. Sorting costs nothing and stops that class of
+ * bug returning with the next model launch.
  */
 const CODEX_IDS_BY_SPECIFICITY: readonly CodexModelId[] = [
   ...CODEX_MODELS.map(entry => entry.id),
@@ -164,4 +233,50 @@ const CODEX_IDS_BY_SPECIFICITY: readonly CodexModelId[] = [
 export function findCodexModelId(model: string): CodexModelId | undefined {
   const m = model.toLowerCase()
   return CODEX_IDS_BY_SPECIFICITY.find(id => m.includes(id))
+}
+
+/**
+ * Every listed model supports at least these, so they are the safe assumption
+ * for an unlisted passthrough ID whose ladder we cannot know.
+ */
+const CODEX_BASE_EFFORTS: readonly CodexReasoningEffort[] = [
+  'low',
+  'medium',
+  'high',
+]
+
+/**
+ * Translates one of our `/effort` levels into a reasoning effort the given model
+ * actually accepts.
+ *
+ * Necessary because the ladders differ per model: `gpt-5.5` and `gpt-5.2` stop
+ * at `xhigh` while the 5.6 family goes further, and sending a level a model does
+ * not list fails the whole turn. Our vocabulary tops out at 'max', which means
+ * "as much as this model offers" rather than the literal string 'max'.
+ *
+ * @param model - The Codex model the request will be sent to
+ * @param effort - One of our EFFORT_LEVELS ('low' | 'medium' | 'high' | 'max')
+ * @returns An effort the model accepts, or null to let the backend default
+ */
+export function resolveCodexEffort(
+  model: string,
+  effort: string,
+): CodexReasoningEffort | null {
+  const id = findCodexModelId(model)
+  const ladder: readonly CodexReasoningEffort[] =
+    CODEX_MODELS.find(entry => entry.id === id)?.efforts ?? CODEX_BASE_EFFORTS
+
+  if (effort === 'max') {
+    // 'ultra' is deliberately excluded. The catalog describes it as "maximum
+    // reasoning with automatic task delegation" — a behavioural change that
+    // spawns sub-agents, not simply more thinking. Our 'max' asks for depth, so
+    // opting a user into delegation because they turned effort up would be a
+    // surprise, and one they cannot express the alternative of.
+    const byDepth = ladder.filter(level => level !== 'ultra')
+    return byDepth[byDepth.length - 1] ?? null
+  }
+
+  return ladder.includes(effort as CodexReasoningEffort)
+    ? (effort as CodexReasoningEffort)
+    : null
 }
