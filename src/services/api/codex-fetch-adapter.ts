@@ -142,6 +142,28 @@ function translateTools(anthropicTools: AnthropicTool[]): Array<Record<string, u
  * @param anthropicMessages - Array of messages in Anthropic format
  * @returns Array of Codex-compatible input objects
  */
+/**
+ * Renders an Anthropic image/document block as something Codex can load.
+ *
+ * Base64 sources become a data URL; a URL source is passed through as-is.
+ *
+ * @param block - An Anthropic content block with a `source`
+ * @returns A URL Codex can fetch or decode, or null if the source is unusable
+ */
+function imageBlockToUrl(block: unknown): string | null {
+  const source = (block as { source?: unknown })?.source as
+    | Record<string, unknown>
+    | null
+    | undefined
+  if (source?.type === 'base64') {
+    return `data:${String(source.media_type)};base64,${String(source.data)}`
+  }
+  if (source?.type === 'url' && typeof source.url === 'string') {
+    return source.url
+  }
+  return null
+}
+
 function translateMessages(
   anthropicMessages: AnthropicMessage[],
 ): Array<Record<string, unknown>> {
@@ -164,15 +186,24 @@ function translateMessages(
         if (block.type === 'tool_result') {
           const callId = block.tool_use_id || `call_${toolCallCounter++}`
           let outputText = ''
+          // `function_call_output.output` is a plain string in the Responses
+          // API, so images cannot ride along inside it. Collect them and send
+          // them as a follow-up user turn instead of flattening them to text,
+          // which left the model blind to every screenshot a tool returned.
+          const resultImages: Array<Record<string, unknown>> = []
           if (typeof block.content === 'string') {
             outputText = block.content
           } else if (Array.isArray(block.content)) {
             outputText = block.content
               .map(c => {
                 if (c.type === 'text') return c.text
-                if (c.type === 'image') return '[Image data attached]'
+                if (c.type !== 'image') return ''
+                const imageUrl = imageBlockToUrl(c)
+                if (!imageUrl) return '[unsupported image omitted]'
+                resultImages.push({ type: 'input_image', image_url: imageUrl })
                 return ''
               })
+              .filter(Boolean)
               .join('\n')
           }
           // The Responses API has no error flag on function_call_output, so
@@ -185,16 +216,23 @@ function translateMessages(
             call_id: callId,
             output: isError ? `[tool error] ${outputText}` : outputText || '',
           })
+          if (resultImages.length > 0) {
+            codexInput.push({
+              role: 'user',
+              content: [
+                {
+                  type: 'input_text',
+                  text: `Image output from the previous tool call:`,
+                },
+                ...resultImages,
+              ],
+            })
+          }
         } else if (block.type === 'text' && typeof block.text === 'string') {
           contentArr.push({ type: 'input_text', text: block.text })
         } else if (block.type === 'image' || block.type === 'document') {
           const source = block.source as Record<string, unknown> | null | undefined
-          const imageUrl =
-            source?.type === 'base64'
-              ? `data:${String(source.media_type)};base64,${String(source.data)}`
-              : source?.type === 'url' && typeof source.url === 'string'
-                ? source.url
-                : null
+          const imageUrl = imageBlockToUrl(block)
           if (imageUrl && block.type === 'image') {
             contentArr.push({ type: 'input_image', image_url: imageUrl })
           } else if (imageUrl && source?.type === 'base64') {
