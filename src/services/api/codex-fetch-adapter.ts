@@ -17,7 +17,11 @@
 
 import { getCodexOAuthTokens, saveCodexOAuthTokens } from '../../utils/auth.js'
 import { logForDebugging } from '../../utils/debug.js'
-import { CODEX_MODELS, DEFAULT_CODEX_MODEL } from '../../utils/model/codexModels.js'
+import {
+  CLAUDE_FAMILY_TO_CODEX_MODEL,
+  CODEX_MODELS,
+  DEFAULT_CODEX_MODEL,
+} from '../../utils/model/codexModels.js'
 
 /**
  * Resolves the model ID to send to the Codex backend.
@@ -35,18 +39,20 @@ export function mapClaudeModelToCodex(claudeModel: string | null): string {
   if (!claudeModel) return DEFAULT_CODEX_MODEL
 
   const lower = claudeModel.toLowerCase()
-  const mapped = lower.includes('opus')
-    ? 'gpt-5.1-codex-max'
-    : lower.includes('haiku')
-      ? 'gpt-5.1-codex-mini'
-      : lower.includes('sonnet')
-        ? 'gpt-5.3-codex'
-        : // Other Claude models (e.g. claude-fable-5, claude-mythos-5) have no
-          // natural counterpart, but must not be forwarded verbatim — Codex
-          // would reject them.
-          lower.includes('claude')
-          ? DEFAULT_CODEX_MODEL
-          : null
+  const family = (
+    Object.keys(CLAUDE_FAMILY_TO_CODEX_MODEL) as Array<
+      keyof typeof CLAUDE_FAMILY_TO_CODEX_MODEL
+    >
+  ).find(name => lower.includes(name))
+
+  const mapped = family
+    ? CLAUDE_FAMILY_TO_CODEX_MODEL[family]
+    : // Other Claude models (e.g. claude-fable-5, claude-mythos-5) have no
+      // natural counterpart, but must not be forwarded verbatim — Codex
+      // would reject them.
+      lower.includes('claude')
+      ? DEFAULT_CODEX_MODEL
+      : null
 
   if (mapped) {
     logForDebugging(`Codex: mapped Claude model '${claudeModel}' to '${mapped}'`)

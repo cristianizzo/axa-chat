@@ -21,7 +21,25 @@ export const CODEX_MODELS = [
   { id: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini', description: 'Fast Codex model' },
 ] as const
 
-export const DEFAULT_CODEX_MODEL = 'gpt-5.3-codex'
+/** The ID of any model listed above. */
+export type CodexModelId = (typeof CODEX_MODELS)[number]['id']
+
+export const DEFAULT_CODEX_MODEL: CodexModelId = 'gpt-5.3-codex'
+
+/**
+ * Capability tiers, used to pick a Codex counterpart when the user is in Codex
+ * mode with a Claude model still selected.
+ *
+ * Keyed by Claude family rather than by an abstract tier name because that is
+ * the only thing it is ever used for. The `satisfies` clause ties each value to
+ * {@link CODEX_MODELS}, so retiring a model from the list above breaks the
+ * build here instead of silently mapping Opus onto a model we no longer offer.
+ */
+export const CLAUDE_FAMILY_TO_CODEX_MODEL = {
+  opus: 'gpt-5.1-codex-max',
+  sonnet: DEFAULT_CODEX_MODEL,
+  haiku: 'gpt-5.1-codex-mini',
+} as const satisfies Record<string, CodexModelId>
 
 /**
  * Input-token context window for Codex models, per OpenAI's own model catalog
@@ -75,4 +93,27 @@ export function isCodexModelId(model: string): boolean {
 export function getCodexModelLabel(model: string): string | undefined {
   const m = model.toLowerCase()
   return CODEX_MODELS.find(entry => entry.id === m)?.label
+}
+
+/**
+ * Longest ID first, so a prefix never shadows a more specific model.
+ * 'gpt-5.4-mini' contains 'gpt-5.4'; scanning in list order would resolve the
+ * mini model to the flagship.
+ */
+const CODEX_IDS_BY_SPECIFICITY: readonly CodexModelId[] = [
+  ...CODEX_MODELS.map(entry => entry.id),
+].sort((a, b) => b.length - a.length)
+
+/**
+ * Extracts the bare Codex model ID from a string that embeds one.
+ *
+ * Callers may hold a decorated form (a `[1m]` suffix, a provider prefix), so
+ * this matches on substring rather than equality.
+ *
+ * @param model - A model string that may contain a Codex ID
+ * @returns The canonical ID, or undefined if none of the listed models appear
+ */
+export function findCodexModelId(model: string): CodexModelId | undefined {
+  const m = model.toLowerCase()
+  return CODEX_IDS_BY_SPECIFICITY.find(id => m.includes(id))
 }

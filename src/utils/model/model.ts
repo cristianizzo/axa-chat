@@ -15,7 +15,11 @@ import {
   isTeamPremiumSubscriber,
 } from '../auth.js'
 import { getAntModelOverrideConfig, resolveAntModel } from './antModels.js'
-import { getCodexModelLabel, isCodexModelId } from './codexModels.js'
+import {
+  findCodexModelId,
+  getCodexModelLabel,
+  isCodexModelId,
+} from './codexModels.js'
 import { getModelDescriptor } from './registry.js'
 import {
   has1mContext,
@@ -292,15 +296,11 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   if (name.includes('claude-3-haiku')) {
     return 'claude-3-haiku'
   }
-  // OpenAI GPT models
-  if (name.includes('gpt-5.4-mini')) {
-    return 'gpt-5.4-mini'
-  }
-  if (name.includes('gpt-5.4')) {
-    return 'gpt-5.4'
-  }
-  if (name.includes('gpt-5.3-codex')) {
-    return 'gpt-5.3-codex'
+  // OpenAI Codex models: the canonical form is the bare model ID. Read from the
+  // registry so all of them resolve, not just the three that were listed here.
+  const codexId = findCodexModelId(name)
+  if (codexId) {
+    return codexId
   }
   const match = name.match(/(claude-(\d+-\d+-)?\w+)/)
   if (match && match[1]) {

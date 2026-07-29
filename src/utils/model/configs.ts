@@ -1,3 +1,7 @@
+import {
+  DEFAULT_CODEX_MODEL,
+  type CodexModelId,
+} from './codexModels.js'
 import type { ModelName } from './model.js'
 import type { APIProvider } from './providers.js'
 
@@ -148,29 +152,27 @@ export const CLAUDE_OPUS_5_CONFIG = {
 // on Bedrock, the fallback ID is used and the API will return an appropriate error.
 
 // OpenAI Codex models
-export const GPT_5_4_CONFIG = {
-  firstParty: 'gpt-5.4',
-  bedrock: 'gpt-5.4',
-  vertex: 'gpt-5.4',
-  foundry: 'gpt-5.4',
-  openai: 'gpt-5.4',
-} as const satisfies ModelConfig
+/**
+ * Codex models use the same ID on every provider, unlike Claude models whose ID
+ * is rewritten per provider. Accepting a {@link CodexModelId} ties these configs
+ * to the Codex registry, so an ID that is not actually offered fails the build.
+ *
+ * @param id - The Codex model ID
+ * @returns A ModelConfig carrying that ID for every provider
+ */
+function codexConfig<T extends CodexModelId>(id: T) {
+  return {
+    firstParty: id,
+    bedrock: id,
+    vertex: id,
+    foundry: id,
+    openai: id,
+  } as const satisfies ModelConfig
+}
 
-export const GPT_5_3_CODEX_CONFIG = {
-  firstParty: 'gpt-5.3-codex',
-  bedrock: 'gpt-5.3-codex',
-  vertex: 'gpt-5.3-codex',
-  foundry: 'gpt-5.3-codex',
-  openai: 'gpt-5.3-codex',
-} as const satisfies ModelConfig
-
-export const GPT_5_4_MINI_CONFIG = {
-  firstParty: 'gpt-5.4-mini',
-  bedrock: 'gpt-5.4-mini',
-  vertex: 'gpt-5.4-mini',
-  foundry: 'gpt-5.4-mini',
-  openai: 'gpt-5.4-mini',
-} as const satisfies ModelConfig
+export const GPT_5_4_CONFIG = codexConfig('gpt-5.4')
+export const GPT_5_3_CODEX_CONFIG = codexConfig(DEFAULT_CODEX_MODEL)
+export const GPT_5_4_MINI_CONFIG = codexConfig('gpt-5.4-mini')
 
 // @[MODEL LAUNCH]: Register the new config here.
 export const ALL_MODEL_CONFIGS = {
