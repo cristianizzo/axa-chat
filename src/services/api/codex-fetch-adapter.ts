@@ -19,9 +19,11 @@ import { getCodexOAuthTokens, saveCodexOAuthTokens } from '../../utils/auth.js'
 import { logForDebugging } from '../../utils/debug.js'
 import {
   CLAUDE_FAMILY_TO_CODEX_MODEL,
+  CODEX_BASE_URL,
+  CODEX_JWT_AUTH_CLAIM,
   CODEX_MODELS,
   DEFAULT_CODEX_MODEL,
-} from '../../utils/model/codexModels.js'
+} from 'src/config/codex.js'
 
 /**
  * Resolves the model ID to send to the Codex backend.
@@ -78,8 +80,6 @@ export function isCodexModel(model: string): boolean {
 
 // ── JWT helpers ─────────────────────────────────────────────────────
 
-const JWT_CLAIM_PATH = 'https://api.openai.com/auth'
-
 /**
  * Extracts the account ID from a Codex JWT token.
  * @param token - The JWT token to extract the account ID from
@@ -91,7 +91,7 @@ function extractAccountId(token: string): string {
     const parts = token.split('.')
     if (parts.length !== 3) throw new Error('Invalid token')
     const payload = JSON.parse(atob(parts[1]))
-    const accountId = payload?.[JWT_CLAIM_PATH]?.chatgpt_account_id
+    const accountId = payload?.[CODEX_JWT_AUTH_CLAIM]?.chatgpt_account_id
     if (!accountId) throw new Error('No account ID in token')
     return accountId
   } catch {
@@ -1403,8 +1403,6 @@ async function* iterateSSE(
 }
 
 // ── Main fetch interceptor ──────────────────────────────────────────
-
-const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex/responses'
 
 /**
  * Creates a fetch function that intercepts Anthropic API calls and routes them to Codex.

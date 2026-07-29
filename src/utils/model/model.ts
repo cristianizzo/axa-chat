@@ -19,7 +19,7 @@ import {
   findCodexModelId,
   getCodexModelLabel,
   isCodexModelId,
-} from './codexModels.js'
+} from 'src/config/codex.js'
 import { getModelDescriptor } from './registry.js'
 import {
   has1mContext,

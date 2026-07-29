@@ -22,7 +22,7 @@ import {
   CODEX_REDIRECT_URI,
   CODEX_SCOPES,
   CODEX_TOKEN_URL,
-} from '../../constants/codex-oauth.js'
+} from 'src/config/codex.js'
 import { openBrowser } from '../../utils/browser.js'
 import { logError } from '../../utils/log.js'
 import { generateCodeChallenge, generateCodeVerifier, generateState } from './crypto.js'

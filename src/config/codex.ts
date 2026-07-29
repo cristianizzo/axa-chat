@@ -1,11 +1,14 @@
 /**
- * Codex model registry.
+ * Codex configuration: the single source of truth for everything specific to
+ * running against ChatGPT's Codex backend — models, limits, endpoints, OAuth.
  *
- * Deliberately dependency-free: both the `/model` picker (modelOptions.ts) and
- * the networking layer (services/api/codex-fetch-adapter.ts) read from here, so
- * the picker does not have to pull in the fetch adapter — and its transitive
- * dependencies — just to list model names.
+ * Deliberately dependency-free, and it must stay that way. Callers range from
+ * the `/model` picker to the networking layer to cost tracking, so an import
+ * here would drag the fetch adapter's transitive dependencies into the picker
+ * just to list model names.
  */
+
+// ── Models ──────────────────────────────────────────────────────────
 
 // Single source of truth for the `/model` picker (see getCodexModelOptions in
 // modelOptions.ts). Adding an entry here surfaces it in the picker.
@@ -41,6 +44,8 @@ export const CLAUDE_FAMILY_TO_CODEX_MODEL = {
   haiku: 'gpt-5.1-codex-mini',
 } as const satisfies Record<string, CodexModelId>
 
+// ── Limits ──────────────────────────────────────────────────────────
+
 /**
  * Input-token context window for Codex models, per OpenAI's own model catalog
  * (codex-rs/models-manager/models.json). Every model listed above reports the
@@ -65,6 +70,49 @@ export const CODEX_MAX_OUTPUT_TOKENS = {
   default: 64_000,
   upperLimit: 128_000,
 } as const
+
+// ── Endpoint ────────────────────────────────────────────────────────
+
+/** The Responses API endpoint the fetch adapter POSTs translated requests to. */
+export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex/responses'
+
+// ── OAuth ───────────────────────────────────────────────────────────
+//
+// The Codex OAuth flow runs against OpenAI's own auth server and is completely
+// separate from Anthropic's. Values originate from the @mariozechner/pi-ai
+// package used by the openclaw project.
+
+/** The registered OAuth client ID for Codex CLI tools. */
+export const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
+
+/** OpenAI's authorization endpoint. */
+export const CODEX_AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize'
+
+/** OpenAI's token exchange / refresh endpoint. */
+export const CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token'
+
+/**
+ * The redirect URI registered for the Codex OAuth app. OpenAI requires a fixed
+ * port (1455), unlike Anthropic which uses OS-assigned ports.
+ */
+export const CODEX_REDIRECT_URI = 'http://localhost:1455/auth/callback'
+
+/** Space-separated OAuth scopes requested from OpenAI. */
+export const CODEX_SCOPES = 'openid profile email offline_access'
+
+/**
+ * JWT claim namespace where OpenAI places the chatgpt_account_id, i.e.
+ * `payload['https://api.openai.com/auth'].chatgpt_account_id`.
+ */
+export const CODEX_JWT_AUTH_CLAIM = 'https://api.openai.com/auth'
+
+/**
+ * Provider identifier used in config storage to distinguish Codex credentials
+ * from Anthropic credentials.
+ */
+export const CODEX_PROVIDER_ID = 'openai-codex' as const
+
+// ── Predicates ──────────────────────────────────────────────────────
 
 /**
  * True for any model that will be routed to the Codex backend.

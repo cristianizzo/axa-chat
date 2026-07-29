@@ -1,7 +1,7 @@
 import {
   DEFAULT_CODEX_MODEL,
   type CodexModelId,
-} from './codexModels.js'
+} from 'src/config/codex.js'
 import type { ModelName } from './model.js'
 import type { APIProvider } from './providers.js'
 

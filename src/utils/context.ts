@@ -8,7 +8,7 @@ import {
   CODEX_CONTEXT_WINDOW,
   CODEX_MAX_OUTPUT_TOKENS,
   isCodexModelId,
-} from './model/codexModels.js'
+} from 'src/config/codex.js'
 import { getModelDescriptor } from './model/registry.js'
 
 // Model context window size (200k tokens for all models right now)

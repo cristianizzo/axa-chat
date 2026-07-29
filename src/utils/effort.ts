@@ -7,7 +7,7 @@ import { getAPIProvider } from './model/providers.js'
 import { get3PModelCapabilityOverride } from './model/modelSupportOverrides.js'
 import { getCanonicalName } from './model/model.js'
 import { getModelDescriptor } from './model/registry.js'
-import { isCodexModelId } from './model/codexModels.js'
+import { isCodexModelId } from 'src/config/codex.js'
 import { isEnvTruthy } from './envUtils.js'
 import type { EffortLevel } from 'src/entrypoints/sdk/runtimeTypes.js'
 
