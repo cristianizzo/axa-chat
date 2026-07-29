@@ -13,9 +13,9 @@ import {
   isMaxSubscriber,
   isProSubscriber,
   isTeamPremiumSubscriber,
-  isCodexSubscriber,
 } from '../auth.js'
 import { getAntModelOverrideConfig, resolveAntModel } from './antModels.js'
+import { getCodexModelLabel, isCodexModelId } from './codexModels.js'
 import { getModelDescriptor } from './registry.js'
 import {
   has1mContext,
@@ -391,14 +391,11 @@ export function renderModelSetting(setting: ModelName | ModelAlias): string {
  * if the model is not recognized as a public model.
  */
 export function getPublicModelDisplayName(model: ModelName): string | null {
-  if (model.includes('gpt-') || model.includes('codex')) {
-    if (model === 'gpt-5.2-codex') return 'Codex 5.2'
-    if (model === 'gpt-5.1-codex') return 'Codex 5.1'
-    if (model === 'gpt-5.1-codex-mini') return 'Codex 5.1 Mini'
-    if (model === 'gpt-5.1-codex-max') return 'Codex 5.1 Max'
-    if (model === 'gpt-5.4') return 'GPT 5.4'
-    if (model === 'gpt-5.2') return 'GPT 5.2'
-    return model
+  // Labels come from CODEX_MODELS so the picker and every rendered name agree.
+  // An unlisted `gpt-*` ID is a deliberate passthrough (see
+  // mapClaudeModelToCodex) that we have no label for, so show it verbatim.
+  if (isCodexModelId(model)) {
+    return getCodexModelLabel(model) ?? model
   }
 
   // Registry-first: 4.5+/5-series models derive their display name (and 1M
@@ -463,12 +460,6 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
       return 'Haiku 4.5'
     case getModelStrings().haiku35:
       return 'Haiku 3.5'
-    case getModelStrings().gpt54:
-      return 'GPT-5.4'
-    case getModelStrings().gpt53codex:
-      return 'GPT-5.3 Codex'
-    case getModelStrings().gpt54mini:
-      return 'GPT-5.4 Mini'
     default:
       return null
   }
@@ -731,15 +722,11 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   if (canonical.includes('claude-3-5-haiku')) {
     return 'Claude 3.5 Haiku'
   }
-  // OpenAI Codex models
-  if (canonical.includes('gpt-5.4-mini')) {
-    return 'GPT-5.4 Mini'
-  }
-  if (canonical.includes('gpt-5.4')) {
-    return 'GPT-5.4'
-  }
-  if (canonical.includes('gpt-5.3-codex')) {
-    return 'GPT-5.3 Codex'
+  // OpenAI Codex models. Returning undefined here degrades the system prompt,
+  // so cover every model the picker offers by reading the same list it does.
+  const codexLabel = getCodexModelLabel(canonical)
+  if (codexLabel) {
+    return codexLabel
   }
 
   return undefined

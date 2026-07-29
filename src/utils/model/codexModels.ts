@@ -37,3 +37,17 @@ export function isCodexModelId(model: string): boolean {
   const m = model.toLowerCase()
   return m.startsWith('gpt-') || m.includes('codex')
 }
+
+/**
+ * The display label for a listed Codex model.
+ *
+ * Both the picker and every display-name path read this, so a model cannot be
+ * offered under one name and rendered under another.
+ *
+ * @param model - A model ID
+ * @returns The label, or undefined for an unlisted (passthrough) model
+ */
+export function getCodexModelLabel(model: string): string | undefined {
+  const m = model.toLowerCase()
+  return CODEX_MODELS.find(entry => entry.id === m)?.label
+}
