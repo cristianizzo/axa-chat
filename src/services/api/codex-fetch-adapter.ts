@@ -344,11 +344,10 @@ type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh'
 /**
  * Derives a Codex reasoning effort from an Anthropic request.
  *
- * The user's `/effort` choice arrives as `output_config.effort` — that is the
- * primary signal, since `modelSupportsEffort()` is true for `gpt-*` IDs.
- * `thinking` is only a fallback: these models also report adaptive-thinking
- * support, so `thinking` is normally `{ type: 'adaptive' }` with no budget,
- * and a budget only appears under CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING.
+ * `output_config.effort` — the user's `/effort` choice — is the only signal.
+ * The `thinking` field is deliberately not consulted: `modelSupportsThinking()`
+ * is false for every model under the `openai` provider, so a Codex request
+ * never carries one.
  *
  * @param anthropicBody - The parsed Anthropic request body
  * @returns A Codex reasoning effort level, or null to let Codex decide
@@ -368,31 +367,7 @@ function resolveReasoningEffort(
     }
   }
 
-  return thinkingToReasoningEffort(anthropicBody.thinking)
-}
-
-/**
- * Translates an Anthropic thinking config into a Codex reasoning effort.
- *
- * Anthropic expresses reasoning as a token budget; Codex uses discrete effort
- * levels. Adaptive thinking carries no budget, so it maps to the middle level.
- *
- * @param thinking - The Anthropic `thinking` config from the request body
- * @returns A Codex reasoning effort level, or null when thinking is disabled
- */
-function thinkingToReasoningEffort(
-  thinking: unknown,
-): CodexReasoningEffort | null {
-  if (!thinking || typeof thinking !== 'object') return null
-  const config = thinking as { type?: string; budget_tokens?: number }
-  if (config.type === 'adaptive') return 'medium'
-  if (config.type !== 'enabled') return null
-
-  const budget = config.budget_tokens
-  if (typeof budget !== 'number') return 'medium'
-  if (budget <= 4_000) return 'low'
-  if (budget <= 16_000) return 'medium'
-  return 'high'
+  return null
 }
 
 // ── Response translation: Codex SSE → Anthropic SSE ─────────────────

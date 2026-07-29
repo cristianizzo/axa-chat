@@ -7,6 +7,7 @@ import { getAPIProvider } from './model/providers.js'
 import { get3PModelCapabilityOverride } from './model/modelSupportOverrides.js'
 import { getCanonicalName } from './model/model.js'
 import { getModelDescriptor } from './model/registry.js'
+import { isCodexModelId } from './model/codexModels.js'
 import { isEnvTruthy } from './envUtils.js'
 import type { EffortLevel } from 'src/entrypoints/sdk/runtimeTypes.js'
 
@@ -30,6 +31,13 @@ export function modelSupportsEffort(model: string): boolean {
   const supported3P = get3PModelCapabilityOverride(model, 'effort')
   if (supported3P !== undefined) {
     return supported3P
+  }
+  // Codex models take a reasoning effort, which the fetch adapter maps our
+  // levels onto. This must come before the firstParty default at the end of
+  // this function, which returns false for the whole `openai` provider and so
+  // would leave Codex running at its server default with the picker hidden.
+  if (isCodexModelId(model)) {
+    return true
   }
   // Registry-first: 4.5+/5-series models declare effort support. Resolve to
   // canonical so a settings modelOverrides ARN still matches the registry.
@@ -70,6 +78,10 @@ export function modelSupportsMaxEffort(model: string): boolean {
   const supported3P = get3PModelCapabilityOverride(model, 'max_effort')
   if (supported3P !== undefined) {
     return supported3P
+  }
+  // Codex exposes an 'xhigh' reasoning effort, which the adapter maps 'max' to.
+  if (isCodexModelId(model)) {
+    return true
   }
   // Registry-first: 4.5+/5-series models declare 'max' effort support. Resolve
   // to canonical so a settings modelOverrides ARN still matches the registry.

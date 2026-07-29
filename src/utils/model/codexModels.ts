@@ -22,3 +22,18 @@ export const CODEX_MODELS = [
 ] as const
 
 export const DEFAULT_CODEX_MODEL = 'gpt-5.3-codex'
+
+/**
+ * True for any model that will be routed to the Codex backend.
+ *
+ * Broader than a CODEX_MODELS lookup on purpose: `mapClaudeModelToCodex`
+ * forwards any other `gpt-*` ID untouched, so capability checks must agree
+ * with that rather than only recognising the six listed models.
+ *
+ * @param model - A model ID
+ * @returns Whether the model runs on Codex
+ */
+export function isCodexModelId(model: string): boolean {
+  const m = model.toLowerCase()
+  return m.startsWith('gpt-') || m.includes('codex')
+}
