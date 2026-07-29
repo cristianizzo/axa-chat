@@ -24,6 +24,31 @@ export const CODEX_MODELS = [
 export const DEFAULT_CODEX_MODEL = 'gpt-5.3-codex'
 
 /**
+ * Input-token context window for Codex models, per OpenAI's own model catalog
+ * (codex-rs/models-manager/models.json). Every model listed above reports the
+ * same value, so this is a constant rather than a per-model field.
+ *
+ * Input-only: the API docs quote a *total* of 400k, which is this plus 128k of
+ * output. Do not conflate the two.
+ *
+ * Note this is the subscription figure. gpt-5.4 allows 922k input on the
+ * metered platform API, but the ChatGPT backend caps it here and bills 2x
+ * beyond it, so the larger number must not be used on this path.
+ */
+export const CODEX_CONTEXT_WINDOW = 272_000
+
+/**
+ * Output-token limits shared by the Codex models above. The ceiling is what the
+ * backend allows (400k total - 272k input); the default is the lower value we
+ * actually request per turn, matching how the Claude 5-series is configured —
+ * asking for the full ceiling every turn would reserve budget nothing uses.
+ */
+export const CODEX_MAX_OUTPUT_TOKENS = {
+  default: 64_000,
+  upperLimit: 128_000,
+} as const
+
+/**
  * True for any model that will be routed to the Codex backend.
  *
  * Broader than a CODEX_MODELS lookup on purpose: `mapClaudeModelToCodex`
