@@ -131,9 +131,12 @@ function getLatestModelsSentence(): string {
   if (!opus || !sonnet || !haiku) {
     return `When building AI applications, default to the latest and most capable Claude models.`
   }
+  // Use config.firstParty (the actual provider model ID, e.g.
+  // 'claude-haiku-4-5-20251001') for the "Model IDs", not the dateless canonical
+  // short name which may not be a valid API model ID.
   return (
     `The most recent Claude models are ${opus.displayName}, ${sonnet.displayName}, and ${haiku.displayName}. ` +
-    `Model IDs — ${opus.displayName}: '${opus.canonical}', ${sonnet.displayName}: '${sonnet.canonical}', ${haiku.displayName}: '${haiku.canonical}'. ` +
+    `Model IDs — ${opus.displayName}: '${opus.config.firstParty}', ${sonnet.displayName}: '${sonnet.config.firstParty}', ${haiku.displayName}: '${haiku.config.firstParty}'. ` +
     `When building AI applications, default to the latest and most capable Claude models.`
   )
 }
