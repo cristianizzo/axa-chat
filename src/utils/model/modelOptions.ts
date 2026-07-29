@@ -1,6 +1,6 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { getInitialMainLoopModel } from '../../bootstrap/state.js'
-import { CODEX_MODELS } from '../../services/api/codex-fetch-adapter.js'
+import { CODEX_MODELS } from './codexModels.js'
 import {
   isClaudeAISubscriber,
   isCodexSubscriber,

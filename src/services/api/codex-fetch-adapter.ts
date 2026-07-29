@@ -17,23 +17,7 @@
 
 import { getCodexOAuthTokens } from '../../utils/auth.js'
 import { logForDebugging } from '../../utils/debug.js'
-
-// ── Available Codex models ──────────────────────────────────────────
-// Single source of truth for the `/model` picker (see getCodexModelOptions in
-// utils/model/modelOptions.ts). Adding an entry here surfaces it in the picker.
-// Not exhaustive: any other `gpt-*` ID the user types is passed through to the
-// backend untouched (see mapClaudeModelToCodex), so a newly launched model
-// works without a code change.
-export const CODEX_MODELS = [
-  { id: 'gpt-5.4', label: 'GPT-5.4', description: 'Latest frontier model · reasoning, coding and agentic work' },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: 'Fast and efficient for simple tasks' },
-  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', description: 'Agentic coding model' },
-  { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', description: 'Previous agentic coding model' },
-  { id: 'gpt-5.1-codex-max', label: 'GPT-5.1 Codex Max', description: 'Max Codex model' },
-  { id: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini', description: 'Fast Codex model' },
-] as const
-
-export const DEFAULT_CODEX_MODEL = 'gpt-5.3-codex'
+import { CODEX_MODELS, DEFAULT_CODEX_MODEL } from '../../utils/model/codexModels.js'
 
 /**
  * Resolves the model ID to send to the Codex backend.
@@ -1023,10 +1007,17 @@ async function estimateTokenCountResponse(
   const { roughTokenCountEstimation } = await import('../tokenEstimation.js')
   const countable = JSON.stringify(
     [anthropicBody.system ?? '', anthropicBody.messages ?? [], anthropicBody.tools ?? []],
-    // Base64 image payloads are orders of magnitude larger than the tokens
-    // they represent; counting them verbatim would inflate the estimate
-    // enough to trigger spurious compaction.
-    (key, value) => (key === 'data' ? undefined : value),
+    // Base64 image and document payloads are orders of magnitude larger than
+    // the tokens they represent; counting them verbatim would inflate the
+    // estimate enough to trigger spurious compaction. Keyed on the enclosing
+    // object being a base64 `source` (per the Anthropic content-block schema)
+    // rather than on the key name alone, so a tool input with its own `data`
+    // field is still counted. Needs `function` for `this`.
+    function (this: unknown, key, value) {
+      const parent = this as { type?: unknown } | undefined
+      if (key === 'data' && parent?.type === 'base64') return undefined
+      return value
+    },
   )
   const inputTokens = roughTokenCountEstimation(countable)
 
