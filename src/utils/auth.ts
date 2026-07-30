@@ -4,6 +4,7 @@ import { execa } from 'execa'
 import { mkdir, stat } from 'fs/promises'
 import memoize from 'lodash-es/memoize.js'
 import { join } from 'path'
+import { CODEX_PROVIDER_ID } from 'src/config/codex.js'
 import { CLAUDE_AI_PROFILE_SCOPE } from 'src/constants/oauth.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -1320,10 +1321,16 @@ export function clearOAuthTokenCache(): void {
 /**
  * Saves the OpenAI Codex OAuth tokens to GlobalConfig.
  * Does NOT overwrite or interfere with Anthropic's claudeAiOauth block.
+ *
+ * Also makes Codex the active provider: completing this login is the user
+ * saying they want to use that account, and leaving the previous provider
+ * active would send their turns to a backend they just logged out of.
+ * Written in the same update so the tokens and the provider cannot disagree.
  */
 export function saveCodexOAuthTokens(tokens: CodexTokens): void {
   saveGlobalConfig((cfg) => ({
     ...cfg,
+    activeAuthProvider: CODEX_PROVIDER_ID,
     codexOAuth: {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
@@ -1626,15 +1633,20 @@ export function isClaudeAISubscriber(): boolean {
   return shouldUseClaudeAIAuth(getClaudeAIOAuthTokens()?.scopes)
 }
 
+/**
+ * True when this session should run against ChatGPT's Codex backend.
+ *
+ * Both halves matter: the provider says which account the user selected, and the
+ * token check makes sure we do not route to a backend we cannot authenticate to
+ * — e.g. after a logout cleared the tokens but something still names Codex.
+ *
+ * @returns Whether Codex is the active, usable provider
+ */
 export function isCodexSubscriber(): boolean {
-  // Only treat as Codex subscriber when explicitly using OpenAI provider
   if (getAPIProvider() !== 'openai') {
     return false
   }
-
-  // Verify we actually have valid Codex tokens
-  const tokens = getCodexOAuthTokens()
-  return !!tokens?.accessToken
+  return !!getCodexOAuthTokens()?.accessToken
 }
 
 /**

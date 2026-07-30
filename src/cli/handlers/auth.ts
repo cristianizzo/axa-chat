@@ -4,6 +4,8 @@ import {
   clearAuthRelatedCaches,
   performLogout,
 } from '../../commands/logout/logout.js'
+import { ANTHROPIC_PROVIDER_ID } from '../../config/authProviders.js'
+import { setActiveAuthProvider } from '../../utils/activeAuthProvider.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
@@ -104,10 +106,12 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
   )
 
   if (shouldUseClaudeAIAuth(tokens.scopes)) {
+    setActiveAuthProvider(ANTHROPIC_PROVIDER_ID)
     await fetchAndStoreClaudeCodeFirstTokenDate().catch(err =>
       logForDebugging(String(err), { level: 'error' }),
     )
   } else if (hasAnyAnthropicScope(tokens.scopes)) {
+    setActiveAuthProvider(ANTHROPIC_PROVIDER_ID)
     // API key creation is critical for Console users — let it throw.
     const apiKey = await createAndStoreApiKey(tokens.accessToken)
     if (!apiKey) {
@@ -118,7 +122,8 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
   } else {
     // Third-party provider (e.g. OpenAI Codex) — tokens carry no Anthropic
     // scopes. Skip Anthropic API key creation entirely and store the tokens
-    // in their own dedicated config slot.
+    // in their own dedicated config slot. saveCodexOAuthTokens also records
+    // Codex as the active provider.
     saveCodexOAuthTokens({
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken ?? '',

@@ -1,7 +1,10 @@
 import { getDirectConnectServerUrl, getSessionId } from '../bootstrap/state.js'
+import { ANTHROPIC_PROVIDER_ID } from '../config/authProviders.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import type { LogOption } from '../types/logs.js'
+import { getActiveAuthProvider } from './activeAuthProvider.js'
 import { getSubscriptionName, isClaudeAISubscriber, isCodexSubscriber } from './auth.js'
+import { getGlobalConfig } from './config.js'
 import { getCwd } from './cwd.js'
 import { getDisplayPath } from './file.js'
 import {
@@ -256,10 +259,14 @@ export function getLogoDisplayData(): {
   const cwd = serverUrl
     ? `${displayPath} in ${serverUrl.replace(/^https?:\/\//, '')}`
     : displayPath
-  const billingType = isClaudeAISubscriber()
-    ? getSubscriptionName()
-    : isCodexSubscriber()
-      ? 'Codex API Billing'
+  // Codex first: a user who signed in with Codex may still hold Anthropic
+  // tokens from a previous login, and isClaudeAISubscriber() only inspects those
+  // — so checking it first reported "Claude Max" for a session billed to a
+  // ChatGPT subscription.
+  const billingType = isCodexSubscriber()
+    ? 'ChatGPT Subscription'
+    : isClaudeAISubscriber()
+      ? getSubscriptionName()
       : 'API Usage Billing'
   const agentName = getInitialSettings().agent
 
@@ -269,6 +276,26 @@ export function getLogoDisplayData(): {
     billingType,
     agentName,
   }
+}
+
+/**
+ * The organization to name on the banner's model line, if any.
+ *
+ * Empty for anything other than an Anthropic login: oauthAccount holds the
+ * Anthropic organization, so a Codex session was being labelled with the org of
+ * an account it was not using — "GPT-5.6-Terra · ChatGPT Subscription · <your
+ * Anthropic org>".
+ *
+ * @returns The organization name, or undefined when it should not be shown
+ */
+export function getBannerOrganizationName(): string | undefined {
+  if (process.env.IS_DEMO) {
+    return undefined
+  }
+  if (getActiveAuthProvider() !== ANTHROPIC_PROVIDER_ID) {
+    return undefined
+  }
+  return getGlobalConfig().oauthAccount?.organizationName
 }
 
 /**

@@ -5,6 +5,7 @@ import memoize from 'lodash-es/memoize.js'
 import pickBy from 'lodash-es/pickBy.js'
 import { basename, dirname, join, resolve } from 'path'
 import { getOriginalCwd, getSessionTrustAccepted } from '../bootstrap/state.js'
+import type { AuthProviderId } from '../config/authProviders.js'
 import { getAutoMemEntrypoint } from '../memdir/paths.js'
 import { logEvent } from '../services/analytics/index.js'
 import type { McpServerConfig } from '../services/mcp/types.js'
@@ -227,6 +228,14 @@ export type GlobalConfig = {
   hasSeenUltraplanTerms?: boolean // ant-only: whether the one-time CCR terms notice has been shown in the ultraplan launch dialog
   hasResetAutoModeOptInForDefaultOffer?: boolean // ant-only: one-shot migration guard, re-prompts churned auto-mode users
   oauthAccount?: AccountInfo
+
+  /**
+   * Which account the session acts as — see config/authProviders.ts. Written by
+   * whichever login the user completed, and by `/switch-account`. Absent means
+   * "infer from the stored credentials", which is how configs written before
+   * this field keep working.
+   */
+  activeAuthProvider?: AuthProviderId
 
   /**
    * OpenAI Codex OAuth tokens, stored separately from Anthropic credentials.

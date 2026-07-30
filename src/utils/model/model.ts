@@ -16,6 +16,7 @@ import {
 } from '../auth.js'
 import { getAntModelOverrideConfig, resolveAntModel } from './antModels.js'
 import {
+  describeDefaultCodexModel,
   findCodexModelId,
   getCodexModelLabel,
   isCodexModelId,
@@ -58,6 +59,30 @@ export function isNonCustomOpusModel(model: ModelName): boolean {
 }
 
 /**
+ * Whether a model carried in ambient configuration can be served by the account
+ * the session is signed in with.
+ *
+ * Ambient config outlives the account it was written for. A settings.json pinned
+ * to `"model": "claude-opus-5"` sits at priority 4, above the built-in default,
+ * so logging in with a ChatGPT subscription used to keep requesting Opus — and
+ * every turn failed with "not supported when using Codex with a ChatGPT account".
+ * The same is true in reverse for a `gpt-*` ID left behind against Anthropic.
+ *
+ * Aliases always pass: 'opus'/'sonnet'/'haiku' name a capability tier, not a
+ * provider, and each provider resolves them to something it actually serves.
+ * Only a concrete ID pins a provider, so only a concrete ID can be wrong.
+ *
+ * @param model - A model ID or alias from ANTHROPIC_MODEL or settings
+ * @returns Whether the active provider can serve it
+ */
+export function isServableByActiveProvider(model: string): boolean {
+  if (isModelAlias(model)) {
+    return true
+  }
+  return isCodexSubscriber() === isCodexModelId(model)
+}
+
+/**
  * Helper to get the model from /model (including via /config), the --model flag, environment variable,
  * or the saved settings. The returned value can be a model alias if that's what the user specified.
  * Undefined if the user didn't configure anything, in which case we fall back to
@@ -77,7 +102,12 @@ export function getUserSpecifiedModelSetting(): ModelSetting | undefined {
     specifiedModel = modelOverride
   } else {
     const settings = getSettings_DEPRECATED() || {}
-    specifiedModel = process.env.ANTHROPIC_MODEL || settings.model || undefined
+    const ambientModel =
+      process.env.ANTHROPIC_MODEL || settings.model || undefined
+    specifiedModel =
+      ambientModel && !isServableByActiveProvider(ambientModel)
+        ? undefined
+        : ambientModel
   }
 
   // Ignore the user-specified model if it's not in the availableModels allowlist.
@@ -328,7 +358,7 @@ export function getClaudeAiUserDefaultModelDescription(
   fastMode = false,
 ): string {
   if (isCodexSubscriber()) {
-    return 'GPT-5.3 Codex · Optimized for code generation and understanding'
+    return describeDefaultCodexModel()
   }
   if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
     const contextNote = isOpus1mMergeEnabled() ? ' (1M context)' : ''

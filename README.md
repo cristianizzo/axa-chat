@@ -94,20 +94,23 @@ Use Anthropic's first-party API directly.
 
 ### OpenAI Codex
 
-Use OpenAI's Codex models for code generation. Requires a Codex subscription.
+Use OpenAI's Codex models. Requires a ChatGPT Plus or Pro subscription.
+
+Run `/login` and pick **OpenAI Codex account** — no environment variable needed.
+The provider follows the account you signed in with, and the default model
+becomes GPT-5.6-Terra.
 
 | Model | ID |
 |---|---|
-| GPT-5.2 Codex (default) | `gpt-5.2-codex` |
-| GPT-5.1 Codex | `gpt-5.1-codex` |
-| GPT-5.1 Codex Mini | `gpt-5.1-codex-mini` |
-| GPT-5.1 Codex Max | `gpt-5.1-codex-max` |
-| GPT-5.4 | `gpt-5.4` |
+| GPT-5.6-Sol | `gpt-5.6-sol` |
+| GPT-5.6-Terra (default) | `gpt-5.6-terra` |
+| GPT-5.6-Luna | `gpt-5.6-luna` |
+| GPT-5.5 | `gpt-5.5` |
+| GPT-5.2 | `gpt-5.2` |
 
-```bash
-export CLAUDE_CODE_USE_OPENAI=1
-axa
-```
+These are the models the ChatGPT-subscription backend serves, which is a smaller
+set than the metered platform API. Any other `gpt-*` ID you type is passed
+through to the backend as-is.
 
 ### AWS Bedrock
 
@@ -154,10 +157,14 @@ Supports custom deployment IDs as model names.
 
 ### Provider Selection Summary
 
-| Provider | Env Variable | Auth Method |
+The cloud providers are deployment configuration, so they stay env-driven.
+Anthropic and OpenAI Codex are chosen by logging in, and `/switch-account` moves
+between accounts you have already authenticated.
+
+| Provider | Selected by | Auth Method |
 |---|---|---|
-| Anthropic (default) | -- | `ANTHROPIC_API_KEY` or OAuth |
-| OpenAI Codex | `CLAUDE_CODE_USE_OPENAI=1` | OAuth via OpenAI |
+| Anthropic (default) | `/login` → Anthropic | `ANTHROPIC_API_KEY` or OAuth |
+| OpenAI Codex | `/login` → OpenAI Codex | OAuth via OpenAI |
 | AWS Bedrock | `CLAUDE_CODE_USE_BEDROCK=1` | AWS credentials |
 | Google Vertex AI | `CLAUDE_CODE_USE_VERTEX=1` | `gcloud` ADC |
 | Anthropic Foundry | `CLAUDE_CODE_USE_FOUNDRY=1` | `ANTHROPIC_FOUNDRY_API_KEY` |
