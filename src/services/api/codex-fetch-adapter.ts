@@ -362,25 +362,22 @@ function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     codexBody.tools = translateTools(anthropicTools)
   }
 
-  // Anthropic caps output with max_tokens; the Responses API uses
-  // max_output_tokens. Without this the model ignores the caller's limit.
-  const maxTokens = anthropicBody.max_tokens
-  if (typeof maxTokens === 'number') {
-    codexBody.max_output_tokens = maxTokens
-  }
-
-  if (typeof anthropicBody.temperature === 'number') {
-    codexBody.temperature = anthropicBody.temperature
-  }
-
   const reasoningEffort = resolveReasoningEffort(anthropicBody, codexModel)
   if (reasoningEffort) {
     codexBody.reasoning = { effort: reasoningEffort }
   }
 
-  // Deliberately not forwarded: `cache_control` (Anthropic prompt caching has
-  // no Responses API equivalent and unknown fields are rejected) and
-  // `metadata` (Anthropic-specific shape).
+  // Deliberately not forwarded, because this backend rejects the whole request
+  // rather than ignoring a field it does not know:
+  //
+  // - `max_tokens`, `temperature`: the platform Responses API takes these as
+  //   `max_output_tokens` and `temperature`, but chatgpt.com/backend-api/codex
+  //   answers both with `400 Unsupported parameter` (as it does `top_p`). It
+  //   serves a fixed configuration and only `reasoning.effort` is negotiable.
+  //   Anthropic requires `max_tokens`, so every caller sends one and forwarding
+  //   it failed every turn.
+  // - `cache_control`: Anthropic prompt caching has no equivalent here.
+  // - `metadata`: Anthropic-specific shape.
 
   return { codexBody, codexModel }
 }
@@ -517,6 +514,69 @@ function anthropicErrorType(status: number): string {
     default:
       return 'api_error'
   }
+}
+
+/**
+ * Summarises an upstream Codex error body as a single line of prose.
+ *
+ * Embedding the raw JSON instead made the reason unreadable. Nested quotes get
+ * escaped when the body is re-serialised into Anthropic's error shape, and
+ * `errors.ts` recovers the text with /"message"\s*:\s*"([^"]*)"/ — whose
+ * character class stops at the first escaped quote. A 429 explaining that the
+ * usage limit resets in 26 days reached the user as `{\`.
+ *
+ * Codex uses two shapes: `{ error: { message } }` for account-level rejections
+ * and `{ detail }` for request validation.
+ *
+ * @param body - The raw upstream response body
+ * @returns A single-line description, falling back to the trimmed raw body
+ */
+function describeCodexError(body: string): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    // Not JSON — an HTML error page from a proxy, or an empty body.
+    return truncateForMessage(body.trim()) || 'no response body'
+  }
+
+  const root = parsed as {
+    error?: { message?: unknown; resets_at?: unknown }
+    detail?: unknown
+    message?: unknown
+  } | null
+  const message =
+    typeof root?.error?.message === 'string'
+      ? root.error.message
+      : typeof root?.detail === 'string'
+        ? root.detail
+        : typeof root?.message === 'string'
+          ? root.message
+          : undefined
+
+  if (message === undefined) {
+    return truncateForMessage(body.trim())
+  }
+
+  // Codex reports when a usage limit lifts, and the user cannot act on the
+  // limit without it — there is no other signal that the wait is days not
+  // seconds. Anthropic's own quota headers are absent on this backend.
+  const resetsAt = root?.error?.resets_at
+  if (typeof resetsAt === 'number' && Number.isFinite(resetsAt)) {
+    return `${message} (resets ${new Date(resetsAt * 1000).toISOString().replace('T', ' ').slice(0, 16)}Z)`
+  }
+  return message
+}
+
+/**
+ * Caps an error detail so a long body cannot bury the rest of the message.
+ *
+ * @param text - The detail to cap
+ * @returns The text, truncated with an ellipsis if it was over the limit
+ */
+function truncateForMessage(text: string): string {
+  const limit = 300
+  return text.length > limit ? `${text.slice(0, limit)}…` : text
 }
 
 /**
@@ -1486,7 +1546,7 @@ export function createCodexFetch(
         type: 'error',
         error: {
           type: anthropicErrorType(codexResponse.status),
-          message: `Codex API error (${codexResponse.status}): ${errorText}`,
+          message: `Codex API error (${codexResponse.status}): ${describeCodexError(errorText)}`,
         },
       }
       // Carry the upstream headers over. `Retry-After` and the rate-limit
