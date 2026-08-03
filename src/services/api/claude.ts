@@ -232,6 +232,7 @@ import { withStreamingVCR, withVCR } from '../vcr.js'
 import { CLIENT_REQUEST_ID_HEADER, getAnthropicClient } from './client.js'
 import {
   API_ERROR_MESSAGE_PREFIX,
+  createBothModelsRefusedMessage,
   CUSTOM_OFF_SWITCH_MESSAGE,
   getAssistantMessageFromError,
   getErrorMessageIfRefusal,
@@ -253,6 +254,7 @@ import {
   CannotRetryError,
   FallbackTriggeredError,
   is529Error,
+  RefusalFallbackError,
   type RetryContext,
   withRetry,
 } from './withRetry.js'
@@ -682,6 +684,12 @@ export type Options = {
   extraToolSchemas?: BetaToolUnion[]
   maxOutputTokensOverride?: number
   fallbackModel?: string
+  // Set by query.ts once a refusal has already switched to fallbackModel.
+  // Names the model the refusal-fallback switch moved away from, so a
+  // second refusal (now on fallbackModel, with nowhere left to fall back
+  // to) can name both models instead of repeating the generic "try
+  // /model" suggestion.
+  refusalFallbackOriginalModel?: string
   onStreamingFallback?: () => void
   querySource: QuerySource
   agents: AgentDefinition[]
@@ -2275,7 +2283,30 @@ async function* queryModel(
               options.model,
             )
             if (refusalMessage) {
-              yield refusalMessage
+              if (options.fallbackModel && options.model !== options.fallbackModel) {
+                // Same recovery Anthropic's own refusal message recommends:
+                // retry on a different model instead of surfacing a dead
+                // end. Mirrors the 529 FallbackTriggeredError contract —
+                // query.ts performs the actual model switch and retries the
+                // turn on fallbackModel.
+                throw new RefusalFallbackError(
+                  options.model,
+                  options.fallbackModel,
+                )
+              }
+              if (options.refusalFallbackOriginalModel) {
+                // Already switched to fallbackModel after a refusal, and it
+                // refused too — there's no further model to try. Say so
+                // plainly instead of repeating the generic "try /model"
+                // suggestion, which would just point back at the model that
+                // already declined.
+                yield createBothModelsRefusedMessage(
+                  options.refusalFallbackOriginalModel,
+                  options.model,
+                )
+              } else {
+                yield refusalMessage
+              }
             }
 
             if (stopReason === 'max_tokens') {
@@ -2419,6 +2450,15 @@ async function* queryModel(
     } catch (streamingError) {
       // Clear the idle timeout watchdog on error path too
       clearStreamIdleTimers()
+
+      // RefusalFallbackError must propagate to query.ts (same contract as
+      // FallbackTriggeredError below). It's thrown mid-stream, inside this
+      // try, so — unlike the 529 case — it lands here first; retrying it as
+      // a generic streaming failure (non-streaming fallback, below) would
+      // just resend the same refused request on the same model.
+      if (streamingError instanceof RefusalFallbackError) {
+        throw streamingError
+      }
 
       // Instrumentation: if the watchdog had already fired and the for-await
       // threw (rather than exiting cleanly), record that the loop DID exit and
@@ -2583,6 +2623,25 @@ async function* queryModel(
         streamRequestId,
       )
 
+      // Non-streaming responses arrive whole, so the refusal (if any) is
+      // already on `result.stop_reason` — check it before constructing or
+      // yielding the assistant message. Non-interactive stream-json output
+      // writes each yielded message immediately and can't retract it, so the
+      // refused response must never be surfaced when we're about to retry on
+      // a different model (throwing here, before any yield, means there's
+      // nothing to tombstone).
+      const nonStreamingRefusalMessage = getErrorMessageIfRefusal(
+        result.stop_reason,
+        options.model,
+      )
+      if (
+        nonStreamingRefusalMessage &&
+        options.fallbackModel &&
+        options.model !== options.fallbackModel
+      ) {
+        throw new RefusalFallbackError(options.model, options.fallbackModel)
+      }
+
       const m: AssistantMessage = {
         message: {
           ...result,
@@ -2607,15 +2666,30 @@ async function* queryModel(
       newMessages.push(m)
       fallbackMessage = m
       yield m
+
+      if (nonStreamingRefusalMessage) {
+        if (options.refusalFallbackOriginalModel) {
+          yield createBothModelsRefusedMessage(
+            options.refusalFallbackOriginalModel,
+            options.model,
+          )
+        } else {
+          yield nonStreamingRefusalMessage
+        }
+      }
     } finally {
       clearStreamIdleTimers()
     }
   } catch (errorFromRetry) {
-    // FallbackTriggeredError must propagate to query.ts, which performs the
-    // actual model switch. Swallowing it here would turn the fallback into a
-    // no-op — the user would just see "Model fallback triggered: X -> Y" as
-    // an error message with no actual retry on the fallback model.
-    if (errorFromRetry instanceof FallbackTriggeredError) {
+    // FallbackTriggeredError/RefusalFallbackError must propagate to query.ts,
+    // which performs the actual model switch. Swallowing them here would
+    // turn the fallback into a no-op — the user would just see "Model
+    // fallback triggered: X -> Y" as an error message with no actual retry
+    // on the fallback model.
+    if (
+      errorFromRetry instanceof FallbackTriggeredError ||
+      errorFromRetry instanceof RefusalFallbackError
+    ) {
       throw errorFromRetry
     }
 
@@ -2680,6 +2754,22 @@ async function* queryModel(
           failedRequestId,
         )
 
+        // See the comment on the sibling check above: throw before
+        // constructing/yielding `m` so a refusal that's about to be retried
+        // on a different model never reaches non-interactive stream-json
+        // output, which can't retract an already-written message.
+        const nonStreamingRefusalMessage = getErrorMessageIfRefusal(
+          result.stop_reason,
+          options.model,
+        )
+        if (
+          nonStreamingRefusalMessage &&
+          options.fallbackModel &&
+          options.model !== options.fallbackModel
+        ) {
+          throw new RefusalFallbackError(options.model, options.fallbackModel)
+        }
+
         const m: AssistantMessage = {
           message: {
             ...result,
@@ -2701,10 +2791,24 @@ async function* queryModel(
         fallbackMessage = m
         yield m
 
+        if (nonStreamingRefusalMessage) {
+          if (options.refusalFallbackOriginalModel) {
+            yield createBothModelsRefusedMessage(
+              options.refusalFallbackOriginalModel,
+              options.model,
+            )
+          } else {
+            yield nonStreamingRefusalMessage
+          }
+        }
+
         // Continue to success logging below
       } catch (fallbackError) {
         // Propagate model-fallback signal to query.ts (see comment above).
-        if (fallbackError instanceof FallbackTriggeredError) {
+        if (
+          fallbackError instanceof FallbackTriggeredError ||
+          fallbackError instanceof RefusalFallbackError
+        ) {
           throw fallbackError
         }
 
