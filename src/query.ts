@@ -4,7 +4,10 @@ import type {
   ToolUseBlock,
 } from '@anthropic-ai/sdk/resources/index.mjs'
 import type { CanUseToolFn } from './hooks/useCanUseTool.js'
-import { FallbackTriggeredError } from './services/api/withRetry.js'
+import {
+  FallbackTriggeredError,
+  RefusalFallbackError,
+} from './services/api/withRetry.js'
 import {
   calculateTokenWarningState,
   isAutoCompactEnabled,
@@ -575,6 +578,10 @@ async function* queryLoop(
         permissionMode === 'plan' &&
         doesMostRecentAssistantMessageExceed200k(messagesForQuery),
     })
+    // Set once a refusal has already switched currentModel to fallbackModel,
+    // so a second refusal (now with nowhere left to fall back to) can name
+    // the model this turn started on.
+    let refusalFallbackOriginalModel: string | undefined
 
     queryCheckpoint('query_setup_end')
 
@@ -674,6 +681,7 @@ async function* queryLoop(
               isNonInteractiveSession:
                 toolUseContext.options.isNonInteractiveSession,
               fallbackModel,
+              refusalFallbackOriginalModel,
               onStreamingFallback: () => {
                 streamingFallbackOccured = true
               },
@@ -943,6 +951,66 @@ async function* queryLoop(
             // users see the notification without needing verbose mode
             yield createSystemMessage(
               `Switched to ${renderModelName(innerError.fallbackModel)} due to high demand for ${renderModelName(innerError.originalModel)}`,
+              'warning',
+            )
+
+            continue
+          }
+          if (innerError instanceof RefusalFallbackError && fallbackModel) {
+            // Refusal was triggered - switch model and retry, same recovery
+            // as the 529 fallback above.
+            currentModel = fallbackModel
+            refusalFallbackOriginalModel = innerError.originalModel
+            attemptWithFallback = true
+
+            // Clear assistant messages since we'll retry the entire request
+            yield* yieldMissingToolResultBlocks(
+              assistantMessages,
+              'Model fallback triggered',
+            )
+            assistantMessages.length = 0
+            toolResults.length = 0
+            toolUseBlocks.length = 0
+            needsFollowUp = false
+
+            // Discard pending results from the failed attempt and create a
+            // fresh executor. This prevents orphan tool_results (with old
+            // tool_use_ids) from leaking into the retry.
+            if (streamingToolExecutor) {
+              streamingToolExecutor.discard()
+              streamingToolExecutor = new StreamingToolExecutor(
+                toolUseContext.options.tools,
+                canUseTool,
+                toolUseContext,
+              )
+            }
+
+            // Update tool use context with new model
+            toolUseContext.options.mainLoopModel = fallbackModel
+
+            // Thinking signatures are model-bound: replaying a protected-thinking
+            // block (e.g. capybara) to an unprotected fallback (e.g. opus) 400s.
+            // Strip before retry so the fallback model gets clean history.
+            if (process.env.USER_TYPE === 'ant') {
+              messagesForQuery = stripSignatureBlocks(messagesForQuery)
+            }
+
+            // Log the fallback event
+            logEvent('tengu_refusal_fallback_triggered', {
+              original_model:
+                innerError.originalModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+              fallback_model:
+                fallbackModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+              entrypoint:
+                'cli' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+              queryChainId: queryChainIdForAnalytics,
+              queryDepth: queryTracking.depth,
+            })
+
+            // Yield system message about fallback — use 'warning' level so
+            // users see the notification without needing verbose mode
+            yield createSystemMessage(
+              `Switched to ${renderModelName(innerError.fallbackModel)} after ${renderModelName(innerError.originalModel)} declined this request for policy reasons`,
               'warning',
             )
 

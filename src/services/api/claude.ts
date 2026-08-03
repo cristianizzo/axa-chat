@@ -204,6 +204,7 @@ import { getInferenceProfileBackingModel } from '../../utils/model/bedrock.js'
 import {
   normalizeModelStringForAPI,
   parseUserSpecifiedModel,
+  renderModelName,
 } from '../../utils/model/model.js'
 import {
   startSessionActivity,
@@ -253,6 +254,7 @@ import {
   CannotRetryError,
   FallbackTriggeredError,
   is529Error,
+  RefusalFallbackError,
   type RetryContext,
   withRetry,
 } from './withRetry.js'
@@ -682,6 +684,12 @@ export type Options = {
   extraToolSchemas?: BetaToolUnion[]
   maxOutputTokensOverride?: number
   fallbackModel?: string
+  // Set by query.ts once a refusal has already switched to fallbackModel.
+  // Names the model the refusal-fallback switch moved away from, so a
+  // second refusal (now on fallbackModel, with nowhere left to fall back
+  // to) can name both models instead of repeating the generic "try
+  // /model" suggestion.
+  refusalFallbackOriginalModel?: string
   onStreamingFallback?: () => void
   querySource: QuerySource
   agents: AgentDefinition[]
@@ -2275,7 +2283,30 @@ async function* queryModel(
               options.model,
             )
             if (refusalMessage) {
-              yield refusalMessage
+              if (options.fallbackModel && options.model !== options.fallbackModel) {
+                // Same recovery Anthropic's own refusal message recommends:
+                // retry on a different model instead of surfacing a dead
+                // end. Mirrors the 529 FallbackTriggeredError contract —
+                // query.ts performs the actual model switch and retries the
+                // turn on fallbackModel.
+                throw new RefusalFallbackError(
+                  options.model,
+                  options.fallbackModel,
+                )
+              }
+              if (options.refusalFallbackOriginalModel) {
+                // Already switched to fallbackModel after a refusal, and it
+                // refused too — there's no further model to try. Say so
+                // plainly instead of repeating the generic "try /model"
+                // suggestion, which would just point back at the model that
+                // already declined.
+                yield createAssistantAPIErrorMessage({
+                  content: `${API_ERROR_MESSAGE_PREFIX}: Both ${renderModelName(options.refusalFallbackOriginalModel)} and ${renderModelName(options.model)} declined this request as a possible violation of our Usage Policy (https://www.anthropic.com/legal/aup). This requires manual review — please rephrase the request or handle it outside Claude Code.`,
+                  error: 'invalid_request',
+                })
+              } else {
+                yield refusalMessage
+              }
             }
 
             if (stopReason === 'max_tokens') {
@@ -2419,6 +2450,15 @@ async function* queryModel(
     } catch (streamingError) {
       // Clear the idle timeout watchdog on error path too
       clearStreamIdleTimers()
+
+      // RefusalFallbackError must propagate to query.ts (same contract as
+      // FallbackTriggeredError below). It's thrown mid-stream, inside this
+      // try, so — unlike the 529 case — it lands here first; retrying it as
+      // a generic streaming failure (non-streaming fallback, below) would
+      // just resend the same refused request on the same model.
+      if (streamingError instanceof RefusalFallbackError) {
+        throw streamingError
+      }
 
       // Instrumentation: if the watchdog had already fired and the for-await
       // threw (rather than exiting cleanly), record that the loop DID exit and
@@ -2611,11 +2651,15 @@ async function* queryModel(
       clearStreamIdleTimers()
     }
   } catch (errorFromRetry) {
-    // FallbackTriggeredError must propagate to query.ts, which performs the
-    // actual model switch. Swallowing it here would turn the fallback into a
-    // no-op — the user would just see "Model fallback triggered: X -> Y" as
-    // an error message with no actual retry on the fallback model.
-    if (errorFromRetry instanceof FallbackTriggeredError) {
+    // FallbackTriggeredError/RefusalFallbackError must propagate to query.ts,
+    // which performs the actual model switch. Swallowing them here would
+    // turn the fallback into a no-op — the user would just see "Model
+    // fallback triggered: X -> Y" as an error message with no actual retry
+    // on the fallback model.
+    if (
+      errorFromRetry instanceof FallbackTriggeredError ||
+      errorFromRetry instanceof RefusalFallbackError
+    ) {
       throw errorFromRetry
     }
 

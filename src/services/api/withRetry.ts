@@ -167,6 +167,23 @@ export class FallbackTriggeredError extends Error {
   }
 }
 
+/**
+ * Thrown when a model refuses a request on policy grounds and a
+ * `--fallback-model` is configured. Anthropic's own refusal message
+ * recommends switching models, so this mirrors FallbackTriggeredError's
+ * contract: it must propagate uncaught to query.ts, which performs the
+ * actual model switch and retries the same turn on `fallbackModel`.
+ */
+export class RefusalFallbackError extends Error {
+  constructor(
+    public readonly originalModel: string,
+    public readonly fallbackModel: string,
+  ) {
+    super(`Refusal fallback triggered: ${originalModel} -> ${fallbackModel}`)
+    this.name = 'RefusalFallbackError'
+  }
+}
+
 export async function* withRetry<T>(
   getClient: () => Promise<Anthropic>,
   operation: (
