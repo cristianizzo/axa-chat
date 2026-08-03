@@ -15,48 +15,72 @@
  * Endpoint: https://chatgpt.com/backend-api/codex/responses
  */
 
-import { getCodexOAuthTokens } from '../../utils/auth.js'
+import { getCodexOAuthTokens, saveCodexOAuthTokens } from '../../utils/auth.js'
 import { logForDebugging } from '../../utils/debug.js'
-
-// ── Available Codex models ──────────────────────────────────────────
-export const CODEX_MODELS = [
-  { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', description: 'Frontier agentic coding model' },
-  { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex', description: 'Codex coding model' },
-  { id: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini', description: 'Fast Codex model' },
-  { id: 'gpt-5.1-codex-max', label: 'GPT-5.1 Codex Max', description: 'Max Codex model' },
-  { id: 'gpt-5.4', label: 'GPT-5.4', description: 'Latest GPT' },
-  { id: 'gpt-5.2', label: 'GPT-5.2', description: 'GPT-5.2' },
-] as const
-
-export const DEFAULT_CODEX_MODEL = 'gpt-5.2-codex'
+import {
+  CLAUDE_FAMILY_TO_CODEX_MODEL,
+  CODEX_BASE_URL,
+  CODEX_JWT_AUTH_CLAIM,
+  CODEX_MODELS,
+  type CodexReasoningEffort,
+  DEFAULT_CODEX_MODEL,
+  resolveCodexEffort,
+} from 'src/config/codex.js'
 
 /**
- * Maps Claude model names to corresponding Codex model names.
- * @param claudeModel - The Claude model name to map
- * @returns The corresponding Codex model ID
+ * Resolves the model ID to send to the Codex backend.
+ *
+ * Claude model names are heuristically mapped to a comparable Codex model —
+ * this is the legitimate case where the user is in Codex mode with a Claude
+ * model still selected. Any other ID (i.e. an explicitly chosen `gpt-*` model)
+ * is passed through untouched so that models newer than {@link CODEX_MODELS}
+ * still work; the backend rejects genuinely invalid IDs.
+ *
+ * @param claudeModel - The currently selected model ID
+ * @returns The model ID to send to Codex
  */
 export function mapClaudeModelToCodex(claudeModel: string | null): string {
   if (!claudeModel) return DEFAULT_CODEX_MODEL
-  if (isCodexModel(claudeModel)) return claudeModel
+
   const lower = claudeModel.toLowerCase()
-  if (lower.includes('opus')) return 'gpt-5.1-codex-max'
-  if (lower.includes('haiku')) return 'gpt-5.1-codex-mini'
-  if (lower.includes('sonnet')) return 'gpt-5.2-codex'
-  return DEFAULT_CODEX_MODEL
+  const family = (
+    Object.keys(CLAUDE_FAMILY_TO_CODEX_MODEL) as Array<
+      keyof typeof CLAUDE_FAMILY_TO_CODEX_MODEL
+    >
+  ).find(name => lower.includes(name))
+
+  const mapped = family
+    ? CLAUDE_FAMILY_TO_CODEX_MODEL[family]
+    : // Other Claude models (e.g. claude-fable-5, claude-mythos-5) have no
+      // natural counterpart, but must not be forwarded verbatim — Codex
+      // would reject them.
+      lower.includes('claude')
+      ? DEFAULT_CODEX_MODEL
+      : null
+
+  if (mapped) {
+    logForDebugging(`Codex: mapped Claude model '${claudeModel}' to '${mapped}'`)
+    return mapped
+  }
+
+  return claudeModel
 }
 
 /**
- * Checks if a given model string is a valid Codex model.
+ * Checks if a given model string is a known Codex model.
+ *
+ * Used by model validation to skip the Anthropic-API round trip. Unknown
+ * `gpt-*` models are still usable — they just don't get the validation
+ * shortcut.
+ *
  * @param model - The model string to check
- * @returns True if the model is a Codex model, false otherwise
+ * @returns True if the model is a known Codex model, false otherwise
  */
 export function isCodexModel(model: string): boolean {
   return CODEX_MODELS.some(m => m.id === model)
 }
 
 // ── JWT helpers ─────────────────────────────────────────────────────
-
-const JWT_CLAIM_PATH = 'https://api.openai.com/auth'
 
 /**
  * Extracts the account ID from a Codex JWT token.
@@ -69,7 +93,7 @@ function extractAccountId(token: string): string {
     const parts = token.split('.')
     if (parts.length !== 3) throw new Error('Invalid token')
     const payload = JSON.parse(atob(parts[1]))
-    const accountId = payload?.[JWT_CLAIM_PATH]?.chatgpt_account_id
+    const accountId = payload?.[CODEX_JWT_AUTH_CLAIM]?.chatgpt_account_id
     if (!accountId) throw new Error('No account ID in token')
     return accountId
   } catch {
@@ -126,6 +150,28 @@ function translateTools(anthropicTools: AnthropicTool[]): Array<Record<string, u
  * @param anthropicMessages - Array of messages in Anthropic format
  * @returns Array of Codex-compatible input objects
  */
+/**
+ * Renders an Anthropic image/document block as something Codex can load.
+ *
+ * Base64 sources become a data URL; a URL source is passed through as-is.
+ *
+ * @param block - An Anthropic content block with a `source`
+ * @returns A URL Codex can fetch or decode, or null if the source is unusable
+ */
+function imageBlockToUrl(block: unknown): string | null {
+  const source = (block as { source?: unknown })?.source as
+    | Record<string, unknown>
+    | null
+    | undefined
+  if (source?.type === 'base64') {
+    return `data:${String(source.media_type)};base64,${String(source.data)}`
+  }
+  if (source?.type === 'url' && typeof source.url === 'string') {
+    return source.url
+  }
+  return null
+}
+
 function translateMessages(
   anthropicMessages: AnthropicMessage[],
 ): Array<Record<string, unknown>> {
@@ -148,33 +194,81 @@ function translateMessages(
         if (block.type === 'tool_result') {
           const callId = block.tool_use_id || `call_${toolCallCounter++}`
           let outputText = ''
+          // `function_call_output.output` is a plain string in the Responses
+          // API, so images cannot ride along inside it. Collect them and send
+          // them as a follow-up user turn instead of flattening them to text,
+          // which left the model blind to every screenshot a tool returned.
+          const resultImages: Array<Record<string, unknown>> = []
           if (typeof block.content === 'string') {
             outputText = block.content
           } else if (Array.isArray(block.content)) {
             outputText = block.content
               .map(c => {
                 if (c.type === 'text') return c.text
-                if (c.type === 'image') return '[Image data attached]'
+                if (c.type !== 'image') return ''
+                const imageUrl = imageBlockToUrl(c)
+                if (!imageUrl) return '[unsupported image omitted]'
+                resultImages.push({ type: 'input_image', image_url: imageUrl })
                 return ''
               })
+              .filter(Boolean)
               .join('\n')
           }
+          // The Responses API has no error flag on function_call_output, so
+          // mark it inline — otherwise the model cannot tell a failed tool
+          // call from a successful one and will happily build on the error
+          // text as if it were a result.
+          const isError = (block as { is_error?: unknown }).is_error === true
           codexInput.push({
             type: 'function_call_output',
             call_id: callId,
-            output: outputText || '',
+            output: isError ? `[tool error] ${outputText}` : outputText || '',
           })
+          if (resultImages.length > 0) {
+            codexInput.push({
+              role: 'user',
+              content: [
+                {
+                  type: 'input_text',
+                  text: `Image output from the previous tool call:`,
+                },
+                ...resultImages,
+              ],
+            })
+          }
         } else if (block.type === 'text' && typeof block.text === 'string') {
           contentArr.push({ type: 'input_text', text: block.text })
-        } else if (
-          block.type === 'image' &&
-          typeof block.source === 'object' &&
-          block.source !== null &&
-          (block.source as any).type === 'base64'
-        ) {
-          contentArr.push({
-            type: 'input_image',
-            image_url: `data:${(block.source as any).media_type};base64,${(block.source as any).data}`,
+        } else if (block.type === 'image' || block.type === 'document') {
+          const source = block.source as Record<string, unknown> | null | undefined
+          const imageUrl = imageBlockToUrl(block)
+          if (imageUrl && block.type === 'image') {
+            contentArr.push({ type: 'input_image', image_url: imageUrl })
+          } else if (imageUrl && source?.type === 'base64') {
+            // Codex accepts PDFs as a file input rather than an image.
+            contentArr.push({
+              type: 'input_file',
+              filename:
+                typeof (block as { title?: unknown }).title === 'string'
+                  ? String((block as { title?: unknown }).title)
+                  : 'document.pdf',
+              file_data: imageUrl,
+            })
+          } else {
+            // Nothing sensible to send. Say so in the transcript rather than
+            // dropping it: the model would otherwise answer confidently about
+            // an attachment it never received.
+            contentArr.push({
+              type: 'input_text',
+              text: `[unsupported ${block.type} attachment omitted]`,
+            })
+            logForDebugging(
+              `Codex: dropped unsupported ${block.type} block (source type ${String(source?.type)})`,
+              { level: 'warn' },
+            )
+          }
+        } else if (block.type !== 'thinking' && block.type !== 'redacted_thinking') {
+          logForDebugging(`Codex: dropped unsupported user content block '${String(block.type)}'`, {
+            level: 'warn',
           })
         }
       }
@@ -251,6 +345,8 @@ function translateToCodexBody(anthropicBody: Record<string, unknown>): {
   // Convert messages
   const input = translateMessages(anthropicMessages)
 
+  // Always stream upstream: Codex is streaming-native and the non-streaming
+  // Anthropic response is reconstructed from the stream by the caller.
   const codexBody: Record<string, unknown> = {
     model: codexModel,
     store: false,
@@ -266,7 +362,53 @@ function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     codexBody.tools = translateTools(anthropicTools)
   }
 
+  const reasoningEffort = resolveReasoningEffort(anthropicBody, codexModel)
+  if (reasoningEffort) {
+    codexBody.reasoning = { effort: reasoningEffort }
+  }
+
+  // Deliberately not forwarded, because this backend rejects the whole request
+  // rather than ignoring a field it does not know:
+  //
+  // - `max_tokens`, `temperature`: the platform Responses API takes these as
+  //   `max_output_tokens` and `temperature`, but chatgpt.com/backend-api/codex
+  //   answers both with `400 Unsupported parameter` (as it does `top_p`). It
+  //   serves a fixed configuration and only `reasoning.effort` is negotiable.
+  //   Anthropic requires `max_tokens`, so every caller sends one and forwarding
+  //   it failed every turn.
+  // - `cache_control`: Anthropic prompt caching has no equivalent here.
+  // - `metadata`: Anthropic-specific shape.
+
   return { codexBody, codexModel }
+}
+
+/**
+ * Derives a Codex reasoning effort from an Anthropic request.
+ *
+ * `output_config.effort` — the user's `/effort` choice — is the only signal.
+ * The `thinking` field is deliberately not consulted: `modelSupportsThinking()`
+ * is false for every model under the `openai` provider, so a Codex request
+ * never carries one.
+ *
+ * Takes the resolved Codex model, not the Anthropic one, because the accepted
+ * ladder differs per model and is keyed on the ID actually being sent.
+ *
+ * @param anthropicBody - The parsed Anthropic request body
+ * @param codexModel - The Codex model ID this request will be sent to
+ * @returns A Codex reasoning effort level, or null to let Codex decide
+ */
+function resolveReasoningEffort(
+  anthropicBody: Record<string, unknown>,
+  codexModel: string,
+): CodexReasoningEffort | null {
+  const outputConfig = anthropicBody.output_config as
+    | { effort?: unknown }
+    | undefined
+  const effort = outputConfig?.effort
+  if (typeof effort !== 'string') {
+    return null
+  }
+  return resolveCodexEffort(codexModel, effort)
 }
 
 // ── Response translation: Codex SSE → Anthropic SSE ─────────────────
@@ -288,47 +430,277 @@ function formatSSE(event: string, data: string): string {
  * @param codexModel - The Codex model used for the request
  * @returns Transformed Response object with Anthropic-format stream
  */
+/** Refresh this long before expiry, so a token cannot lapse mid-request. */
+const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000
+
+/** In-flight refresh, shared so concurrent requests do not each refresh. */
+let codexRefreshInFlight: Promise<string> | null = null
+
+/**
+ * Returns a currently-valid Codex access token, refreshing it near expiry.
+ *
+ * Codex access tokens last about an hour and nothing else refreshes them: the
+ * SDK's 401 handler only knows about Anthropic's credentials, so it would
+ * refresh the wrong provider. Without this a session simply starts returning
+ * 401s partway through and never recovers.
+ *
+ * `refreshCodexToken` is imported dynamically to keep the OAuth client — and
+ * its analytics and browser dependencies — out of this module's import graph,
+ * which is loaded on every request.
+ *
+ * @param fallback - The token captured when the adapter was created
+ * @returns An access token to send to Codex
+ */
+async function getFreshCodexToken(fallback: string): Promise<string> {
+  const tokens = getCodexOAuthTokens()
+  if (!tokens) return fallback
+  if (tokens.expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) return tokens.accessToken
+
+  if (!codexRefreshInFlight) {
+    codexRefreshInFlight = (async () => {
+      // Re-read: another request may have refreshed while this one waited.
+      const latest = getCodexOAuthTokens() ?? tokens
+      if (latest.expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) return latest.accessToken
+
+      const { refreshCodexToken } = await import('../oauth/codex-client.js')
+      const refreshed = await refreshCodexToken(latest.refreshToken)
+      saveCodexOAuthTokens(refreshed)
+      logForDebugging('Codex: refreshed access token')
+      return refreshed.accessToken
+    })().finally(() => {
+      codexRefreshInFlight = null
+    })
+  }
+
+  try {
+    return await codexRefreshInFlight
+  } catch (e) {
+    // Send the stale token anyway: the 401 that follows carries a clearer
+    // message than anything synthesised here, and re-login is the only real
+    // remedy either way.
+    logForDebugging(`Codex: token refresh failed, using existing token: ${String(e)}`, {
+      level: 'error',
+    })
+    return tokens.accessToken
+  }
+}
+
+/**
+ * Maps an HTTP status onto the Anthropic error `type` the SDK expects.
+ *
+ * The SDK and the retry layer branch on this string, so reporting everything
+ * as `api_error` made an expired token look like a transient server fault —
+ * retried several times, then surfaced without the "log in again" hint.
+ *
+ * @param status - The upstream HTTP status code
+ * @returns The matching Anthropic error type
+ */
+function anthropicErrorType(status: number): string {
+  switch (status) {
+    case 400:
+      return 'invalid_request_error'
+    case 401:
+      return 'authentication_error'
+    case 403:
+      return 'permission_error'
+    case 404:
+      return 'not_found_error'
+    case 413:
+      return 'request_too_large'
+    case 429:
+      return 'rate_limit_error'
+    case 529:
+      return 'overloaded_error'
+    default:
+      return 'api_error'
+  }
+}
+
+/**
+ * Summarises an upstream Codex error body as a single line of prose.
+ *
+ * Embedding the raw JSON instead made the reason unreadable. Nested quotes get
+ * escaped when the body is re-serialised into Anthropic's error shape, and
+ * `errors.ts` recovers the text with /"message"\s*:\s*"([^"]*)"/ — whose
+ * character class stops at the first escaped quote. A 429 explaining that the
+ * usage limit resets in 26 days reached the user as `{\`.
+ *
+ * Codex uses two shapes: `{ error: { message } }` for account-level rejections
+ * and `{ detail }` for request validation.
+ *
+ * @param body - The raw upstream response body
+ * @returns A single-line description, falling back to the trimmed raw body
+ */
+function describeCodexError(body: string): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    // Not JSON — an HTML error page from a proxy, or an empty body.
+    return truncateForMessage(body.trim()) || 'no response body'
+  }
+
+  const root = parsed as {
+    error?: { message?: unknown; resets_at?: unknown }
+    detail?: unknown
+    message?: unknown
+  } | null
+  const message =
+    typeof root?.error?.message === 'string'
+      ? root.error.message
+      : typeof root?.detail === 'string'
+        ? root.detail
+        : typeof root?.message === 'string'
+          ? root.message
+          : undefined
+
+  if (message === undefined) {
+    return truncateForMessage(body.trim())
+  }
+
+  // Codex reports when a usage limit lifts, and the user cannot act on the
+  // limit without it — there is no other signal that the wait is days not
+  // seconds. Anthropic's own quota headers are absent on this backend.
+  const resetsAt = root?.error?.resets_at
+  if (typeof resetsAt === 'number' && Number.isFinite(resetsAt)) {
+    return `${message} (resets ${new Date(resetsAt * 1000).toISOString().replace('T', ' ').slice(0, 16)}Z)`
+  }
+  return message
+}
+
+/**
+ * Caps an error detail so a long body cannot bury the rest of the message.
+ *
+ * @param text - The detail to cap
+ * @returns The text, truncated with an ellipsis if it was over the limit
+ */
+function truncateForMessage(text: string): string {
+  const limit = 300
+  return text.length > limit ? `${text.slice(0, limit)}…` : text
+}
+
+/**
+ * Pulls a human-readable message out of a Codex `response.failed` / `error`
+ * event. The Responses API is inconsistent about where it puts this, so try
+ * each known shape before falling back to the raw event type.
+ *
+ * @param event - The parsed SSE event
+ * @returns A message suitable for showing to the user
+ */
+function describeStreamError(event: Record<string, unknown>): string {
+  const response = event.response as { error?: { message?: unknown } } | undefined
+  const candidates = [
+    response?.error?.message,
+    (event.error as { message?: unknown } | undefined)?.message,
+    event.message,
+  ]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate) return candidate
+  }
+  return String(event.type ?? 'unknown error')
+}
+
 async function translateCodexStreamToAnthropic(
   codexResponse: Response,
   codexModel: string,
 ): Promise<Response> {
   const messageId = `msg_codex_${Date.now()}`
+  const encoder = new TextEncoder()
+
+  // ── Backpressure plumbing ────────────────────────────────────────────
+  // The pump fills `pendingBuffer`; the stream's pull() drains it when the
+  // consumer is ready. A ReadableStream never calls pull() until start()
+  // settles, so start() launches the pump without awaiting it — otherwise
+  // pull() would not fire until the entire upstream response had been read
+  // and the buffer would grow unbounded.
+  const pendingBuffer: Uint8Array[] = []
+  let bufferHead = 0
+  let streamController: ReadableStreamDefaultController | null = null
+  let upstreamReader: ReadableStreamDefaultReader<Uint8Array> | null = null
+  let finished = false
+  // Resolved once the consumer has taken everything buffered so far.
+  let notifyDrained: (() => void) | null = null
+  // Resolves a pending pull() once the pump produces something to deliver.
+  let notifyProduced: (() => void) | null = null
+
+  function isBuffered(): boolean {
+    return bufferHead < pendingBuffer.length
+  }
+
+  function drainBuffer(): void {
+    const controller = streamController
+    if (!controller) return
+    while (isBuffered() && controller.desiredSize !== null && controller.desiredSize > 0) {
+      controller.enqueue(pendingBuffer[bufferHead]!)
+      bufferHead++
+    }
+    if (!isBuffered()) {
+      pendingBuffer.length = 0
+      bufferHead = 0
+      notifyDrained?.()
+      notifyDrained = null
+    }
+  }
+
+  function safeEnqueue(chunk: Uint8Array): void {
+    if (finished || streamController?.desiredSize === null) return // stream closed
+    pendingBuffer.push(chunk)
+    drainBuffer()
+    notifyProduced?.()
+    notifyProduced = null
+  }
+
+  /**
+   * Applies backpressure to the pump: resolves once the consumer has taken
+   * everything buffered so far, or immediately if the stream is finished.
+   * Awaiting this between upstream chunks is what stops a fast Codex response
+   * from accumulating in memory ahead of a slow reader.
+   */
+  async function waitForDrain(): Promise<void> {
+    if (finished || !isBuffered()) return
+    await new Promise<void>(resolve => {
+      notifyDrained = resolve
+    })
+  }
+
+  /** Wakes both waiters — used when the stream ends or is cancelled. */
+  function releaseWaiters(): void {
+    notifyDrained?.()
+    notifyDrained = null
+    notifyProduced?.()
+    notifyProduced = null
+  }
 
   const readable = new ReadableStream({
-    async start(controller) {
-      const encoder = new TextEncoder()
+    start(controller) {
+      streamController = controller
+      void pump()
+    },
+    pull() {
+      drainBuffer()
+      if (isBuffered() || finished) return undefined
+      // Nothing left to hand over: keep this pull() pending until the pump
+      // produces more, otherwise the stream spins calling pull() on an empty
+      // buffer.
+      return new Promise<void>(resolve => {
+        notifyProduced = resolve
+      })
+    },
+    async cancel(reason) {
+      finished = true
+      releaseWaiters()
+      try {
+        await upstreamReader?.cancel(reason)
+      } catch {
+        // The reader may already be released or errored — nothing to undo.
+      }
+    },
+  })
+
+  async function pump(): Promise<void> {
       let contentBlockIndex = 0
       let outputTokens = 0
       let inputTokens = 0
-
-      // Safe enqueue with backpressure: buffer chunks when the stream queue
-      // is full and drain them on the next successful enqueue.
-      const pendingBuffer: Uint8Array[] = []
-      let bufferHead = 0
-      function drainBuffer(): void {
-        while (bufferHead < pendingBuffer.length && controller.desiredSize !== null && controller.desiredSize > 0) {
-          controller.enqueue(pendingBuffer[bufferHead]!)
-          bufferHead++
-        }
-        if (bufferHead > 0 && bufferHead === pendingBuffer.length) {
-          pendingBuffer.length = 0
-          bufferHead = 0
-        }
-      }
-      function safeEnqueue(chunk: Uint8Array): void {
-        if (controller.desiredSize === null) return // stream closed
-        pendingBuffer.push(chunk)
-        drainBuffer()
-      }
-      function flushBuffer(): void {
-        // Force-drain remaining chunks before stream close
-        while (bufferHead < pendingBuffer.length && controller.desiredSize !== null) {
-          controller.enqueue(pendingBuffer[bufferHead]!)
-          bufferHead++
-        }
-        pendingBuffer.length = 0
-        bufferHead = 0
-      }
 
       // Emit Anthropic message_start
       safeEnqueue(
@@ -367,20 +739,58 @@ async function translateCodexStreamToAnthropic(
       let inToolCall = false
       let hadToolCalls = false
       let inReasoningBlock = false
+      let streamErrored = false
+      let stopReasonOverride: string | null = null
+      // Whether the current tool call's arguments have already been streamed
+      // as input_json_delta events.
+      let toolArgsDeltaSent = false
+
+      /**
+       * Emits the tool call's arguments as a single delta when Codex supplied
+       * them whole (on `output_item.added` or `function_call_arguments.done`)
+       * rather than streaming them. Without this the consumer — streaming SDK
+       * or aggregateStreamToMessage — reconstructs an empty tool input.
+       */
+      function flushToolArgs(): void {
+        if (toolArgsDeltaSent || !currentToolCallArgs) return
+        safeEnqueue(
+          encoder.encode(
+            formatSSE('content_block_delta', JSON.stringify({
+              type: 'content_block_delta',
+              index: contentBlockIndex,
+              delta: {
+                type: 'input_json_delta',
+                partial_json: currentToolCallArgs,
+              },
+            })),
+          ),
+        )
+        toolArgsDeltaSent = true
+      }
 
       const reader = codexResponse.body?.getReader()
       if (!reader) {
-        emitTextBlock(controller, encoder, contentBlockIndex, 'Error: No response body')
-        flushBuffer()
-        finishStream(controller, encoder, outputTokens, inputTokens, false)
+        emitTextBlock(safeEnqueue, encoder, contentBlockIndex, 'Error: No response body')
+        await finishStream({
+          outputTokens,
+          inputTokens,
+          hadToolCalls: false,
+          errored: true,
+        })
         return
       }
+      upstreamReader = reader
 
       try {
         const decoder = new TextDecoder()
         let buffer = ''
 
         while (true) {
+          // Hold off on reading more from Codex until the consumer has taken
+          // what we already translated.
+          await waitForDrain()
+          if (finished) break
+
           const { done, value } = await reader.read()
           if (done) break
 
@@ -430,7 +840,8 @@ async function translateCodexStreamToAnthropic(
                 // New text message block starting
                 if (inToolCall) {
                   // Close the previous tool call block
-                  closeToolCallBlock(controller, encoder, contentBlockIndex, currentToolCallId, currentToolCallName, currentToolCallArgs)
+                  flushToolArgs()
+                  closeToolCallBlock(safeEnqueue, encoder, contentBlockIndex)
                   contentBlockIndex++
                   inToolCall = false
                 }
@@ -453,6 +864,7 @@ async function translateCodexStreamToAnthropic(
                 currentToolCallId = (item.call_id as string) || `toolu_${Date.now()}`
                 currentToolCallName = (item.name as string) || ''
                 currentToolCallArgs = (item.arguments as string) || ''
+                toolArgsDeltaSent = false
                 inToolCall = true
                 hadToolCalls = true
 
@@ -537,6 +949,7 @@ async function translateCodexStreamToAnthropic(
               const argDelta = event.delta as string
               if (typeof argDelta === 'string' && inToolCall) {
                 currentToolCallArgs += argDelta
+                toolArgsDeltaSent = true
                 safeEnqueue(
                   encoder.encode(
                     formatSSE('content_block_delta', JSON.stringify({
@@ -563,7 +976,8 @@ async function translateCodexStreamToAnthropic(
             else if (eventType === 'response.output_item.done') {
               const item = event.item as Record<string, unknown>
               if (item?.type === 'function_call') {
-                closeToolCallBlock(controller, encoder, contentBlockIndex, currentToolCallId, currentToolCallName, currentToolCallArgs)
+                flushToolArgs()
+                closeToolCallBlock(safeEnqueue, encoder, contentBlockIndex)
                 contentBlockIndex++
                 inToolCall = false
                 currentToolCallArgs = ''
@@ -605,33 +1019,75 @@ async function translateCodexStreamToAnthropic(
                 inputTokens = usage.input_tokens || inputTokens
               }
             }
+
+            // Upstream reported a failure. Throwing routes it through the
+            // catch below, which closes any open block and surfaces the text
+            // to the user. Falling through instead would end the turn with
+            // stop_reason 'end_turn' — presenting a failure as a finished
+            // answer, which is the worst possible outcome here.
+            else if (eventType === 'response.failed' || eventType === 'error') {
+              throw new Error(`Codex stream failed: ${describeStreamError(event)}`)
+            }
+
+            // Codex stopped early, normally because max_output_tokens was
+            // reached. Anthropic expresses that as stop_reason 'max_tokens',
+            // which the CLI already surfaces as a truncation warning; without
+            // this the turn looks like it ended by choice.
+            else if (eventType === 'response.incomplete') {
+              const response = event.response as Record<string, unknown> | undefined
+              const usage = response?.usage as Record<string, number> | undefined
+              if (usage) {
+                outputTokens = usage.output_tokens || outputTokens
+                inputTokens = usage.input_tokens || inputTokens
+              }
+              const reason = (response?.incomplete_details as { reason?: string } | undefined)
+                ?.reason
+              stopReasonOverride = reason === 'max_output_tokens' ? 'max_tokens' : 'end_turn'
+            }
           }
         }
       } catch (err) {
-        // If we're in the middle of a text block, emit the error there
-        if (!currentTextBlockStarted) {
+        streamErrored = true
+        const errorText = `\n\n[Error: ${String(err)}]`
+        if (currentTextBlockStarted) {
+          // A text block already owns this index — append the error to it and
+          // let the close-out below emit its content_block_stop.
           safeEnqueue(
             encoder.encode(
-              formatSSE('content_block_start', JSON.stringify({
-                type: 'content_block_start',
+              formatSSE('content_block_delta', JSON.stringify({
+                type: 'content_block_delta',
                 index: contentBlockIndex,
-                content_block: { type: 'text', text: '' },
+                delta: { type: 'text_delta', text: errorText },
               })),
             ),
           )
-          currentTextBlockStarted = true
+        } else {
+          // A tool_use or thinking block may own this index. Close it first and
+          // report the error in a block of its own: reusing the index would
+          // emit two content_block_starts for one block, which no Anthropic
+          // client can parse.
+          if (inToolCall) {
+            flushToolArgs()
+            closeToolCallBlock(safeEnqueue, encoder, contentBlockIndex)
+            inToolCall = false
+            contentBlockIndex++
+          } else if (inReasoningBlock) {
+            safeEnqueue(
+              encoder.encode(
+                formatSSE('content_block_stop', JSON.stringify({
+                  type: 'content_block_stop',
+                  index: contentBlockIndex,
+                })),
+              ),
+            )
+            inReasoningBlock = false
+            contentBlockIndex++
+          }
+          emitTextBlock(safeEnqueue, encoder, contentBlockIndex, errorText)
         }
-        safeEnqueue(
-          encoder.encode(
-            formatSSE('content_block_delta', JSON.stringify({
-              type: 'content_block_delta',
-              index: contentBlockIndex,
-              delta: { type: 'text_delta', text: `\n\n[Error: ${String(err)}]` },
-            })),
-          ),
-        )
       } finally {
         reader.releaseLock()
+        upstreamReader = null
       }
 
       // Close any remaining open blocks
@@ -656,23 +1112,29 @@ async function translateCodexStreamToAnthropic(
         )
       }
       if (inToolCall) {
-        closeToolCallBlock(controller, encoder, contentBlockIndex, currentToolCallId, currentToolCallName, currentToolCallArgs)
+        flushToolArgs()
+        closeToolCallBlock(safeEnqueue, encoder, contentBlockIndex)
       }
 
-      flushBuffer()
-      finishStream(controller, encoder, outputTokens, inputTokens, hadToolCalls)
-    },
-  })
+      await finishStream({
+        outputTokens,
+        inputTokens,
+        hadToolCalls,
+        errored: streamErrored,
+        stopReasonOverride,
+      })
+  }
 
+  // These take the caller's buffered `enqueue` rather than the controller:
+  // enqueueing directly would bypass the backpressure buffer and let these
+  // events overtake still-buffered ones, emitting e.g. a content_block_stop
+  // before its content_block_start.
   function closeToolCallBlock(
-    controller: ReadableStreamDefaultController,
+    enqueue: (chunk: Uint8Array) => void,
     encoder: TextEncoder,
     index: number,
-    _toolCallId: string,
-    _toolCallName: string,
-    _toolCallArgs: string,
   ) {
-    controller.enqueue(
+    enqueue(
       encoder.encode(
         formatSSE('content_block_stop', JSON.stringify({
           type: 'content_block_stop',
@@ -683,12 +1145,12 @@ async function translateCodexStreamToAnthropic(
   }
 
   function emitTextBlock(
-    controller: ReadableStreamDefaultController,
+    enqueue: (chunk: Uint8Array) => void,
     encoder: TextEncoder,
     index: number,
     text: string,
   ) {
-    controller.enqueue(
+    enqueue(
       encoder.encode(
         formatSSE('content_block_start', JSON.stringify({
           type: 'content_block_start',
@@ -697,7 +1159,7 @@ async function translateCodexStreamToAnthropic(
         })),
       ),
     )
-    controller.enqueue(
+    enqueue(
       encoder.encode(
         formatSSE('content_block_delta', JSON.stringify({
           type: 'content_block_delta',
@@ -706,7 +1168,7 @@ async function translateCodexStreamToAnthropic(
         })),
       ),
     )
-    controller.enqueue(
+    enqueue(
       encoder.encode(
         formatSSE('content_block_stop', JSON.stringify({
           type: 'content_block_stop',
@@ -716,29 +1178,39 @@ async function translateCodexStreamToAnthropic(
     )
   }
 
-  function finishStream(
-    controller: ReadableStreamDefaultController,
-    encoder: TextEncoder,
-    outputTokens: number,
-    inputTokens: number,
-    hadToolCalls: boolean,
-  ) {
-    // Use 'tool_use' stop reason when model made tool calls
-    const stopReason = hadToolCalls ? 'tool_use' : 'end_turn'
+  async function finishStream(opts: {
+    outputTokens: number
+    inputTokens: number
+    hadToolCalls: boolean
+    errored: boolean
+    stopReasonOverride?: string | null
+  }): Promise<void> {
+    const { outputTokens, inputTokens, hadToolCalls, errored } = opts
+    // Use 'tool_use' stop reason when the model made tool calls — but never
+    // after an error: the open tool call was closed with whatever arguments
+    // had arrived, and reporting 'tool_use' would make the client execute a
+    // truncated call. An explicit override (e.g. 'max_tokens' from
+    // response.incomplete) wins over both.
+    const stopReason =
+      opts.stopReasonOverride ?? (hadToolCalls && !errored ? 'tool_use' : 'end_turn')
 
-    controller.enqueue(
+    safeEnqueue(
       encoder.encode(
         formatSSE(
           'message_delta',
           JSON.stringify({
             type: 'message_delta',
             delta: { stop_reason: stopReason, stop_sequence: null },
-            usage: { output_tokens: outputTokens },
+            // input_tokens belongs here, not only on message_stop: the CLI
+            // accumulates usage from message_start and message_delta and
+            // ignores message_stop, so omitting it reports every Codex turn
+            // as costing zero input tokens — which also skews compaction.
+            usage: { input_tokens: inputTokens, output_tokens: outputTokens },
           }),
         ),
       ),
     )
-    controller.enqueue(
+    safeEnqueue(
       encoder.encode(
         formatSSE(
           'message_stop',
@@ -755,7 +1227,14 @@ async function translateCodexStreamToAnthropic(
         ),
       ),
     )
-    controller.close()
+
+    // Wait for the consumer to take the trailing events before closing;
+    // closing with chunks still buffered would truncate the response.
+    await waitForDrain()
+    if (finished) return // cancelled while draining
+    finished = true
+    releaseWaiters()
+    streamController?.close()
   }
 
   return new Response(readable, {
@@ -769,9 +1248,221 @@ async function translateCodexStreamToAnthropic(
   })
 }
 
-// ── Main fetch interceptor ──────────────────────────────────────────
+// ── Non-streaming + token counting ──────────────────────────────────
 
-const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex/responses'
+/**
+ * Builds an Anthropic-shaped `count_tokens` response from a local estimate.
+ *
+ * Codex has no token-counting endpoint. Rather than issue a real generation
+ * request (the previous behaviour, which also returned SSE where the SDK
+ * expected JSON), estimate from the serialised prompt.
+ *
+ * `roughTokenCountEstimation` is imported dynamically because
+ * `tokenEstimation.ts` imports `client.ts`, which imports this module — a
+ * static import would close that cycle at module-evaluation time.
+ *
+ * @param anthropicBody - The parsed Anthropic count_tokens request body
+ * @returns A Response containing `{ input_tokens }`
+ */
+async function estimateTokenCountResponse(
+  anthropicBody: Record<string, unknown>,
+): Promise<Response> {
+  const { roughTokenCountEstimation } = await import('../tokenEstimation.js')
+  const countable = JSON.stringify(
+    [anthropicBody.system ?? '', anthropicBody.messages ?? [], anthropicBody.tools ?? []],
+    // Base64 image and document payloads are orders of magnitude larger than
+    // the tokens they represent; counting them verbatim would inflate the
+    // estimate enough to trigger spurious compaction. Keyed on the enclosing
+    // object being a base64 `source` (per the Anthropic content-block schema)
+    // rather than on the key name alone, so a tool input with its own `data`
+    // field is still counted. Needs `function` for `this`.
+    function (this: unknown, key, value) {
+      const parent = this as { type?: unknown } | undefined
+      if (key === 'data' && parent?.type === 'base64') return undefined
+      return value
+    },
+  )
+  const inputTokens = roughTokenCountEstimation(countable)
+
+  return new Response(JSON.stringify({ input_tokens: inputTokens }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+/**
+ * Collapses an Anthropic SSE stream into a single Anthropic Message response.
+ *
+ * Re-parsing our own translated stream (rather than translating the Codex
+ * response a second, non-streaming way) keeps one translation path, so the
+ * streaming and non-streaming results cannot drift apart.
+ *
+ * @param streamResponse - An Anthropic-format SSE Response
+ * @param codexModel - The Codex model used, echoed back in the message
+ * @returns A Response containing a complete Anthropic Message JSON
+ */
+async function aggregateStreamToMessage(
+  streamResponse: Response,
+  codexModel: string,
+): Promise<Response> {
+  const message: Record<string, unknown> = {
+    id: `msg_codex_${Date.now()}`,
+    type: 'message',
+    role: 'assistant',
+    model: codexModel,
+    content: [],
+    stop_reason: 'end_turn',
+    stop_sequence: null,
+    usage: { input_tokens: 0, output_tokens: 0 },
+  }
+  const blocks: AnthropicContentBlock[] = []
+  // Accumulates partial tool-call JSON, which arrives as input_json_delta
+  // fragments and is only parseable once the block is complete.
+  const partialJson = new Map<number, string>()
+  const malformedToolCalls: string[] = []
+
+  for await (const { event, data } of iterateSSE(streamResponse)) {
+    switch (event) {
+      case 'message_start': {
+        const startMessage = data.message as Record<string, unknown> | undefined
+        if (startMessage?.id) message.id = startMessage.id
+        if (startMessage?.usage) message.usage = startMessage.usage
+        break
+      }
+      case 'content_block_start': {
+        const index = data.index as number
+        blocks[index] = { ...(data.content_block as AnthropicContentBlock) }
+        if (blocks[index]?.type === 'tool_use') partialJson.set(index, '')
+        break
+      }
+      case 'content_block_delta': {
+        const index = data.index as number
+        const delta = data.delta as Record<string, unknown>
+        const block = blocks[index]
+        if (!block) break
+        if (delta.type === 'text_delta') {
+          block.text = (block.text ?? '') + String(delta.text ?? '')
+        } else if (delta.type === 'thinking_delta') {
+          block.thinking = String(block.thinking ?? '') + String(delta.thinking ?? '')
+        } else if (delta.type === 'input_json_delta') {
+          partialJson.set(index, (partialJson.get(index) ?? '') + String(delta.partial_json ?? ''))
+        }
+        break
+      }
+      case 'content_block_stop': {
+        const index = data.index as number
+        const block = blocks[index]
+        const json = partialJson.get(index)
+        if (block && json !== undefined) {
+          try {
+            block.input = json ? JSON.parse(json) : {}
+          } catch {
+            // Leaving `input` empty would run the tool with no arguments —
+            // a delete or a write with a blank target is far worse than a
+            // failed turn. Replace the call with a visible message instead.
+            logForDebugging(
+              `Codex: failed to parse tool input JSON for block ${index}`,
+              { level: 'warn' },
+            )
+            malformedToolCalls.push(String(block.name ?? 'unknown'))
+            blocks[index] = {
+              type: 'text',
+              text: `[Codex returned an unparseable argument list for tool '${String(
+                block.name ?? 'unknown',
+              )}'; the call was not made.]`,
+            } as AnthropicContentBlock
+          }
+        }
+        break
+      }
+      case 'message_delta': {
+        const delta = data.delta as Record<string, unknown> | undefined
+        if (delta?.stop_reason) message.stop_reason = delta.stop_reason
+        if (delta?.stop_sequence !== undefined) message.stop_sequence = delta.stop_sequence
+        if (data.usage) {
+          message.usage = { ...(message.usage as object), ...(data.usage as object) }
+        }
+        break
+      }
+      // message_delta carries only output_tokens; message_stop is the only
+      // frame with the real input_tokens.
+      case 'message_stop': {
+        if (data.usage) {
+          message.usage = { ...(message.usage as object), ...(data.usage as object) }
+        }
+        break
+      }
+    }
+  }
+
+  message.content = blocks.filter(Boolean)
+
+  // With the malformed call removed there may be no tool_use left, so a
+  // 'tool_use' stop reason would leave the caller waiting for a tool result
+  // that can never arrive.
+  if (
+    malformedToolCalls.length > 0 &&
+    !(message.content as AnthropicContentBlock[]).some(b => b.type === 'tool_use')
+  ) {
+    message.stop_reason = 'end_turn'
+  }
+
+  return new Response(JSON.stringify(message), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+/**
+ * Parses an SSE response body into `{ event, data }` pairs.
+ *
+ * @param response - A Response whose body is an SSE stream
+ * @yields Each event name paired with its parsed JSON payload
+ */
+async function* iterateSSE(
+  response: Response,
+): AsyncGenerator<{ event: string; data: Record<string, unknown> }> {
+  const reader = response.body?.getReader()
+  if (!reader) return
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      // SSE frames are separated by a blank line.
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary !== -1) {
+        const frame = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
+        boundary = buffer.indexOf('\n\n')
+
+        let eventName = ''
+        let dataText = ''
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('event:')) eventName = line.slice(6).trim()
+          else if (line.startsWith('data:')) dataText += line.slice(5).trim()
+        }
+        if (!eventName || !dataText) continue
+        try {
+          yield { event: eventName, data: JSON.parse(dataText) }
+        } catch {
+          logForDebugging(`Codex: failed to parse SSE frame for '${eventName}'`, {
+            level: 'warn',
+          })
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+// ── Main fetch interceptor ──────────────────────────────────────────
 
 /**
  * Creates a fetch function that intercepts Anthropic API calls and routes them to Codex.
@@ -786,8 +1477,19 @@ export function createCodexFetch(
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : String(input)
 
-    // Only intercept Anthropic API message calls
-    if (!url.includes('/v1/messages')) {
+    // Only intercept the message-creation endpoint. Note `/v1/messages` is a
+    // prefix of `/v1/messages/count_tokens`, which must NOT be translated into
+    // a full Responses call — it's handled separately below.
+    let pathname: string
+    try {
+      pathname = new URL(url).pathname
+    } catch {
+      // Not an absolute URL, so not something we route to Codex.
+      return globalThis.fetch(input, init)
+    }
+    const isCountTokens = pathname.endsWith('/v1/messages/count_tokens')
+    const isMessages = pathname.endsWith('/v1/messages')
+    if (!isMessages && !isCountTokens) {
       return globalThis.fetch(input, init)
     }
 
@@ -809,9 +1511,13 @@ export function createCodexFetch(
       })
     }
 
-    // Get current token (may have been refreshed)
-    const tokens = getCodexOAuthTokens()
-    const currentToken = tokens?.accessToken || accessToken
+    // Codex exposes no token-counting endpoint, so answer locally rather than
+    // billing a full generation request to find out how long a prompt is.
+    if (isCountTokens) {
+      return estimateTokenCountResponse(anthropicBody)
+    }
+
+    const currentToken = await getFreshCodexToken(accessToken)
 
     // Translate to Codex format
     const { codexBody, codexModel } = translateToCodexBody(anthropicBody)
@@ -828,6 +1534,10 @@ export function createCodexFetch(
         'OpenAI-Beta': 'responses=experimental',
       },
       body: JSON.stringify(codexBody),
+      // Forward the SDK's abort signal so timeouts and Ctrl-C can cancel the
+      // upstream request — otherwise the non-streaming path, which blocks
+      // until the stream ends, cannot be interrupted.
+      ...(init?.signal && { signal: init.signal }),
     })
 
     if (!codexResponse.ok) {
@@ -835,17 +1545,30 @@ export function createCodexFetch(
       const errorBody = {
         type: 'error',
         error: {
-          type: 'api_error',
-          message: `Codex API error (${codexResponse.status}): ${errorText}`,
+          type: anthropicErrorType(codexResponse.status),
+          message: `Codex API error (${codexResponse.status}): ${describeCodexError(errorText)}`,
         },
       }
+      // Carry the upstream headers over. `Retry-After` and the rate-limit
+      // headers drive backoff, the fast-mode cooldown and the overage check;
+      // dropping them made every 429 look like it had no retry hint, which
+      // silently turned a short pause into a long one.
+      const headers = new Headers(codexResponse.headers)
+      headers.set('Content-Type', 'application/json')
+      headers.delete('Content-Encoding')
+      headers.delete('Content-Length')
       return new Response(JSON.stringify(errorBody), {
         status: codexResponse.status,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
       })
     }
 
-    // Translate streaming response
-    return translateCodexStreamToAnthropic(codexResponse, codexModel)
+    // Translate streaming response. Codex is always streamed upstream, so when
+    // the caller asked for a non-streaming response we collapse the translated
+    // events back into a single Anthropic Message.
+    const anthropicStream = await translateCodexStreamToAnthropic(codexResponse, codexModel)
+    return anthropicBody.stream === true
+      ? anthropicStream
+      : aggregateStreamToMessage(anthropicStream, codexModel)
   }
 }

@@ -3,6 +3,7 @@ import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from 
 import { logEvent } from 'src/services/analytics/index.js'
 import { setHasUnknownModelCost } from '../bootstrap/state.js'
 import { isFastModeEnabled } from './fastMode.js'
+import { isCodexModelId } from 'src/config/codex.js'
 import {
   CLAUDE_3_5_HAIKU_CONFIG,
   CLAUDE_3_5_V2_SONNET_CONFIG,
@@ -96,6 +97,18 @@ export const COST_TIER_10_50 = {
   webSearchRequests: 0.01,
 } as const satisfies ModelCosts
 
+// Codex is reached only through a ChatGPT OAuth session against
+// chatgpt.com/backend-api (see services/api/codex-fetch-adapter.ts) — there is
+// no metered API-key path in this fork. Usage is covered by the flat monthly
+// subscription, so any per-token figure would be invented.
+export const COST_SUBSCRIPTION_INCLUDED = {
+  inputTokens: 0,
+  outputTokens: 0,
+  promptCacheWriteTokens: 0,
+  promptCacheReadTokens: 0,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
 const DEFAULT_UNKNOWN_MODEL_COST = COST_TIER_5_25
 
 /** Maps a registry model's pricing tier name to its concrete costs. */
@@ -159,6 +172,13 @@ function tokensToUSDCost(modelCosts: ModelCosts, usage: Usage): number {
 
 export function getModelCosts(model: string, usage: Usage): ModelCosts {
   const shortName = getCanonicalName(model)
+
+  // Must run before the unknown-model fallback below, which would otherwise
+  // price a Codex turn at the default main-loop model's rate ($5/$25 per Mtok)
+  // and flag the whole session as having inaccurate costs.
+  if (isCodexModelId(shortName)) {
+    return COST_SUBSCRIPTION_INCLUDED
+  }
 
   // Check if this is an Opus 4.6 model with fast mode active. Must run before
   // the registry lookup, which returns the flat (non-fast) tier for Opus 4.6.

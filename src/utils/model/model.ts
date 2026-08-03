@@ -13,9 +13,14 @@ import {
   isMaxSubscriber,
   isProSubscriber,
   isTeamPremiumSubscriber,
-  isCodexSubscriber,
 } from '../auth.js'
 import { getAntModelOverrideConfig, resolveAntModel } from './antModels.js'
+import {
+  describeDefaultCodexModel,
+  findCodexModelId,
+  getCodexModelLabel,
+  isCodexModelId,
+} from 'src/config/codex.js'
 import { getModelDescriptor } from './registry.js'
 import {
   has1mContext,
@@ -54,6 +59,30 @@ export function isNonCustomOpusModel(model: ModelName): boolean {
 }
 
 /**
+ * Whether a model carried in ambient configuration can be served by the account
+ * the session is signed in with.
+ *
+ * Ambient config outlives the account it was written for. A settings.json pinned
+ * to `"model": "claude-opus-5"` sits at priority 4, above the built-in default,
+ * so logging in with a ChatGPT subscription used to keep requesting Opus — and
+ * every turn failed with "not supported when using Codex with a ChatGPT account".
+ * The same is true in reverse for a `gpt-*` ID left behind against Anthropic.
+ *
+ * Aliases always pass: 'opus'/'sonnet'/'haiku' name a capability tier, not a
+ * provider, and each provider resolves them to something it actually serves.
+ * Only a concrete ID pins a provider, so only a concrete ID can be wrong.
+ *
+ * @param model - A model ID or alias from ANTHROPIC_MODEL or settings
+ * @returns Whether the active provider can serve it
+ */
+export function isServableByActiveProvider(model: string): boolean {
+  if (isModelAlias(model)) {
+    return true
+  }
+  return isCodexSubscriber() === isCodexModelId(model)
+}
+
+/**
  * Helper to get the model from /model (including via /config), the --model flag, environment variable,
  * or the saved settings. The returned value can be a model alias if that's what the user specified.
  * Undefined if the user didn't configure anything, in which case we fall back to
@@ -73,7 +102,12 @@ export function getUserSpecifiedModelSetting(): ModelSetting | undefined {
     specifiedModel = modelOverride
   } else {
     const settings = getSettings_DEPRECATED() || {}
-    specifiedModel = process.env.ANTHROPIC_MODEL || settings.model || undefined
+    const ambientModel =
+      process.env.ANTHROPIC_MODEL || settings.model || undefined
+    specifiedModel =
+      ambientModel && !isServableByActiveProvider(ambientModel)
+        ? undefined
+        : ambientModel
   }
 
   // Ignore the user-specified model if it's not in the availableModels allowlist.
@@ -183,7 +217,7 @@ export function getRuntimeMainLoopModel(params: {
  */
 export function getDefaultMainLoopModelSetting(): ModelName | ModelAlias {
   if (isCodexSubscriber()) {
-    return getModelStrings().gpt53codex
+    return getModelStrings().gpt56terra
   }
 
   // Ants default to defaultModel from flag config, or Opus 1M if not configured
@@ -292,15 +326,11 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   if (name.includes('claude-3-haiku')) {
     return 'claude-3-haiku'
   }
-  // OpenAI GPT models
-  if (name.includes('gpt-5.4-mini')) {
-    return 'gpt-5.4-mini'
-  }
-  if (name.includes('gpt-5.4')) {
-    return 'gpt-5.4'
-  }
-  if (name.includes('gpt-5.3-codex')) {
-    return 'gpt-5.3-codex'
+  // OpenAI Codex models: the canonical form is the bare model ID. Read from the
+  // registry so all of them resolve, not just the three that were listed here.
+  const codexId = findCodexModelId(name)
+  if (codexId) {
+    return codexId
   }
   const match = name.match(/(claude-(\d+-\d+-)?\w+)/)
   if (match && match[1]) {
@@ -328,7 +358,7 @@ export function getClaudeAiUserDefaultModelDescription(
   fastMode = false,
 ): string {
   if (isCodexSubscriber()) {
-    return 'GPT-5.3 Codex · Optimized for code generation and understanding'
+    return describeDefaultCodexModel()
   }
   if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
     const contextNote = isOpus1mMergeEnabled() ? ' (1M context)' : ''
@@ -391,14 +421,11 @@ export function renderModelSetting(setting: ModelName | ModelAlias): string {
  * if the model is not recognized as a public model.
  */
 export function getPublicModelDisplayName(model: ModelName): string | null {
-  if (model.includes('gpt-') || model.includes('codex')) {
-    if (model === 'gpt-5.2-codex') return 'Codex 5.2'
-    if (model === 'gpt-5.1-codex') return 'Codex 5.1'
-    if (model === 'gpt-5.1-codex-mini') return 'Codex 5.1 Mini'
-    if (model === 'gpt-5.1-codex-max') return 'Codex 5.1 Max'
-    if (model === 'gpt-5.4') return 'GPT 5.4'
-    if (model === 'gpt-5.2') return 'GPT 5.2'
-    return model
+  // Labels come from CODEX_MODELS so the picker and every rendered name agree.
+  // An unlisted `gpt-*` ID is a deliberate passthrough (see
+  // mapClaudeModelToCodex) that we have no label for, so show it verbatim.
+  if (isCodexModelId(model)) {
+    return getCodexModelLabel(model) ?? model
   }
 
   // Registry-first: 4.5+/5-series models derive their display name (and 1M
@@ -463,12 +490,6 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
       return 'Haiku 4.5'
     case getModelStrings().haiku35:
       return 'Haiku 3.5'
-    case getModelStrings().gpt54:
-      return 'GPT-5.4'
-    case getModelStrings().gpt53codex:
-      return 'GPT-5.3 Codex'
-    case getModelStrings().gpt54mini:
-      return 'GPT-5.4 Mini'
     default:
       return null
   }
@@ -731,15 +752,11 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   if (canonical.includes('claude-3-5-haiku')) {
     return 'Claude 3.5 Haiku'
   }
-  // OpenAI Codex models
-  if (canonical.includes('gpt-5.4-mini')) {
-    return 'GPT-5.4 Mini'
-  }
-  if (canonical.includes('gpt-5.4')) {
-    return 'GPT-5.4'
-  }
-  if (canonical.includes('gpt-5.3-codex')) {
-    return 'GPT-5.3 Codex'
+  // OpenAI Codex models. Returning undefined here degrades the system prompt,
+  // so cover every model the picker offers by reading the same list it does.
+  const codexLabel = getCodexModelLabel(canonical)
+  if (codexLabel) {
+    return codexLabel
   }
 
   return undefined

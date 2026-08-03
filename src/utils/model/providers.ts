@@ -1,18 +1,32 @@
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from '../../services/analytics/index.js'
+import { getAuthProviderInfo } from '../../config/authProviders.js'
+import { getActiveAuthProvider } from '../activeAuthProvider.js'
 import { isEnvTruthy } from '../envUtils.js'
 
 export type APIProvider = 'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'openai'
 
+/**
+ * The API backend requests are served by.
+ *
+ * The cloud providers stay env-driven: they are deployment configuration set by
+ * an operator, with no interactive login to record a choice. Everything else
+ * follows the account the user logged in with, so picking a ChatGPT account at
+ * the `/login` prompt is enough to route to OpenAI — there is deliberately no
+ * CLAUDE_CODE_USE_OPENAI flag to also remember to set.
+ *
+ * @returns The provider to send requests to
+ */
 export function getAPIProvider(): APIProvider {
-  return isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK)
-    ? 'bedrock'
-    : isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX)
-      ? 'vertex'
-      : isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY)
-        ? 'foundry'
-        : isEnvTruthy(process.env.CLAUDE_CODE_USE_OPENAI)
-          ? 'openai'
-          : 'firstParty'
+  if (isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK)) {
+    return 'bedrock'
+  }
+  if (isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX)) {
+    return 'vertex'
+  }
+  if (isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY)) {
+    return 'foundry'
+  }
+  return getAuthProviderInfo(getActiveAuthProvider()).apiProvider
 }
 
 export function getAPIProviderForStatsig(): AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS {

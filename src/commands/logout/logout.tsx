@@ -6,7 +6,9 @@ import { getGroveNoticeConfig, getGroveSettings } from '../../services/api/grove
 import { clearPolicyLimitsCache } from '../../services/policyLimits/index.js';
 // flushTelemetry is loaded lazily to avoid pulling in ~1.1MB of OpenTelemetry at startup
 import { clearRemoteManagedSettingsCache } from '../../services/remoteManagedSettings/index.js';
-import { getClaudeAIOAuthTokens, removeApiKey } from '../../utils/auth.js';
+import { CODEX_PROVIDER_ID } from '../../config/codex.js';
+import { clearActiveAuthProvider, getActiveAuthProvider } from '../../utils/activeAuthProvider.js';
+import { clearCodexOAuthTokens, getClaudeAIOAuthTokens, removeApiKey } from '../../utils/auth.js';
 import { clearBetasCaches } from '../../utils/betas.js';
 import { saveGlobalConfig } from '../../utils/config.js';
 import { gracefulShutdownSync } from '../../utils/gracefulShutdown.js';
@@ -43,6 +45,10 @@ export async function performLogout({
       }
     }
     updated.oauthAccount = undefined;
+    // Not pinned to a provider any more. Resolution falls back to whatever
+    // credentials remain, so a user who is also logged into Codex lands there
+    // rather than on an Anthropic account that no longer exists.
+    updated.activeAuthProvider = undefined;
     return updated;
   });
 }
@@ -70,6 +76,19 @@ export async function clearAuthRelatedCaches(): Promise<void> {
   await clearPolicyLimitsCache();
 }
 export async function call(): Promise<React.ReactNode> {
+  // Log out of the account actually in use. Running the Anthropic logout while
+  // signed in with Codex would wipe the keychain and leave the ChatGPT tokens —
+  // and the session — exactly as they were.
+  const activeProvider = getActiveAuthProvider();
+  if (activeProvider === CODEX_PROVIDER_ID) {
+    clearCodexOAuthTokens();
+    clearActiveAuthProvider();
+    await clearAuthRelatedCaches();
+    setTimeout(() => {
+      gracefulShutdownSync(0, 'logout');
+    }, 200);
+    return <Text>Successfully logged out from your OpenAI Codex account.</Text>;
+  }
   await performLogout({
     clearOnboarding: true
   });

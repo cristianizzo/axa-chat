@@ -4,6 +4,11 @@ import { getGlobalConfig } from './config.js'
 import { isEnvTruthy } from './envUtils.js'
 import { getCanonicalName } from './model/model.js'
 import { getModelCapability } from './model/modelCapabilities.js'
+import {
+  CODEX_CONTEXT_WINDOW,
+  CODEX_MAX_OUTPUT_TOKENS,
+  isCodexModelId,
+} from 'src/config/codex.js'
 import { getModelDescriptor } from './model/registry.js'
 
 // Model context window size (200k tokens for all models right now)
@@ -85,6 +90,14 @@ export function getContextWindowForModel(
   // [1m] suffix — explicit client-side opt-in, respected over all detection
   if (has1mContext(model)) {
     return 1_000_000
+  }
+
+  // Codex models have no capability entry and no registry descriptor, so they
+  // would otherwise fall through to the 200k default and auto-compact ~25%
+  // early. Placed before the capability lookup because that data describes
+  // Anthropic endpoints and cannot speak for the Codex backend.
+  if (isCodexModelId(model)) {
+    return CODEX_CONTEXT_WINDOW
   }
 
   const cap = getModelCapability(model)
@@ -179,6 +192,12 @@ export function getModelMaxOutputTokens(model: string): {
   }
 
   const m = getCanonicalName(model)
+
+  // Codex matches none of the Claude patterns below and would take the generic
+  // 32k/64k fallback, capping output well under what the backend allows.
+  if (isCodexModelId(m)) {
+    return { ...CODEX_MAX_OUTPUT_TOKENS }
+  }
 
   // Registry-first: 4.5+/5-series models declare their output-token limits.
   // Match on the canonical name so modelOverrides resolve correctly. The
