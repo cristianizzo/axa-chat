@@ -2623,6 +2623,25 @@ async function* queryModel(
         streamRequestId,
       )
 
+      // Non-streaming responses arrive whole, so the refusal (if any) is
+      // already on `result.stop_reason` — check it before constructing or
+      // yielding the assistant message. Non-interactive stream-json output
+      // writes each yielded message immediately and can't retract it, so the
+      // refused response must never be surfaced when we're about to retry on
+      // a different model (throwing here, before any yield, means there's
+      // nothing to tombstone).
+      const nonStreamingRefusalMessage = getErrorMessageIfRefusal(
+        result.stop_reason,
+        options.model,
+      )
+      if (
+        nonStreamingRefusalMessage &&
+        options.fallbackModel &&
+        options.model !== options.fallbackModel
+      ) {
+        throw new RefusalFallbackError(options.model, options.fallbackModel)
+      }
+
       const m: AssistantMessage = {
         message: {
           ...result,
@@ -2648,18 +2667,7 @@ async function* queryModel(
       fallbackMessage = m
       yield m
 
-      // Non-streaming responses arrive whole, so the refusal (if any) is
-      // already on `result.stop_reason` — unlike the streaming path, there's
-      // no partial content to worry about, since `m` above already reflects
-      // the complete refused response.
-      const nonStreamingRefusalMessage = getErrorMessageIfRefusal(
-        result.stop_reason,
-        options.model,
-      )
       if (nonStreamingRefusalMessage) {
-        if (options.fallbackModel && options.model !== options.fallbackModel) {
-          throw new RefusalFallbackError(options.model, options.fallbackModel)
-        }
         if (options.refusalFallbackOriginalModel) {
           yield createBothModelsRefusedMessage(
             options.refusalFallbackOriginalModel,
@@ -2746,6 +2754,22 @@ async function* queryModel(
           failedRequestId,
         )
 
+        // See the comment on the sibling check above: throw before
+        // constructing/yielding `m` so a refusal that's about to be retried
+        // on a different model never reaches non-interactive stream-json
+        // output, which can't retract an already-written message.
+        const nonStreamingRefusalMessage = getErrorMessageIfRefusal(
+          result.stop_reason,
+          options.model,
+        )
+        if (
+          nonStreamingRefusalMessage &&
+          options.fallbackModel &&
+          options.model !== options.fallbackModel
+        ) {
+          throw new RefusalFallbackError(options.model, options.fallbackModel)
+        }
+
         const m: AssistantMessage = {
           message: {
             ...result,
@@ -2767,20 +2791,7 @@ async function* queryModel(
         fallbackMessage = m
         yield m
 
-        // Non-streaming responses arrive whole, so the refusal (if any) is
-        // already on `result.stop_reason` — see the comment on the sibling
-        // check above for why no tombstoning is needed here.
-        const nonStreamingRefusalMessage = getErrorMessageIfRefusal(
-          result.stop_reason,
-          options.model,
-        )
         if (nonStreamingRefusalMessage) {
-          if (
-            options.fallbackModel &&
-            options.model !== options.fallbackModel
-          ) {
-            throw new RefusalFallbackError(options.model, options.fallbackModel)
-          }
           if (options.refusalFallbackOriginalModel) {
             yield createBothModelsRefusedMessage(
               options.refusalFallbackOriginalModel,
