@@ -27,6 +27,7 @@ import {
 import {
   getDefaultMainLoopModelSetting,
   isNonCustomOpusModel,
+  renderModelName,
 } from 'src/utils/model/model.js'
 import { getModelStrings } from 'src/utils/model/modelStrings.js'
 import { getAPIProvider } from 'src/utils/model/providers.js'
@@ -1202,6 +1203,21 @@ export function getErrorMessageIfRefusal(
 
   return createAssistantAPIErrorMessage({
     content: baseMessage + modelSuggestion,
+    error: 'invalid_request',
+  })
+}
+
+/**
+ * Terminal message for when a `--fallback-model` refusal-recovery attempt
+ * refuses too — there's no further model to try. Shared by the streaming
+ * and non-streaming request paths so the wording can't drift between them.
+ */
+export function createBothModelsRefusedMessage(
+  originalModel: string,
+  fallbackModel: string,
+): AssistantMessage {
+  return createAssistantAPIErrorMessage({
+    content: `${API_ERROR_MESSAGE_PREFIX}: Both ${renderModelName(originalModel)} and ${renderModelName(fallbackModel)} declined this request as a possible violation of our Usage Policy (https://www.anthropic.com/legal/aup). This requires manual review — please rephrase the request or handle it outside Claude Code.`,
     error: 'invalid_request',
   })
 }

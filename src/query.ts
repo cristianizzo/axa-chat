@@ -992,10 +992,13 @@ async function* queryLoop(
               queryDepth: queryTracking.depth,
             })
 
-            // Clear assistant messages since we'll retry the entire request
+            // Clear assistant messages since we'll retry the entire request.
+            // Distinct message from the 529 branch above: the tool call was
+            // interrupted by a policy refusal, not a fallback-triggering
+            // server error.
             yield* yieldMissingToolResultBlocks(
               assistantMessages,
-              'Model fallback triggered',
+              'Model declined the request',
             )
             assistantMessages.length = 0
             toolResults.length = 0

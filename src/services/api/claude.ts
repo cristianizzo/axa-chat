@@ -204,7 +204,6 @@ import { getInferenceProfileBackingModel } from '../../utils/model/bedrock.js'
 import {
   normalizeModelStringForAPI,
   parseUserSpecifiedModel,
-  renderModelName,
 } from '../../utils/model/model.js'
 import {
   startSessionActivity,
@@ -233,6 +232,7 @@ import { withStreamingVCR, withVCR } from '../vcr.js'
 import { CLIENT_REQUEST_ID_HEADER, getAnthropicClient } from './client.js'
 import {
   API_ERROR_MESSAGE_PREFIX,
+  createBothModelsRefusedMessage,
   CUSTOM_OFF_SWITCH_MESSAGE,
   getAssistantMessageFromError,
   getErrorMessageIfRefusal,
@@ -2300,10 +2300,10 @@ async function* queryModel(
                 // plainly instead of repeating the generic "try /model"
                 // suggestion, which would just point back at the model that
                 // already declined.
-                yield createAssistantAPIErrorMessage({
-                  content: `${API_ERROR_MESSAGE_PREFIX}: Both ${renderModelName(options.refusalFallbackOriginalModel)} and ${renderModelName(options.model)} declined this request as a possible violation of our Usage Policy (https://www.anthropic.com/legal/aup). This requires manual review — please rephrase the request or handle it outside Claude Code.`,
-                  error: 'invalid_request',
-                })
+                yield createBothModelsRefusedMessage(
+                  options.refusalFallbackOriginalModel,
+                  options.model,
+                )
               } else {
                 yield refusalMessage
               }
@@ -2647,6 +2647,28 @@ async function* queryModel(
       newMessages.push(m)
       fallbackMessage = m
       yield m
+
+      // Non-streaming responses arrive whole, so the refusal (if any) is
+      // already on `result.stop_reason` — unlike the streaming path, there's
+      // no partial content to worry about, since `m` above already reflects
+      // the complete refused response.
+      const nonStreamingRefusalMessage = getErrorMessageIfRefusal(
+        result.stop_reason,
+        options.model,
+      )
+      if (nonStreamingRefusalMessage) {
+        if (options.fallbackModel && options.model !== options.fallbackModel) {
+          throw new RefusalFallbackError(options.model, options.fallbackModel)
+        }
+        if (options.refusalFallbackOriginalModel) {
+          yield createBothModelsRefusedMessage(
+            options.refusalFallbackOriginalModel,
+            options.model,
+          )
+        } else {
+          yield nonStreamingRefusalMessage
+        }
+      }
     } finally {
       clearStreamIdleTimers()
     }
@@ -2745,10 +2767,37 @@ async function* queryModel(
         fallbackMessage = m
         yield m
 
+        // Non-streaming responses arrive whole, so the refusal (if any) is
+        // already on `result.stop_reason` — see the comment on the sibling
+        // check above for why no tombstoning is needed here.
+        const nonStreamingRefusalMessage = getErrorMessageIfRefusal(
+          result.stop_reason,
+          options.model,
+        )
+        if (nonStreamingRefusalMessage) {
+          if (
+            options.fallbackModel &&
+            options.model !== options.fallbackModel
+          ) {
+            throw new RefusalFallbackError(options.model, options.fallbackModel)
+          }
+          if (options.refusalFallbackOriginalModel) {
+            yield createBothModelsRefusedMessage(
+              options.refusalFallbackOriginalModel,
+              options.model,
+            )
+          } else {
+            yield nonStreamingRefusalMessage
+          }
+        }
+
         // Continue to success logging below
       } catch (fallbackError) {
         // Propagate model-fallback signal to query.ts (see comment above).
-        if (fallbackError instanceof FallbackTriggeredError) {
+        if (
+          fallbackError instanceof FallbackTriggeredError ||
+          fallbackError instanceof RefusalFallbackError
+        ) {
           throw fallbackError
         }
 
