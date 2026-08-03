@@ -903,6 +903,20 @@ async function* queryLoop(
             currentModel = fallbackModel
             attemptWithFallback = true
 
+            // The failed attempt may have already streamed and yielded
+            // partial content (thinking/text/tool_use) before the error hit.
+            // Tombstone it so the UI/transcript don't show it alongside the
+            // fallback model's response — mirrors the streamingFallbackOccured
+            // handling above for the same "orphaned partial attempt" case.
+            for (const msg of assistantMessages) {
+              yield { type: 'tombstone' as const, message: msg }
+            }
+            logEvent('tengu_orphaned_messages_tombstoned', {
+              orphanedMessageCount: assistantMessages.length,
+              queryChainId: queryChainIdForAnalytics,
+              queryDepth: queryTracking.depth,
+            })
+
             // Clear assistant messages since we'll retry the entire request
             yield* yieldMissingToolResultBlocks(
               assistantMessages,
@@ -962,6 +976,21 @@ async function* queryLoop(
             currentModel = fallbackModel
             refusalFallbackOriginalModel = innerError.originalModel
             attemptWithFallback = true
+
+            // The refusal may have already streamed and yielded partial
+            // content (e.g. the refusal text itself) before the error hit.
+            // Tombstone it so the UI/transcript don't show the original
+            // refusal alongside the fallback model's response — mirrors the
+            // streamingFallbackOccured handling above for the same "orphaned
+            // partial attempt" case.
+            for (const msg of assistantMessages) {
+              yield { type: 'tombstone' as const, message: msg }
+            }
+            logEvent('tengu_orphaned_messages_tombstoned', {
+              orphanedMessageCount: assistantMessages.length,
+              queryChainId: queryChainIdForAnalytics,
+              queryDepth: queryTracking.depth,
+            })
 
             // Clear assistant messages since we'll retry the entire request
             yield* yieldMissingToolResultBlocks(
