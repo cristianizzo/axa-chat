@@ -448,7 +448,7 @@ function OAuthStatusMessage(t0) {
             label: <Text>OpenAI Codex account ·{" "}<Text dimColor={true}>ChatGPT Plus/Pro subscription</Text>{"\n"}</Text>,
             value: "codex"
           }, {
-            label: <Text>Ollama ·{" "}<Text dimColor={true}>Local or self-hosted model (set OLLAMA_MODEL)</Text>{"\n"}</Text>,
+            label: <Text>Ollama ·{" "}<Text dimColor={true}>Local or self-hosted model</Text>{"\n"}</Text>,
             value: "ollama"
           }];
           $[5] = t6;

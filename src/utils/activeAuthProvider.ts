@@ -33,9 +33,10 @@ export function hasCredentialsForAuthProvider(id: AuthProviderId): boolean {
       case CODEX_PROVIDER_ID:
         return !!config.codexOAuth?.accessToken
       case OLLAMA_PROVIDER_ID:
-        // A local daemon ignores the token, so its presence proves nothing; the
-        // recorded base URL is what a completed Ollama login writes.
-        return !!config.ollamaAuth?.baseUrl
+        // A local daemon ignores the token, so its presence proves nothing. A
+        // completed Ollama login writes both the base URL and the chosen model;
+        // require both so a half-written record isn't offered as an account.
+        return !!config.ollamaAuth?.baseUrl && !!config.ollamaAuth?.model
       default:
         // Anthropic tokens live in the keychain, not the config file, and
         // reading them is async and comparatively expensive. oauthAccount is
@@ -70,7 +71,7 @@ export function getActiveAuthProvider(): AuthProviderId {
     if (config.codexOAuth?.accessToken) {
       return CODEX_PROVIDER_ID
     }
-    if (config.ollamaAuth?.baseUrl) {
+    if (config.ollamaAuth?.baseUrl && config.ollamaAuth?.model) {
       return OLLAMA_PROVIDER_ID
     }
     return DEFAULT_AUTH_PROVIDER
