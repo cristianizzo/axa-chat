@@ -3,6 +3,7 @@ import { onGrowthBookRefresh } from '../services/analytics/growthbook.js'
 import { useAppState } from '../state/AppState.js'
 import {
   getDefaultMainLoopModelSetting,
+  isServableByActiveProvider,
   type ModelName,
   parseUserSpecifiedModel,
 } from '../utils/model/model.js'
@@ -25,10 +26,18 @@ export function useMainLoopModel(): ModelName {
   const [, forceRerender] = useReducer(x => x + 1, 0)
   useEffect(() => onGrowthBookRefresh(forceRerender), [])
 
-  const model = parseUserSpecifiedModel(
-    mainLoopModelForSession ??
-      mainLoopModel ??
-      getDefaultMainLoopModelSetting(),
-  )
+  // The request path uses this value directly, so it is the last line of
+  // defence against a model leaking to a provider that can't serve it. A
+  // concrete ID pinned for one account (e.g. Ollama's qwen3:8b) must never be
+  // sent to another (e.g. Codex, which 400s it) if state is stale for any
+  // reason. Aliases and null always pass; only a non-servable concrete ID is
+  // dropped, falling back to the active provider's default.
+  const candidate = mainLoopModelForSession ?? mainLoopModel
+  const setting =
+    candidate != null && !isServableByActiveProvider(candidate)
+      ? getDefaultMainLoopModelSetting()
+      : (candidate ?? getDefaultMainLoopModelSetting())
+
+  const model = parseUserSpecifiedModel(setting)
   return model
 }

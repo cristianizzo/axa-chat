@@ -11,13 +11,15 @@ import { getSSLErrorHint } from '../services/api/errorUtils.js';
 import { sendNotification } from '../services/notifier.js';
 import { runCodexOAuthFlow } from '../services/oauth/codex-client.js';
 import { OAuthService } from '../services/oauth/index.js';
-import { getOauthAccountInfo, saveCodexOAuthTokens, validateForceLoginOrg } from '../utils/auth.js';
+import { getOauthAccountInfo, saveCodexOAuthTokens, saveOllamaAuth, validateForceLoginOrg } from '../utils/auth.js';
+import { getOllamaAuthToken, getOllamaBaseUrl } from '../config/ollama.js';
 import { logError } from '../utils/log.js';
 import { getSettings_DEPRECATED } from '../utils/settings/settings.js';
 import { Select } from './CustomSelect/select.js';
 import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js';
 import { Spinner } from './Spinner.js';
 import TextInput from './TextInput.js';
+import { OllamaModelSelect } from './OllamaModelSelect.js';
 type Props = {
   onDone(): void;
   startingMessage?: string;
@@ -30,6 +32,9 @@ type OAuthStatus = {
 | {
   state: 'platform_setup';
 } // Show platform setup info (Bedrock/Vertex/Foundry)
+| {
+  state: 'ollama_model_select';
+} // Ollama chosen: pick which installed model to use
 | {
   state: 'ready_to_start';
 } // Flow started, waiting for browser to open
@@ -398,7 +403,7 @@ function OAuthStatusMessage(t0) {
   switch (oauthStatus.state) {
     case "idle":
       {
-        const t1 = startingMessage ? startingMessage : "Claude Code can be used with your Claude subscription or billed based on API usage through your Console account.";
+        const t1 = startingMessage ? startingMessage : "Sign in with a Claude subscription or Anthropic Console account, an OpenAI Codex account, or a local/self-hosted Ollama model.";
         let t2;
         if ($[0] !== t1) {
           t2 = <Text bold={true}>{t1}</Text>;
@@ -442,6 +447,9 @@ function OAuthStatusMessage(t0) {
           }, {
             label: <Text>OpenAI Codex account ·{" "}<Text dimColor={true}>ChatGPT Plus/Pro subscription</Text>{"\n"}</Text>,
             value: "codex"
+          }, {
+            label: <Text>Ollama ·{" "}<Text dimColor={true}>Local or self-hosted model (set OLLAMA_MODEL)</Text>{"\n"}</Text>,
+            value: "ollama"
           }];
           $[5] = t6;
         } else {
@@ -460,6 +468,15 @@ function OAuthStatusMessage(t0) {
                 setLoginWithCodex(true);
                 setLoginWithClaudeAi(false);
                 setOAuthStatus({ state: "ready_to_start" });
+              } else if (value_0 === "ollama") {
+                logEvent("tengu_oauth_ollama_selected", {});
+                setLoginWithCodex(false);
+                setLoginWithClaudeAi(false);
+                // Ollama has no browser OAuth: the daemon is already signed in,
+                // so the base URL and token are known and the model is the only
+                // thing to record. Let the user pick it from the installed
+                // models rather than driving the OAuth state machine.
+                setOAuthStatus({ state: "ollama_model_select" });
               } else {
                 setLoginWithCodex(false);
                 setOAuthStatus({
@@ -492,6 +509,18 @@ function OAuthStatusMessage(t0) {
         }
         return t8;
       }
+    case "ollama_model_select":
+      return <OllamaModelSelect onSelect={model => {
+        saveOllamaAuth({
+          baseUrl: getOllamaBaseUrl(),
+          authToken: getOllamaAuthToken(),
+          model
+        });
+        logEvent("tengu_oauth_ollama_success", {});
+        setOAuthStatus({ state: "success" });
+      }} onError={message => {
+        setOAuthStatus({ state: "error", message, toRetry: { state: "idle" } });
+      }} />;
     case "platform_setup":
       {
         let t1;

@@ -7,8 +7,9 @@ import { clearPolicyLimitsCache } from '../../services/policyLimits/index.js';
 // flushTelemetry is loaded lazily to avoid pulling in ~1.1MB of OpenTelemetry at startup
 import { clearRemoteManagedSettingsCache } from '../../services/remoteManagedSettings/index.js';
 import { CODEX_PROVIDER_ID } from '../../config/codex.js';
+import { OLLAMA_PROVIDER_ID } from '../../config/ollama.js';
 import { clearActiveAuthProvider, getActiveAuthProvider } from '../../utils/activeAuthProvider.js';
-import { clearCodexOAuthTokens, getClaudeAIOAuthTokens, removeApiKey } from '../../utils/auth.js';
+import { clearCodexOAuthTokens, clearOllamaAuth, getClaudeAIOAuthTokens, removeApiKey } from '../../utils/auth.js';
 import { clearBetasCaches } from '../../utils/betas.js';
 import { saveGlobalConfig } from '../../utils/config.js';
 import { gracefulShutdownSync } from '../../utils/gracefulShutdown.js';
@@ -88,6 +89,18 @@ export async function call(): Promise<React.ReactNode> {
       gracefulShutdownSync(0, 'logout');
     }, 200);
     return <Text>Successfully logged out from your OpenAI Codex account.</Text>;
+  }
+  // Same reasoning as Codex above: only clear the Ollama credentials, leaving
+  // the keychain and any other account untouched. Resolution then falls back
+  // to whatever remains signed in.
+  if (activeProvider === OLLAMA_PROVIDER_ID) {
+    clearOllamaAuth();
+    clearActiveAuthProvider();
+    await clearAuthRelatedCaches();
+    setTimeout(() => {
+      gracefulShutdownSync(0, 'logout');
+    }, 200);
+    return <Text>Successfully logged out from your Ollama account.</Text>;
   }
   await performLogout({
     clearOnboarding: true

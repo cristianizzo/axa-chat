@@ -7,10 +7,16 @@
  */
 import { getMainLoopModelOverride } from '../../bootstrap/state.js'
 import {
+  getActiveAuthProvider,
+  getStoredModelForProvider,
+} from '../activeAuthProvider.js'
+import {
+  getOllamaAuth,
   getSubscriptionType,
   isClaudeAISubscriber,
   isCodexSubscriber,
   isMaxSubscriber,
+  isOllamaSubscriber,
   isProSubscriber,
   isTeamPremiumSubscriber,
 } from '../auth.js'
@@ -79,6 +85,16 @@ export function isServableByActiveProvider(model: string): boolean {
   if (isModelAlias(model)) {
     return true
   }
+  // Ollama serves exactly the one model its account recorded, and nothing else
+  // serves that ID. Check both directions so a stray Ollama model left in
+  // settings is rejected once another provider is active, and vice versa.
+  const ollamaModel = getOllamaAuth()?.model
+  if (isOllamaSubscriber()) {
+    return model === ollamaModel
+  }
+  if (ollamaModel && model === ollamaModel) {
+    return false
+  }
   return isCodexSubscriber() === isCodexModelId(model)
 }
 
@@ -97,8 +113,20 @@ export function isServableByActiveProvider(model: string): boolean {
 export function getUserSpecifiedModelSetting(): ModelSetting | undefined {
   let specifiedModel: ModelSetting | undefined
 
+  // A session /model choice (or --model flag) is made for whichever provider was
+  // active at the time. If the provider later changes — e.g. /login picks Ollama,
+  // which never runs switch-account's clear step — a concrete model ID can become
+  // unservable, and every turn then fails against a backend that 404s it. Treat a
+  // non-servable override as absent so resolution falls through to the ambient
+  // model and then the new provider's default. null ("use default") and aliases
+  // (resolved per-provider) always pass.
   const modelOverride = getMainLoopModelOverride()
-  if (modelOverride !== undefined) {
+  const overrideUsable =
+    modelOverride !== undefined &&
+    (typeof modelOverride !== 'string' ||
+      isServableByActiveProvider(modelOverride))
+
+  if (overrideUsable) {
     specifiedModel = modelOverride
   } else {
     const settings = getSettings_DEPRECATED() || {}
@@ -136,6 +164,28 @@ export function getMainLoopModel(): ModelName {
     return parseUserSpecifiedModel(model)
   }
   return getDefaultMainLoopModel()
+}
+
+/**
+ * The model the REPL should switch to when the active account changes.
+ *
+ * Returns the model the target account last used, but only if the account can
+ * actually serve it — a concrete ID recorded for one provider (e.g. an Ollama
+ * model, or `claude-opus-5`) must never be carried into another that would
+ * 404 it. When there is no usable stored model, returns null ("use the
+ * provider's default"), so resolution falls through to
+ * getDefaultMainLoopModelSetting rather than leaking a stale choice.
+ *
+ * Callers assign the result straight to AppState.mainLoopModel on switch/login.
+ *
+ * @returns The stored model to adopt, or null to use the provider default
+ */
+export function resolveModelForActiveProvider(): ModelName | null {
+  const stored = getStoredModelForProvider(getActiveAuthProvider())
+  if (stored && isServableByActiveProvider(stored)) {
+    return stored
+  }
+  return null
 }
 
 export function getBestModel(): ModelName {
@@ -216,6 +266,12 @@ export function getRuntimeMainLoopModel(params: {
  * @returns The default model setting to use
  */
 export function getDefaultMainLoopModelSetting(): ModelName | ModelAlias {
+  // Ollama serves exactly the one model its account recorded, so that is the
+  // only sensible default — there is no tier to pick from.
+  if (isOllamaSubscriber()) {
+    return getOllamaAuth()?.model ?? getDefaultSonnetModel()
+  }
+
   if (isCodexSubscriber()) {
     return getModelStrings().gpt56terra
   }
