@@ -1,7 +1,8 @@
 import { c as _c } from "react/compiler-runtime";
 import { feature } from 'bun:bundle';
 import * as React from 'react';
-import { resetCostState } from '../../bootstrap/state.js';
+import { resetCostState, setMainLoopModelOverride } from '../../bootstrap/state.js';
+import { resolveModelForActiveProvider } from '../../utils/model/model.js';
 import { clearTrustedDeviceToken, enrollTrustedDevice } from '../../bridge/trustedDevice.js';
 import type { LocalJSXCommandContext } from '../../commands.js';
 import { ConfigurableShortcutHint } from '../../components/ConfigurableShortcutHint.js';
@@ -48,9 +49,19 @@ export async function call(onDone: LocalJSXCommandOnDone, context: LocalJSXComma
         resetAutoModeGateCheck();
         void checkAndDisableAutoModeIfNeeded(appState.toolPermissionContext, context.setAppState, appState.fastMode);
       }
+      // Point the live model at the account just logged in with. The model in
+      // AppState.mainLoopModel was seeded for whatever account was active
+      // before, and the request path reads it directly — so without this a
+      // fresh Ollama/Codex login keeps sending the previous account's model to
+      // a backend that cannot serve it (e.g. claude-opus-4-8 → Ollama → 404).
+      // null means "use this provider's default".
+      const targetModel = resolveModelForActiveProvider();
+      setMainLoopModelOverride(targetModel);
       // Increment authVersion to trigger re-fetching of auth-dependent data in hooks (e.g., MCP servers)
       context.setAppState(prev => ({
         ...prev,
+        mainLoopModel: targetModel,
+        mainLoopModelForSession: null,
         authVersion: prev.authVersion + 1
       }));
     }

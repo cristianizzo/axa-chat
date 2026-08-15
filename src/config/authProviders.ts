@@ -14,11 +14,13 @@
  * hasCredentialsForAuthProvider (utils/activeAuthProvider.ts) — everything that
  * enumerates accounts (the `/login` picker, `/switch-account`) reads this list.
  *
- * Dependency-free apart from config/codex.js, which is itself dependency-free.
- * The `/login` UI, the networking layer and the model picker all import this.
+ * Dependency-free apart from config/codex.js and config/ollama.js, which are
+ * themselves dependency-free. The `/login` UI, the networking layer and the
+ * model picker all import this.
  */
 
 import { CODEX_PROVIDER_ID } from './codex.js'
+import { OLLAMA_PROVIDER_ID } from './ollama.js'
 
 /** Provider identifier for Anthropic's own API — the default. */
 export const ANTHROPIC_PROVIDER_ID = 'anthropic' as const
@@ -41,6 +43,12 @@ export const AUTH_PROVIDERS = [
     label: 'OpenAI Codex',
     description: 'ChatGPT Plus/Pro subscription',
     apiProvider: 'openai',
+  },
+  {
+    id: OLLAMA_PROVIDER_ID,
+    label: 'Ollama',
+    description: 'Local or self-hosted models via Ollama',
+    apiProvider: 'ollama',
   },
 ] as const satisfies readonly {
   id: string

@@ -1,5 +1,9 @@
 import { setMainLoopModelOverride } from '../bootstrap/state.js'
 import {
+  getActiveAuthProvider,
+  setStoredModelForProvider,
+} from '../utils/activeAuthProvider.js'
+import {
   clearApiKeyHelperCache,
   clearAwsCredentialsCache,
   clearGcpCredentialsCache,
@@ -99,6 +103,8 @@ export function onChangeAppState({
     // Remove from settings
     updateSettingsForSource('userSettings', { model: undefined })
     setMainLoopModelOverride(null)
+    // Forget this account's remembered model so it falls back to the default.
+    setStoredModelForProvider(getActiveAuthProvider(), null)
   }
 
   // mainLoopModel: add it to settings?
@@ -109,6 +115,9 @@ export function onChangeAppState({
     // Save to settings
     updateSettingsForSource('userSettings', { model: newState.mainLoopModel })
     setMainLoopModelOverride(newState.mainLoopModel)
+    // Remember it against the active account, so switching away and back
+    // restores this model instead of leaking the other account's choice.
+    setStoredModelForProvider(getActiveAuthProvider(), newState.mainLoopModel)
   }
 
   // expandedView → persist as showExpandedTodos + showSpinnerTree for backwards compat

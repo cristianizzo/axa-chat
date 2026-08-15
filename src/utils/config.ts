@@ -248,6 +248,26 @@ export type GlobalConfig = {
     expiresAt: number
     accountId: string
   }
+
+  /**
+   * Ollama account credentials, stored separately from Anthropic and Codex.
+   * A local daemon ignores the token, so `authToken` is optional; `model`
+   * records the single model this account serves. Requests go to `baseUrl`'s
+   * native Anthropic Messages API and never reach Anthropic servers.
+   */
+  ollamaAuth?: {
+    baseUrl: string
+    authToken?: string
+    model: string
+  }
+  /**
+   * Per-account model memory, keyed by auth provider id. Each account (Anthropic,
+   * Codex, Ollama…) remembers the model last chosen while it was active, so
+   * switching accounts restores that account's model instead of leaking the
+   * previous account's model to a provider that can't serve it. Ollama's model
+   * is authoritative in `ollamaAuth.model`; this map covers the other providers.
+   */
+  modelByAuthProvider?: { [providerId: string]: string }
   iterm2KeyBindingInstalled?: boolean // Legacy - keeping for backward compatibility
   editorMode?: EditorMode
   bypassPermissionsModeAccepted?: boolean

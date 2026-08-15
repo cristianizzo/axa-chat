@@ -2,9 +2,11 @@
 import { getInitialMainLoopModel } from '../../bootstrap/state.js'
 import { CODEX_MODELS } from 'src/config/codex.js'
 import {
+  getOllamaAuth,
   isClaudeAISubscriber,
   isCodexSubscriber,
   isMaxSubscriber,
+  isOllamaSubscriber,
   isTeamPremiumSubscriber,
 } from '../auth.js'
 import { getModelStrings } from './modelStrings.js'
@@ -380,6 +382,23 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     ]
   }
 
+  // An Ollama account serves exactly the one model it was logged in with, so
+  // the picker offers only that — never the Claude families below, which this
+  // provider cannot serve. Changing it means logging in again via /login.
+  if (isOllamaSubscriber()) {
+    const model = getOllamaAuth()?.model
+    if (model) {
+      return [
+        {
+          value: model,
+          label: model,
+          description: 'Served by Ollama · change it by signing in again with /login',
+        },
+      ]
+    }
+    return [getDefaultOptionForUser(fastMode)]
+  }
+
   if (isCodexSubscriber()) {
     return [
       getDefaultOptionForUser(),
@@ -512,6 +531,15 @@ export function getModelOptions(fastMode = false): ModelOption[] {
 
 function getModelOptionsInternal(fastMode = false): ModelOption[] {
   const options = getModelOptionsBase(fastMode)
+
+  // Ollama serves only its one model. Skip every augmentation below — env
+  // custom models, bootstrap-cached Anthropic options, the current/initial
+  // model fallback — since none of them can be served by this provider. The
+  // availableModels allowlist is an Anthropic-model restriction that would
+  // wrongly filter out Ollama's tag and leave the picker empty, so bypass it.
+  if (isOllamaSubscriber()) {
+    return options
+  }
 
   // Add the custom model from the ANTHROPIC_CUSTOM_MODEL_OPTION env var
   const envCustomModel = process.env.ANTHROPIC_CUSTOM_MODEL_OPTION

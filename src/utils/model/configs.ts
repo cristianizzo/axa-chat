@@ -5,7 +5,9 @@ import {
 import type { ModelName } from './model.js'
 import type { APIProvider } from './providers.js'
 
-export type ModelConfig = Record<APIProvider, ModelName>
+// Ollama serves native Anthropic model IDs, so it has no column of its own in
+// the builtin config table — getBuiltinModelStrings maps it onto firstParty.
+export type ModelConfig = Record<Exclude<APIProvider, 'ollama'>, ModelName>
 
 // @[MODEL LAUNCH]: Add a new CLAUDE_*_CONFIG constant here. Double check the correct model strings
 // here since the pattern may change.

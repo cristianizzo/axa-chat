@@ -6,25 +6,24 @@ import {
   type AuthProviderId,
 } from '../../config/authProviders.js'
 import { CODEX_PROVIDER_ID } from '../../config/codex.js'
+import { OLLAMA_PROVIDER_ID } from '../../config/ollama.js'
 import { Box, Text } from '../../ink.js'
 import type {
   LocalJSXCommandContext,
   LocalJSXCommandOnDone,
 } from '../../types/command.js'
-import {
-  getMainLoopModelOverride,
-  setMainLoopModelOverride,
-} from '../../bootstrap/state.js'
+import { setMainLoopModelOverride } from '../../bootstrap/state.js'
 import {
   getActiveAuthProvider,
   hasCredentialsForAuthProvider,
   setActiveAuthProvider,
+  setStoredModelForProvider,
 } from '../../utils/activeAuthProvider.js'
 import { getGlobalConfig } from '../../utils/config.js'
 import {
   getDefaultMainLoopModelSetting,
-  isServableByActiveProvider,
   renderModelSetting,
+  resolveModelForActiveProvider,
 } from '../../utils/model/model.js'
 import { clearAuthRelatedCaches } from '../logout/logout.js'
 
@@ -34,17 +33,23 @@ const PROVIDER_ALIASES: Record<string, AuthProviderId> = {
   claude: ANTHROPIC_PROVIDER_ID,
   codex: CODEX_PROVIDER_ID,
   openai: CODEX_PROVIDER_ID,
+  ollama: OLLAMA_PROVIDER_ID,
 }
 
 /**
- * The account label for a provider, including the email when we know it.
+ * The account label for a provider, with an identifying detail when we have one.
  *
- * Only Anthropic logins store an email; the Codex flow gives us an opaque
- * account ID, so its entry is identified by provider alone.
+ * Anthropic logins store an email; Ollama records the single model it serves,
+ * which is what distinguishes it. The Codex flow gives us only an opaque account
+ * ID, so its entry is identified by provider alone.
  */
 function describeAccount(id: AuthProviderId): string {
   const info = AUTH_PROVIDERS.find(provider => provider.id === id)
   const label = info?.label ?? id
+  if (id === OLLAMA_PROVIDER_ID) {
+    const model = getGlobalConfig().ollamaAuth?.model
+    return model ? `${label} (${model})` : label
+  }
   if (id !== ANTHROPIC_PROVIDER_ID) {
     return label
   }
@@ -53,26 +58,54 @@ function describeAccount(id: AuthProviderId): string {
 }
 
 /**
- * Makes the given account active for subsequent turns.
+ * Makes the given account active for subsequent turns, and points the REPL's
+ * live model at whatever the new account should use.
  *
- * Clears a session `/model` choice that the new account cannot serve: it was
- * picked for the previous provider, and keeping it would fail every turn with
- * "model is not supported". Dropping it lets the new provider's default apply,
- * which is the whole point of switching.
+ * The model lives in AppState.mainLoopModel, which the request path reads
+ * directly. It was seeded for whichever account was active at startup and does
+ * not follow an account switch on its own, so without this the previous
+ * account's model leaks to the new provider and every turn fails against a
+ * backend that cannot serve it (e.g. `claude-opus-4-8` sent to the Ollama
+ * daemon → 404). We therefore:
+ *
+ *  1. Remember the outgoing account's current model, so returning to it later
+ *     restores that exact choice rather than falling back to a default. (The
+ *     startup-seeded model never passed through onChangeAppState, so the
+ *     per-account store would otherwise not know it.)
+ *  2. Adopt the incoming account's remembered model if it can serve it, else
+ *     null — meaning "use this provider's default". Assigning it through
+ *     setAppState fires onChangeAppState, which persists it and updates the
+ *     model override, keeping every resolution path in agreement.
  *
  * @param id - The provider to switch to
+ * @param context - The command context, for reading and updating AppState
  * @returns The message to show the user
  */
-async function switchTo(id: AuthProviderId): Promise<string> {
+async function switchTo(
+  id: AuthProviderId,
+  context: LocalJSXCommandContext,
+): Promise<string> {
+  const outgoing = getActiveAuthProvider()
+  const outgoingModel = context.getAppState().mainLoopModel
+  if (typeof outgoingModel === 'string') {
+    setStoredModelForProvider(outgoing, outgoingModel)
+  }
+
   setActiveAuthProvider(id)
   await clearAuthRelatedCaches()
 
-  const override = getMainLoopModelOverride()
-  if (override && !isServableByActiveProvider(override)) {
-    setMainLoopModelOverride(undefined)
-  }
+  const target = resolveModelForActiveProvider()
+  context.setAppState(prev => ({
+    ...prev,
+    mainLoopModel: target,
+    mainLoopModelForSession: null,
+    authVersion: prev.authVersion + 1,
+  }))
+  // onChangeAppState only reacts when the value changes; set the override
+  // directly so it stays correct even when the target equals the old model.
+  setMainLoopModelOverride(target)
 
-  const model = renderModelSetting(getDefaultMainLoopModelSetting())
+  const model = renderModelSetting(target ?? getDefaultMainLoopModelSetting())
   return `Switched to ${describeAccount(id)} · model: ${model}`
 }
 
@@ -107,12 +140,8 @@ function SwitchAccount({
         defaultValue={active}
         onChange={value => {
           void (async () => {
-            const message = await switchTo(value as AuthProviderId)
+            const message = await switchTo(value as AuthProviderId, context)
             context.onChangeAPIKey()
-            context.setAppState(prev => ({
-              ...prev,
-              authVersion: prev.authVersion + 1,
-            }))
             onDone(message)
           })()
         }}
@@ -134,7 +163,7 @@ export async function call(
       )
       return null
     }
-    onDone(await switchTo(requested))
+    onDone(await switchTo(requested, context))
     context.onChangeAPIKey()
     return null
   }

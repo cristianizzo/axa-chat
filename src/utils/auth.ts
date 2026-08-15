@@ -5,6 +5,7 @@ import { mkdir, stat } from 'fs/promises'
 import memoize from 'lodash-es/memoize.js'
 import { join } from 'path'
 import { CODEX_PROVIDER_ID } from 'src/config/codex.js'
+import { OLLAMA_PROVIDER_ID } from 'src/config/ollama.js'
 import { CLAUDE_AI_PROFILE_SCOPE } from 'src/constants/oauth.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -1373,6 +1374,62 @@ export function clearCodexOAuthTokens(): void {
   })
 }
 
+// ── Ollama account storage ───────────────────────────────────────────────────
+// Ollama credentials live in the GlobalConfig JSON alongside Codex, never in the
+// keychain. Requests go to the daemon's native Anthropic Messages API and are
+// never sent to Anthropic's servers.
+
+export type OllamaAuth = {
+  baseUrl: string
+  authToken?: string
+  model: string
+}
+
+/**
+ * Saves the Ollama account to GlobalConfig.
+ *
+ * Also makes Ollama the active provider: completing this login is the user
+ * choosing that account, so tokens and active provider are written together and
+ * cannot disagree. Mirrors {@link saveCodexOAuthTokens}.
+ */
+export function saveOllamaAuth(auth: OllamaAuth): void {
+  saveGlobalConfig((cfg) => ({
+    ...cfg,
+    activeAuthProvider: OLLAMA_PROVIDER_ID,
+    ollamaAuth: {
+      baseUrl: auth.baseUrl,
+      authToken: auth.authToken,
+      model: auth.model,
+    },
+  }))
+}
+
+/**
+ * Retrieves the stored Ollama account from GlobalConfig.
+ * Returns null unless both a base URL and a model are recorded.
+ */
+export function getOllamaAuth(): OllamaAuth | null {
+  const stored = getGlobalConfig().ollamaAuth
+  if (!stored?.baseUrl || !stored.model) {
+    return null
+  }
+  return {
+    baseUrl: stored.baseUrl,
+    authToken: stored.authToken,
+    model: stored.model,
+  }
+}
+
+/**
+ * Removes the Ollama account from GlobalConfig (e.g., on logout).
+ */
+export function clearOllamaAuth(): void {
+  saveGlobalConfig((cfg) => {
+    const { ollamaAuth: _removed, ...rest } = cfg
+    return rest as typeof cfg
+  })
+}
+
 
 let lastCredentialsMtimeMs = 0
 
@@ -1647,6 +1704,23 @@ export function isCodexSubscriber(): boolean {
     return false
   }
   return !!getCodexOAuthTokens()?.accessToken
+}
+
+/**
+ * Whether Ollama is the active, usable provider.
+ *
+ * Same shape as {@link isCodexSubscriber}: the provider check keeps this false
+ * whenever some other account is active, and the stored-account check makes sure
+ * we do not route to a backend we have no base URL for — e.g. after a logout
+ * cleared it but something still names Ollama.
+ *
+ * @returns Whether Ollama is the active, usable provider
+ */
+export function isOllamaSubscriber(): boolean {
+  if (getAPIProvider() !== 'ollama') {
+    return false
+  }
+  return !!getOllamaAuth()?.baseUrl
 }
 
 /**

@@ -13,6 +13,7 @@ import {
   isAuthProviderId,
 } from '../config/authProviders.js'
 import { CODEX_PROVIDER_ID } from '../config/codex.js'
+import { OLLAMA_PROVIDER_ID } from '../config/ollama.js'
 import { getGlobalConfig, saveGlobalConfig } from './config.js'
 
 /**
@@ -31,6 +32,11 @@ export function hasCredentialsForAuthProvider(id: AuthProviderId): boolean {
     switch (id) {
       case CODEX_PROVIDER_ID:
         return !!config.codexOAuth?.accessToken
+      case OLLAMA_PROVIDER_ID:
+        // A local daemon ignores the token, so its presence proves nothing. A
+        // completed Ollama login writes both the base URL and the chosen model;
+        // require both so a half-written record isn't offered as an account.
+        return !!config.ollamaAuth?.baseUrl && !!config.ollamaAuth?.model
       default:
         // Anthropic tokens live in the keychain, not the config file, and
         // reading them is async and comparatively expensive. oauthAccount is
@@ -59,11 +65,16 @@ export function getActiveAuthProvider(): AuthProviderId {
       return config.activeAuthProvider
     }
     // Nothing recorded: infer from what is stored, so a config written before
-    // this field existed keeps working without a migration. Codex tokens can
-    // only be there because the user chose Codex at the login prompt.
-    return config.codexOAuth?.accessToken
-      ? CODEX_PROVIDER_ID
-      : DEFAULT_AUTH_PROVIDER
+    // this field existed keeps working without a migration. Codex tokens or an
+    // Ollama base URL can only be there because the user chose that provider at
+    // the login prompt.
+    if (config.codexOAuth?.accessToken) {
+      return CODEX_PROVIDER_ID
+    }
+    if (config.ollamaAuth?.baseUrl && config.ollamaAuth?.model) {
+      return OLLAMA_PROVIDER_ID
+    }
+    return DEFAULT_AUTH_PROVIDER
   } catch {
     return DEFAULT_AUTH_PROVIDER
   }
@@ -84,4 +95,59 @@ export function setActiveAuthProvider(id: AuthProviderId): void {
  */
 export function clearActiveAuthProvider(): void {
   saveGlobalConfig(config => ({ ...config, activeAuthProvider: undefined }))
+}
+
+/**
+ * The model this account last used, or undefined if it has none recorded.
+ *
+ * Ollama's model is authoritative in `ollamaAuth.model` (a login always writes
+ * it), so it is read from there; every other provider stores its choice in the
+ * `modelByAuthProvider` map. Returning undefined lets callers fall back to the
+ * provider's default rather than leaking another account's model.
+ *
+ * @param id - The provider whose stored model to read
+ * @returns The stored model id, or undefined
+ */
+export function getStoredModelForProvider(
+  id: AuthProviderId,
+): string | undefined {
+  try {
+    const config = getGlobalConfig()
+    if (id === OLLAMA_PROVIDER_ID) {
+      return config.ollamaAuth?.model || undefined
+    }
+    return config.modelByAuthProvider?.[id] || undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Remembers (or forgets) the model an account is using, so switching back to it
+ * later restores that model instead of whatever the previous account left in
+ * the session.
+ *
+ * Ollama's model is owned by `ollamaAuth.model` and is not touched here — it is
+ * set at login time and changing it means re-logging in — so this only writes
+ * the map for the other providers. Passing null clears the entry.
+ *
+ * @param id - The provider to record against
+ * @param model - The model id to store, or null to forget it
+ */
+export function setStoredModelForProvider(
+  id: AuthProviderId,
+  model: string | null,
+): void {
+  if (id === OLLAMA_PROVIDER_ID) {
+    return
+  }
+  saveGlobalConfig(config => {
+    const next = { ...(config.modelByAuthProvider ?? {}) }
+    if (model === null) {
+      delete next[id]
+    } else {
+      next[id] = model
+    }
+    return { ...config, modelByAuthProvider: next }
+  })
 }

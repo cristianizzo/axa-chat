@@ -12,8 +12,10 @@ import {
   getApiKeyFromApiKeyHelper,
   getClaudeAIOAuthTokens,
   getCodexOAuthTokens,
+  getOllamaAuth,
   isClaudeAISubscriber,
   isCodexSubscriber,
+  isOllamaSubscriber,
   refreshAndGetAwsCredentials,
   refreshGcpCredentialsIfNeeded,
 } from 'src/utils/auth.js'
@@ -36,6 +38,7 @@ import {
   isEnvTruthy,
 } from '../../utils/envUtils.js'
 import { createCodexFetch } from './codex-fetch-adapter.js'
+import { createOllamaFetch } from './ollama-fetch-adapter.js'
 
 /**
  * Environment variables for different client types:
@@ -314,6 +317,26 @@ export async function getAnthropicClient({
         apiKey: 'codex-placeholder', // SDK requires a key but the fetch adapter handles auth
         ...ARGS,
         fetch: codexFetch as unknown as typeof globalThis.fetch,
+        ...(isDebugToStdErr() && { logger: createStderrLogger() }),
+      }
+      return new Anthropic(clientConfig)
+    }
+  }
+
+  // ── Ollama provider (native Anthropic endpoint) ───────────────────
+  if (isOllamaSubscriber()) {
+    const ollama = getOllamaAuth()
+    if (ollama?.baseUrl) {
+      // A local daemon ignores the token, so any non-empty placeholder works;
+      // Ollama Cloud expects a real one. It is sent as `Authorization: Bearer`,
+      // which is what the Anthropic SDK's `authToken` produces.
+      const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
+        apiKey: null,
+        authToken: ollama.authToken || 'ollama',
+        baseURL: ollama.baseUrl,
+        ...ARGS,
+        // The daemon has no count_tokens endpoint; answer that one path locally.
+        fetch: createOllamaFetch(resolvedFetch) as unknown as typeof globalThis.fetch,
         ...(isDebugToStdErr() && { logger: createStderrLogger() }),
       }
       return new Anthropic(clientConfig)
