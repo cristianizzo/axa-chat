@@ -20,6 +20,7 @@
  */
 
 import { CODEX_PROVIDER_ID } from './codex.js'
+import { DEEPSEEK_PROVIDER_ID } from './deepseek.js'
 import { OLLAMA_PROVIDER_ID } from './ollama.js'
 
 /** Provider identifier for Anthropic's own API — the default. */
@@ -49,6 +50,12 @@ export const AUTH_PROVIDERS = [
     label: 'Ollama',
     description: 'Local or self-hosted models via Ollama',
     apiProvider: 'ollama',
+  },
+  {
+    id: DEEPSEEK_PROVIDER_ID,
+    label: 'DeepSeek',
+    description: 'DeepSeek R1 / V3 via API key (pay-per-token)',
+    apiProvider: 'deepseek',
   },
 ] as const satisfies readonly {
   id: string

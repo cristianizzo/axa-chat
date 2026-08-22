@@ -5,9 +5,10 @@ import {
 import type { ModelName } from './model.js'
 import type { APIProvider } from './providers.js'
 
-// Ollama serves native Anthropic model IDs, so it has no column of its own in
-// the builtin config table — getBuiltinModelStrings maps it onto firstParty.
-export type ModelConfig = Record<Exclude<APIProvider, 'ollama'>, ModelName>
+// Ollama and DeepSeek have no column in the builtin config table — they don't
+// use the Anthropic model ID rewriting scheme. getBuiltinModelStrings falls
+// back to firstParty for Ollama; DeepSeek uses its own catalog entirely.
+export type ModelConfig = Record<Exclude<APIProvider, 'ollama' | 'deepseek'>, ModelName>
 
 // @[MODEL LAUNCH]: Add a new CLAUDE_*_CONFIG constant here. Double check the correct model strings
 // here since the pattern may change.

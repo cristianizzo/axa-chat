@@ -4,11 +4,7 @@ import { getGlobalConfig } from './config.js'
 import { isEnvTruthy } from './envUtils.js'
 import { getCanonicalName } from './model/model.js'
 import { getModelCapability } from './model/modelCapabilities.js'
-import {
-  CODEX_CONTEXT_WINDOW,
-  CODEX_MAX_OUTPUT_TOKENS,
-  isCodexModelId,
-} from 'src/config/codex.js'
+import { getProviderModelCatalogForModel } from 'src/config/providerModels.js'
 import { getModelDescriptor } from './model/registry.js'
 
 // Model context window size (200k tokens for all models right now)
@@ -92,12 +88,12 @@ export function getContextWindowForModel(
     return 1_000_000
   }
 
-  // Codex models have no capability entry and no registry descriptor, so they
-  // would otherwise fall through to the 200k default and auto-compact ~25%
-  // early. Placed before the capability lookup because that data describes
-  // Anthropic endpoints and cannot speak for the Codex backend.
-  if (isCodexModelId(model)) {
-    return CODEX_CONTEXT_WINDOW
+  // Catalog providers (Codex, DeepSeek, …) have no Anthropic capability entry,
+  // so they would fall through to the 200k default and compact far too late.
+  // Use the context window declared in the provider catalog.
+  const catalog = getProviderModelCatalogForModel(model)
+  if (catalog?.contextWindow) {
+    return catalog.contextWindow
   }
 
   const cap = getModelCapability(model)
@@ -193,10 +189,11 @@ export function getModelMaxOutputTokens(model: string): {
 
   const m = getCanonicalName(model)
 
-  // Codex matches none of the Claude patterns below and would take the generic
-  // 32k/64k fallback, capping output well under what the backend allows.
-  if (isCodexModelId(m)) {
-    return { ...CODEX_MAX_OUTPUT_TOKENS }
+  // Catalog providers (Codex, DeepSeek, …) declare their exact output-token
+  // limits; without this they would take the Claude 32k/64k fallback.
+  const outputCatalog = getProviderModelCatalogForModel(m)
+  if (outputCatalog?.maxOutputTokens) {
+    return { ...outputCatalog.maxOutputTokens }
   }
 
   // Registry-first: 4.5+/5-series models declare their output-token limits.
