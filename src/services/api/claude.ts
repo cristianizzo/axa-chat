@@ -86,6 +86,7 @@ import {
   getCanonicalName,
   getDefaultOpusModel,
   getDefaultSonnetModel,
+  getRefusalFallbackModel,
   getSmallFastModel,
   isNonCustomOpusModel,
 } from '../../utils/model/model.js'
@@ -2283,23 +2284,26 @@ async function* queryModel(
               options.model,
             )
             if (refusalMessage) {
-              if (options.fallbackModel && options.model !== options.fallbackModel) {
-                // Same recovery Anthropic's own refusal message recommends:
-                // retry on a different model instead of surfacing a dead
-                // end. Mirrors the 529 FallbackTriggeredError contract —
-                // query.ts performs the actual model switch and retries the
-                // turn on fallbackModel.
-                throw new RefusalFallbackError(
-                  options.model,
-                  options.fallbackModel,
-                )
+              // A refusal (stop_reason: "refusal") is the model declining the
+              // request as a possible Usage Policy violation. Retry the turn on
+              // a more compliant model — internally, no --fallback-model flag
+              // required (opus refuses ~100% of the time on some prompts;
+              // sonnet does not). An explicit --fallback-model still wins.
+              // Only hand off to query.ts if the fallback is a DIFFERENT model.
+              const refusalFallback =
+                options.fallbackModel ?? getRefusalFallbackModel(options.model)
+              if (refusalFallback && refusalFallback !== options.model) {
+                // Mirrors the 529 FallbackTriggeredError contract — query.ts
+                // performs the actual model switch and retries the turn.
+                throw new RefusalFallbackError(options.model, refusalFallback)
               }
               if (options.refusalFallbackOriginalModel) {
-                // Already switched to fallbackModel after a refusal, and it
+                // Already switched to a fallback after a refusal, and it
                 // refused too — there's no further model to try. Say so
                 // plainly instead of repeating the generic "try /model"
                 // suggestion, which would just point back at the model that
-                // already declined.
+                // already declined. (is_error -> exit 1, so the
+                // both-models-refused case is detectable by exit code alone.)
                 yield createBothModelsRefusedMessage(
                   options.refusalFallbackOriginalModel,
                   options.model,
@@ -2634,12 +2638,14 @@ async function* queryModel(
         result.stop_reason,
         options.model,
       )
-      if (
-        nonStreamingRefusalMessage &&
-        options.fallbackModel &&
-        options.model !== options.fallbackModel
-      ) {
-        throw new RefusalFallbackError(options.model, options.fallbackModel)
+      if (nonStreamingRefusalMessage) {
+        // Internal opus->sonnet fallback (no --fallback-model flag required);
+        // an explicit --fallback-model still wins. Mirror the streaming path.
+        const refusalFallback =
+          options.fallbackModel ?? getRefusalFallbackModel(options.model)
+        if (refusalFallback && refusalFallback !== options.model) {
+          throw new RefusalFallbackError(options.model, refusalFallback)
+        }
       }
 
       const m: AssistantMessage = {
@@ -2762,12 +2768,14 @@ async function* queryModel(
           result.stop_reason,
           options.model,
         )
-        if (
-          nonStreamingRefusalMessage &&
-          options.fallbackModel &&
-          options.model !== options.fallbackModel
-        ) {
-          throw new RefusalFallbackError(options.model, options.fallbackModel)
+        if (nonStreamingRefusalMessage) {
+          // Internal opus->sonnet fallback (no --fallback-model flag required);
+          // an explicit --fallback-model still wins. Mirror the streaming path.
+          const refusalFallback =
+            options.fallbackModel ?? getRefusalFallbackModel(options.model)
+          if (refusalFallback && refusalFallback !== options.model) {
+            throw new RefusalFallbackError(options.model, refusalFallback)
+          }
         }
 
         const m: AssistantMessage = {

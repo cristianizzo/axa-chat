@@ -233,6 +233,20 @@ export function getDefaultSonnetModel(): ModelName {
   return getModelStrings().sonnet5
 }
 
+// When a model declines a request as a possible Usage Policy violation
+// (stop_reason: "refusal"), retry the turn on a more compliant model. This is
+// internal and needs no --fallback-model flag: Opus-family models refuse where
+// Sonnet complies (empirically ~100% of AUP refusals are Opus, 0 Sonnet), so
+// Opus falls back to Sonnet. Returns undefined when there is no distinct
+// fallback (non-Opus models), which lets the refusal surface terminally.
+export function getRefusalFallbackModel(model: ModelName): ModelName | undefined {
+  if (model.includes('opus')) {
+    const sonnet = getDefaultSonnetModel()
+    return sonnet === model ? undefined : sonnet
+  }
+  return undefined
+}
+
 // @[MODEL LAUNCH]: Update the default Haiku model (3P providers may lag so keep defaults unchanged).
 export function getDefaultHaikuModel(): ModelName {
   if (process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL) {
