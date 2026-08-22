@@ -177,7 +177,7 @@ between accounts you have already authenticated.
 
 - **Runtime**: [Bun](https://bun.sh) >= 1.3.11
 - **OS**: macOS or Linux (Windows via WSL)
-- **Tools**: `curl` and `tar` (git optional — see [Quick Install](#quick-install))
+- **Tools**: `curl`, plus `tar` when installing without git (see [Quick Install](#quick-install))
 - **Auth**: An API key or OAuth login for your chosen provider
 
 ```bash

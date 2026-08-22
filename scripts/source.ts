@@ -33,23 +33,57 @@ export type InstallMarker = {
   updatedAt: string
 }
 
-/** Read the tarball marker, or null when absent/unreadable/malformed. */
+const COMMIT_PATTERN = /^[0-9a-f]{40}$/
+// `owner/name` with the characters GitHub actually allows. Enforced because the
+// value is interpolated into API and download URLs, where a stray `/` or `..`
+// would silently redirect the fetch somewhere else.
+const REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/
+// Refs go through encodeURIComponent, so this only needs to exclude the shapes
+// git itself rejects.
+const REF_PATTERN = /^[^\s~^:?*[\\]+$/
+
+/**
+ * Read the tarball marker, or null when absent, unreadable or malformed.
+ *
+ * Validation is strict because `scripts/update.ts` uses a non-null result as
+ * the gate for unpacking a tarball over the directory: a file that is not
+ * recognisably one of our markers must read as absent, so the updater refuses
+ * rather than extracting somewhere it should not.
+ */
 export function readInstallMarker(dir: string): InstallMarker | null {
-  let parsed: Partial<InstallMarker>
+  let parsed: unknown
   try {
-    parsed = JSON.parse(readFileSync(join(dir, INSTALL_MARKER), 'utf8')) as Partial<InstallMarker>
+    parsed = JSON.parse(readFileSync(join(dir, INSTALL_MARKER), 'utf8'))
   } catch {
     return null
   }
-  // The commit is the only field with no sensible default — without it the
-  // marker cannot answer "what revision is this?", so treat it as absent.
-  if (typeof parsed.commit !== 'string' || !parsed.commit) return null
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const { source, repo, ref, commit, updatedAt } = parsed as Record<string, unknown>
+
+  if (source !== undefined && source !== 'tarball') return null
+  if (typeof commit !== 'string' || !COMMIT_PATTERN.test(commit)) return null
+
+  // `repo` and `ref` may be omitted (the defaults are what the installer
+  // writes), but a present-and-invalid value is rejected rather than silently
+  // replaced — it means the file is not one of ours.
+  let repoSlug = DEFAULT_REPO_SLUG
+  if (repo !== undefined) {
+    if (typeof repo !== 'string' || !REPO_PATTERN.test(repo)) return null
+    repoSlug = repo
+  }
+  let refName = DEFAULT_REF
+  if (ref !== undefined) {
+    if (typeof ref !== 'string' || !REF_PATTERN.test(ref)) return null
+    refName = ref
+  }
+
   return {
     source: 'tarball',
-    repo: parsed.repo || DEFAULT_REPO_SLUG,
-    ref: parsed.ref || DEFAULT_REF,
-    commit: parsed.commit,
-    updatedAt: parsed.updatedAt || '',
+    repo: repoSlug,
+    ref: refName,
+    commit,
+    // Cosmetic only, so a bad value degrades to empty instead of rejecting.
+    updatedAt: typeof updatedAt === 'string' ? updatedAt : '',
   }
 }
 

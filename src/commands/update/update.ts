@@ -93,7 +93,9 @@ function markerSha(repoDir: string): string {
     const { commit } = JSON.parse(
       readFileSync(join(repoDir, INSTALL_MARKER), 'utf8'),
     ) as { commit?: string }
-    return typeof commit === 'string' ? commit.slice(0, 7) : ''
+    return typeof commit === 'string' && /^[0-9a-f]{40}$/.test(commit)
+      ? commit.slice(0, 7)
+      : ''
   } catch {
     return ''
   }

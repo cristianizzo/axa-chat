@@ -70,9 +70,8 @@ check_git() {
   printf "${DIM}      Linux:  sudo apt install git  (or your distro's equivalent)${RESET}\n"
 }
 
-check_download_tools() {
+check_curl() {
   command -v curl &>/dev/null || fail "curl is required but not installed."
-  command -v tar  &>/dev/null || fail "tar is required but not installed."
 }
 
 # Compare semver: returns 0 if $1 >= $2
@@ -132,6 +131,10 @@ EOF
 # marker records what was actually installed.
 fetch_tarball() {
   local sha tmp
+  # Checked here rather than up front: a git install never unpacks a tarball,
+  # so requiring tar globally would fail installs that do not need it.
+  command -v tar &>/dev/null || fail "tar is required to install without git, but is not installed."
+
   sha="$(curl -fsSL -H 'Accept: application/vnd.github.sha' \
     "https://api.github.com/repos/${REPO_SLUG}/commits/${BRANCH}" 2>/dev/null || true)"
   # Matched with a bash built-in rather than grep, to keep the git-less path
@@ -239,7 +242,7 @@ info "Starting installation..."
 echo ""
 
 check_os
-check_download_tools
+check_curl
 check_git
 check_bun
 echo ""
