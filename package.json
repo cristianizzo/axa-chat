@@ -18,7 +18,7 @@
     "build:dev:full": "bun run ./scripts/build.ts --dev --feature-set=dev-full",
     "compile": "bun run ./scripts/build.ts --compile",
     "dev": "bun run ./src/entrypoints/cli.tsx",
-    "update": "git pull && bun install && bun run build:dev"
+    "update": "bun run ./scripts/update.ts && bun install && bun run build:dev"
   },
   "dependencies": {
     "@alcalzone/ansi-tokenize": "^0.3.0",
