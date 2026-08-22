@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { delimiter as pathDelimiter, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -9,16 +9,29 @@ import { isInBundledMode } from '../../utils/bundledMode.js'
 const pexec = promisify(execFile)
 
 /**
- * Locate the axa-chat source checkout to update. In a compiled binary,
- * process.execPath is the axa binary, which lives at the repo root next to
- * package.json / .git (true for both the dev checkout and installer-based
- * installs under ~/axa-chat).
+ * Marker file written by installs made without git, which are refreshed from a
+ * source tarball instead of a checkout. Defined in `scripts/source.ts`; only
+ * the name and the `commit` field are needed here, and duplicating those is
+ * cheaper than pulling the build scripts into the CLI bundle.
+ */
+const INSTALL_MARKER = '.axa-install.json'
+
+/**
+ * Locate the axa-chat source tree to update. In a compiled binary,
+ * process.execPath is the axa binary, which lives at the source root next to
+ * package.json (true for the dev checkout and for installer-based installs
+ * under ~/axa-chat, whether they were cloned with git or unpacked from a
+ * tarball).
  */
 function isRepoRoot(dir: string): boolean {
-  return existsSync(join(dir, '.git')) && existsSync(join(dir, 'package.json'))
+  if (!existsSync(join(dir, 'package.json'))) return false
+  // The marker has to parse, not merely exist: an empty or malformed file of
+  // that name would otherwise nominate its directory, and `bun run update`
+  // would then run there.
+  return existsSync(join(dir, '.git')) || markerSha(dir) !== ''
 }
 
-/** Walk up from `start` until a repo root (.git + package.json) or fs root. */
+/** Walk up from `start` until a source root or fs root. */
 function walkUpToRepoRoot(start: string): string | null {
   let dir = start
   while (dir) {
@@ -77,13 +90,39 @@ async function gitLine(repoDir: string, args: string[]): Promise<string> {
   }
 }
 
+/**
+ * Short SHA of the recorded tarball revision, or '' when the marker is absent
+ * or is not one of ours. Mirrors the validation in `scripts/source.ts`: both
+ * writers always set `source`, so requiring it keeps an unrelated JSON file
+ * that happens to carry a `commit` from nominating its directory.
+ */
+function markerSha(repoDir: string): string {
+  try {
+    const { source, commit } = JSON.parse(
+      readFileSync(join(repoDir, INSTALL_MARKER), 'utf8'),
+    ) as { source?: unknown; commit?: unknown }
+    return source === 'tarball' &&
+      typeof commit === 'string' &&
+      /^[0-9a-f]{40}$/.test(commit)
+      ? commit.slice(0, 7)
+      : ''
+  } catch {
+    return ''
+  }
+}
+
+/** Current revision, from git when there is a checkout and the marker otherwise. */
+async function currentRevision(repoDir: string): Promise<string> {
+  return (await gitLine(repoDir, ['rev-parse', '--short', 'HEAD'])) || markerSha(repoDir)
+}
+
 export const call: LocalCommandCall = async () => {
   const repoDir = findRepoDir()
   if (!repoDir) {
     return {
       type: 'text',
       value:
-        'Could not find the axa-chat source checkout to update. The running binary should sit in a git checkout (with .git + package.json). If you installed elsewhere, run `bun run update` in that directory.',
+        'Could not find the axa-chat source tree to update. The running binary should sit at the source root, next to package.json and either .git or .axa-install.json. If you installed elsewhere, run `bun run update` in that directory.',
     }
   }
 
@@ -94,7 +133,7 @@ export const call: LocalCommandCall = async () => {
     return { type: 'text', value: (e as Error).message }
   }
 
-  const before = await gitLine(repoDir, ['rev-parse', '--short', 'HEAD'])
+  const before = await currentRevision(repoDir)
 
   // The `update` script (and build:dev) call `bun` by bare name in a subshell,
   // so bun's own directory must be on the child's PATH — axa's inherited PATH
@@ -143,15 +182,17 @@ export const call: LocalCommandCall = async () => {
       .catch(() => false)
   }
 
-  const after = await gitLine(repoDir, ['rev-parse', '--short', 'HEAD'])
+  const after = await currentRevision(repoDir)
+  // Only a checkout can show the commit subject; tarball installs have no log.
   const head = await gitLine(repoDir, ['log', '-1', '--oneline'])
   const changed = before !== '' && after !== '' && before !== after
   const trimNote = trimmed ? ', and trimmed node_modules' : ''
+  const headNote = head ? `\n${head}` : ''
 
   return {
     type: 'text',
     value: changed
-      ? `Updated ${before} → ${after}, rebuilt${trimNote}.\n${head}\nRestart axa to run the new build.`
+      ? `Updated ${before} → ${after}, rebuilt${trimNote}.${headNote}\nRestart axa to run the new build.`
       : `Already on the latest commit (${after || 'unknown'}); rebuilt${trimNote}.\nRestart axa to be safe.`,
   }
 }

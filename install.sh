@@ -12,9 +12,13 @@ BOLD='\033[1m'
 DIM='\033[2m'
 RESET='\033[0m'
 
-REPO="https://github.com/cristianizzo/axa-chat.git"
+REPO_SLUG="cristianizzo/axa-chat"
+REPO="https://github.com/${REPO_SLUG}.git"
+BRANCH="main"
 INSTALL_DIR="$HOME/axa-chat"
 BUN_MIN_VERSION="1.3.11"
+# Set by check_git; git is preferred but optional (see fetch_source).
+HAS_GIT=0
 
 info()  { printf "${CYAN}[*]${RESET} %s\n" "$*"; }
 ok()    { printf "${GREEN}[+]${RESET} %s\n" "$*"; }
@@ -50,13 +54,24 @@ check_os() {
   ok "OS: $(uname -s) $(uname -m)"
 }
 
+# git gives incremental updates and keeps local commits, so it is preferred —
+# but it cannot be assumed present (locked-down machines, minimal containers),
+# and requiring it would block installation entirely. Without it we fall back to
+# source tarballs, which need only curl and tar.
 check_git() {
-  if ! command -v git &>/dev/null; then
-    fail "git is not installed. Install it first:
-    macOS:  xcode-select --install
-    Linux:  sudo apt install git  (or your distro's equivalent)"
+  if command -v git &>/dev/null; then
+    HAS_GIT=1
+    ok "git: $(git --version | head -1)"
+    return
   fi
-  ok "git: $(git --version | head -1)"
+  warn "git not found — installing from a source tarball instead."
+  printf "${DIM}    Updates will re-download tarballs. For incremental updates, install git:${RESET}\n"
+  printf "${DIM}      macOS:  xcode-select --install${RESET}\n"
+  printf "${DIM}      Linux:  sudo apt install git  (or your distro's equivalent)${RESET}\n"
+}
+
+check_curl() {
+  command -v curl &>/dev/null || fail "curl is required but not installed."
 }
 
 # Compare semver: returns 0 if $1 >= $2
@@ -96,18 +111,113 @@ install_bun() {
 # Clone & build
 # -------------------------------------------------------------------
 
-clone_repo() {
-  if [ -d "$INSTALL_DIR" ]; then
+# Record the revision a tarball tree came from. Without .git this marker is the
+# only provenance the updater and the build's version stamp have to go on — it
+# must match the shape read by scripts/source.ts.
+write_install_marker() {
+  cat > "$INSTALL_DIR/.axa-install.json" <<EOF
+{
+  "source": "tarball",
+  "repo": "${REPO_SLUG}",
+  "ref": "${BRANCH}",
+  "commit": "$1",
+  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+}
+
+# True when $1 holds no entries at all, dotfiles included. Written with globs
+# rather than `ls -A` so the git-less path stays free of extra tooling: an
+# unmatched glob stays literal, and `-e` on a literal is false.
+dir_is_empty() {
+  local entry
+  for entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+    if [ -e "$entry" ]; then return 1; fi
+  done
+  return 0
+}
+
+# Whether $1 holds an axa-chat source tree. A package.json alone is far too
+# common a thing to find in a directory, so accept either our own marker or a
+# pair of files specific to this project.
+looks_like_axa_source() {
+  if [ -f "$1/.axa-install.json" ]; then return 0; fi
+  if [ -f "$1/package.json" ] && [ -f "$1/scripts/build.ts" ] &&
+     [ -f "$1/src/entrypoints/cli.tsx" ]; then
+    return 0
+  fi
+  return 1
+}
+
+# Download the branch head as a tarball and unpack it over $INSTALL_DIR.
+# Resolve the SHA first so the download is pinned to an exact commit and the
+# marker records what was actually installed.
+fetch_tarball() {
+  local sha tmp
+  # Checked here rather than up front: a git install never unpacks a tarball,
+  # so requiring tar globally would fail installs that do not need it.
+  command -v tar &>/dev/null || fail "tar is required to install without git, but is not installed."
+
+  sha="$(curl -fsSL -H 'Accept: application/vnd.github.sha' \
+    "https://api.github.com/repos/${REPO_SLUG}/commits/${BRANCH}" 2>/dev/null || true)"
+  # Matched with a bash built-in rather than grep, to keep the git-less path
+  # dependent on nothing beyond curl and tar.
+  if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+    fail "Could not resolve the latest ${BRANCH} commit from GitHub.
+    Check your network connection and try again."
+  fi
+
+  info "Downloading source tarball (${sha:0:8})..."
+  mkdir -p "$INSTALL_DIR"
+  # Download to a temp file first so a failed transfer cannot leave a partly
+  # extracted source tree behind.
+  # Explicit template: portable across GNU and BSD mktemp.
+  tmp="$(mktemp "${TMPDIR:-/tmp}/axa-src.XXXXXX")"
+  if ! curl -fsSL "https://codeload.github.com/${REPO_SLUG}/tar.gz/${sha}" -o "$tmp"; then
+    rm -f "$tmp"
+    fail "Failed to download the source tarball."
+  fi
+  # --strip-components=1 drops GitHub's <repo>-<sha>/ wrapper directory.
+  if ! tar -xzf "$tmp" --strip-components=1 -C "$INSTALL_DIR"; then
+    rm -f "$tmp"
+    fail "Failed to extract the source tarball."
+  fi
+  rm -f "$tmp"
+
+  write_install_marker "$sha"
+}
+
+fetch_source() {
+  if [ "$HAS_GIT" = "1" ] && [ -d "$INSTALL_DIR/.git" ]; then
     warn "$INSTALL_DIR already exists"
-    if [ -d "$INSTALL_DIR/.git" ]; then
-      info "Pulling latest changes..."
-      git -C "$INSTALL_DIR" pull --ff-only origin main 2>/dev/null || {
-        warn "Pull failed, continuing with existing copy"
-      }
+    # Earlier versions of this installer cloned with --depth 1; deepen so
+    # ahead/behind comparisons and rebases work on later updates.
+    if [ "$(git -C "$INSTALL_DIR" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+      info "Deepening shallow clone..."
+      git -C "$INSTALL_DIR" fetch --unshallow 2>/dev/null || warn "Could not fetch full history"
     fi
-  else
+    info "Pulling latest changes..."
+    git -C "$INSTALL_DIR" pull --ff-only origin "$BRANCH" 2>/dev/null || {
+      warn "Pull failed, continuing with existing copy"
+    }
+  elif [ "$HAS_GIT" = "1" ] && [ ! -d "$INSTALL_DIR" ]; then
+    # Full clone, not --depth 1: a shallow repo has no merge base with upstream,
+    # which breaks the divergence handling in scripts/update.ts.
     info "Cloning repository..."
-    git clone --depth 1 "$REPO" "$INSTALL_DIR"
+    git clone "$REPO" "$INSTALL_DIR"
+  else
+    # No git, or a pre-existing directory that is not a checkout.
+    if [ -d "$INSTALL_DIR" ] && ! dir_is_empty "$INSTALL_DIR"; then
+      # Unpacking over a directory we do not recognise could bury someone
+      # else's files, and unlike the git path there is no clone step to refuse
+      # first — so require a sign this is an axa-chat tree before writing.
+      if ! looks_like_axa_source "$INSTALL_DIR"; then
+        fail "$INSTALL_DIR already exists but does not look like an axa-chat install.
+    Move or remove it, then run the installer again."
+      fi
+      warn "$INSTALL_DIR already exists — refreshing it from the tarball"
+    fi
+    fetch_tarball
   fi
   ok "Source: $INSTALL_DIR"
 }
@@ -162,11 +272,12 @@ info "Starting installation..."
 echo ""
 
 check_os
+check_curl
 check_git
 check_bun
 echo ""
 
-clone_repo
+fetch_source
 install_deps
 build_binary
 link_binary

@@ -25,7 +25,9 @@
 curl -fsSL https://raw.githubusercontent.com/cristianizzo/axa-chat/main/install.sh | bash
 ```
 
-Checks your system, installs Bun if needed, clones the repo, builds with all experimental features enabled, and symlinks `axa` on your PATH.
+Checks your system, installs Bun if needed, fetches the source, builds with all experimental features enabled, and symlinks `axa` on your PATH.
+
+Git is optional. With git you get a normal checkout and incremental updates; without it the source is downloaded as a tarball and `/update` re-downloads it (curl and tar are enough).
 
 Then run `axa` and use the `/login` command to authenticate with your preferred model provider.
 
@@ -175,6 +177,7 @@ between accounts you have already authenticated.
 
 - **Runtime**: [Bun](https://bun.sh) >= 1.3.11
 - **OS**: macOS or Linux (Windows via WSL)
+- **Tools**: `curl`, plus `tar` when installing without git (see [Quick Install](#quick-install))
 - **Auth**: An API key or OAuth login for your chosen provider
 
 ```bash

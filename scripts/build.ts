@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync } from 'fs'
 import { dirname } from 'path'
+import { findInstallRoot } from './source.js'
 
 const pkg = await Bun.file(new URL('../package.json', import.meta.url)).json() as {
   name: string
@@ -64,19 +65,34 @@ function runCommand(cmd: string[]): string | null {
   return new TextDecoder().decode(proc.stdout).trim() || null
 }
 
+// Tarball installs have no git to ask for the revision, so fall back to the
+// commit the installer/updater recorded (see scripts/source.ts). Without this
+// every non-git build would be stamped "shaunknown". The marker is searched for
+// upwards, since git also answers from any depth and a build run from a
+// subdirectory should stamp the same version either way.
+function getSourceSha(): string | null {
+  return (
+    runCommand(['git', 'rev-parse', '--short=8', 'HEAD']) ??
+    findInstallRoot(process.cwd())?.marker.commit.slice(0, 8) ??
+    null
+  )
+}
+
 function getDevVersion(baseVersion: string): string {
   const timestamp = new Date().toISOString()
   const date = timestamp.slice(0, 10).replaceAll('-', '')
   const time = timestamp.slice(11, 19).replaceAll(':', '')
-  const sha = runCommand(['git', 'rev-parse', '--short=8', 'HEAD']) ?? 'unknown'
+  const sha = getSourceSha() ?? 'unknown'
   return `${baseVersion}-dev.${date}.t${time}.sha${sha}`
 }
 
 function getVersionChangelog(): string {
-  return (
-    runCommand(['git', 'log', '--format=%h %s', '-20']) ??
-    'Local development build'
-  )
+  const log = runCommand(['git', 'log', '--format=%h %s', '-20'])
+  if (log) return log
+  // No git history available (tarball install): the recorded commit is the only
+  // provenance there is.
+  const sha = getSourceSha()
+  return sha ? `Installed from source tarball at ${sha}` : 'Local development build'
 }
 
 const defaultFeatures = ['VOICE_MODE']

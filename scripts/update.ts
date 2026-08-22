@@ -1,7 +1,19 @@
 import { execFileSync } from 'node:child_process'
+import {
+  findInstallRoot,
+  INSTALL_MARKER,
+  type InstallMarker,
+  resolveLatestCommit,
+  syncFromTarball,
+} from './source.js'
 
 /**
  * Self-update helper for the `update` script.
+ *
+ * Installs without git have no checkout to pull from, so those trees are
+ * refreshed from a GitHub source tarball instead (see `scripts/source.ts`);
+ * they are recognised by the marker file the installer leaves behind.
+ * Everything below applies to the git path.
  *
  * `git pull` refuses to proceed on a divergent branch ("Need to specify how to
  * reconcile divergent branches", exit 128) and a plain `--rebase` can leave the
@@ -17,7 +29,10 @@ import { execFileSync } from 'node:child_process'
  *     tree and branch are never left in a broken state.
  *
  * Exit behavior: returns 0 on the skip, fast-forward, and successful rebase
- * paths; sets exitCode 1 if a rebase failed and was aborted. Note a
+ * paths; sets exitCode 1 if a rebase failed and was aborted, if a tarball
+ * refresh could not complete, or if the directory is neither kind of install
+ * (so the caller stops instead of rebuilding a stale tree and reporting
+ * success). Note a
  * hard failure (e.g. `git fetch` failing, or being outside a git repo where the
  * early checks throw) will still surface an error to the `update` script, which
  * then stops rather than proceeding to `bun install`.
@@ -37,7 +52,74 @@ function resolveOrNull(args: string[]): string | null {
   return v ? v : null
 }
 
-function main(): void {
+/**
+ * Refresh a tarball install in place. Skips the download when the recorded
+ * commit already matches upstream, so a no-op update costs one API call.
+ */
+async function updateFromTarball(dir: string, marker: InstallMarker): Promise<void> {
+  const { repo, ref } = marker
+
+  const latest = await resolveLatestCommit(repo, ref)
+  if (marker.commit === latest) {
+    console.log(`Already on the latest ${repo}@${ref} (${latest.slice(0, 8)}).`)
+    return
+  }
+
+  console.log(
+    `Updating source from ${repo}@${ref} (${marker.commit.slice(0, 8)} → ${latest.slice(0, 8)})…`,
+  )
+  await syncFromTarball(dir, repo, ref, latest)
+}
+
+async function main(): Promise<void> {
+  const cwd = process.cwd()
+
+  // The marker is looked for before git, and identifies a directory as a
+  // tarball install. Requiring it is what makes the extract below safe: it is
+  // the only positive proof of a source root we own, so a stray invocation from
+  // an unrelated directory errors out instead of unpacking a tarball over
+  // whatever happens to be there.
+  const install = findInstallRoot(cwd)
+  if (install) {
+    if (install.dir !== cwd) console.log(`Updating the install at ${install.dir}…`)
+    try {
+      await updateFromTarball(install.dir, install.marker)
+    } catch (e) {
+      // Stop the `update` script rather than rebuilding a stale tree: the user
+      // asked to update, and silently building the old source would look like
+      // the update worked.
+      console.error(`Could not refresh the source tree: ${(e as Error).message}`)
+      process.exitCode = 1
+    }
+    return
+  }
+
+  // No marker, so this can only be a checkout. Distinguish "git is missing"
+  // from "this is not a checkout": without git the rev-parse below fails the
+  // same way an unrelated directory does, and blaming the directory would send
+  // someone looking in entirely the wrong place.
+  if (!git(['--version'], { allowFailure: true })) {
+    console.error(
+      `git is not installed, and ${cwd} is not a tarball install either (no ${INSTALL_MARKER} ` +
+        'here or in any parent) — cannot update. Install git, or reinstall with install.sh to ' +
+        'get a tarball install that updates without it.',
+    )
+    process.exitCode = 1
+    return
+  }
+
+  // Ask git rather than looking for a `.git` entry: git commands work from
+  // anywhere inside a work tree, but `.git` only exists at its root, so a
+  // directory test would misread a subdirectory as "not a checkout".
+  if (resolveOrNull(['rev-parse', '--is-inside-work-tree']) !== 'true') {
+    console.error(
+      `${cwd} is neither a git checkout nor a tarball install (no .git, no ${INSTALL_MARKER}) — ` +
+        'cannot update. Run this from your axa-chat source directory.',
+    )
+    process.exitCode = 1
+    return
+  }
+
   // `rev-parse --abbrev-ref HEAD` returns "HEAD" when detached (not empty).
   // In that unusual state there's no branch whose upstream we can reconcile,
   // so skip the pull.
@@ -45,6 +127,15 @@ function main(): void {
   if (!branch || branch === 'HEAD') {
     console.error('Not on a branch (detached HEAD) — skipping pull; can still reinstall + rebuild.')
     return
+  }
+
+  // Older installers cloned with `--depth 1`. A shallow clone has no merge base
+  // with upstream, so the ahead/behind counts below are meaningless and a rebase
+  // cannot replay local commits — deepen once and the repo behaves normally from
+  // then on. Best-effort: a non-shallow repo makes this a no-op.
+  if (git(['rev-parse', '--is-shallow-repository'], { allowFailure: true }) === 'true') {
+    console.log('Shallow clone detected — fetching full history…')
+    git(['fetch', '--unshallow'], { allowFailure: true })
   }
 
   git(['fetch'])
@@ -113,4 +204,4 @@ function main(): void {
   }
 }
 
-main()
+await main()
