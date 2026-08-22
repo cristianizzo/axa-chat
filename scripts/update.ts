@@ -8,11 +8,13 @@ import { execFileSync } from 'node:child_process'
  * repo half-rebased on a conflict. This script fetches upstream and reconciles
  * explicitly:
  *
- *   - fast-forward when the local branch is behind upstream (the normal case),
+ *   - skip when there is nothing new upstream (local up to date or ahead-only —
+ *     rebasing an ahead-only branch would just churn commit SHAs),
+ *   - fast-forward when the local branch is behind upstream and has no local
+ *     commits of its own (the normal case),
  *   - rebase with --autostash when local has diverged, so local commits survive
  *     on top of upstream — aborting cleanly on conflict so the working tree and
- *     branch are never left in a broken state,
- *   - skip the pull entirely when already up to date.
+ *     branch are never left in a broken state.
  *
  * Either way it returns 0 (fetch never errors out the update) and hands off to
  * `bun install` and `bun run build:dev` in the `update` script.
@@ -33,7 +35,9 @@ function resolveOrNull(args: string[]): string | null {
 }
 
 function main(): void {
-  // Current branch (empty when detached HEAD). Fall back to a bare fetch.
+  // `rev-parse --abbrev-ref HEAD` returns "HEAD" when detached (not empty).
+  // In that unusual state there's no branch whose upstream we can reconcile,
+  // so skip the pull.
   const branch = resolveOrNull(['rev-parse', '--abbrev-ref', 'HEAD'])
   if (!branch || branch === 'HEAD') {
     console.error('Not on a branch (detached HEAD) — skipping pull; can still reinstall + rebuild.')
@@ -49,17 +53,22 @@ function main(): void {
     return
   }
 
-  const behindStr = git(['rev-list', '--count', `${upstream}..HEAD`], { allowFailure: true })
-  const aheadStr = git(['rev-list', '--count', `HEAD..${upstream}`], { allowFailure: true })
-  const behind = Number(behindStr || 0)
+  // `upstream..HEAD` counts commits on HEAD not on upstream = how far ahead.
+  // `HEAD..upstream` counts commits on upstream not on HEAD = how far behind.
+  const aheadStr = git(['rev-list', '--count', `${upstream}..HEAD`], { allowFailure: true })
+  const behindStr = git(['rev-list', '--count', `HEAD..${upstream}`], { allowFailure: true })
   const ahead = Number(aheadStr || 0)
+  const behind = Number(behindStr || 0)
 
-  if (ahead === 0 && behind === 0) {
+  if (behind === 0) {
+    // Nothing new upstream: either already up to date or ahead-only. Rebasing
+    // an ahead-only branch would rewrite local commit SHAs unnecessarily, so
+    // leave it alone.
     console.log(`Already on the latest ${upstream}.`)
     return
   }
 
-  if (behind === 0) {
+  if (ahead === 0) {
     // Only behind upstream after the fetch — fast-forward ahead.
     console.log(`Fast-forwarding ${branch} to ${upstream}…`)
     git(['merge', '--ff-only', upstream])
@@ -76,7 +85,14 @@ function main(): void {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
   } catch (e) {
-    git(['rebase', '--abort'])
+    // Best-effort abort: if the rebase never created a state (e.g. refused
+    // before starting), there is nothing to abort — ignore any failure here so
+    // the conflict guidance below is always printed.
+    try {
+      git(['rebase', '--abort'])
+    } catch {
+      /* nothing to abort */
+    }
     const msg =
       (e as { stderr?: string }).stderr?.toString() || (e as { message?: string }).message || ''
     console.error(
