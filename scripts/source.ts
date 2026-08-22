@@ -34,13 +34,21 @@ export type InstallMarker = {
 }
 
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/
-// `owner/name` with the characters GitHub actually allows. Enforced because the
-// value is interpolated into API and download URLs, where a stray `/` or `..`
-// would silently redirect the fetch somewhere else.
+// `owner/name`, and a branch or tag name. Both are interpolated into GitHub
+// URLs, so they are matched against an allowlist of the characters GitHub
+// actually permits rather than a denylist of bad ones.
 const REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/
-// Refs go through encodeURIComponent, so this only needs to exclude the shapes
-// git itself rejects.
-const REF_PATTERN = /^[^\s~^:?*[\\]+$/
+const REF_PATTERN = /^[\w./-]+$/
+
+/**
+ * Whether a marker value is safe to interpolate into a URL path. `..` is
+ * excluded separately because the allowlists above admit dots: a segment of
+ * `..` would walk up the URL path and point the fetch at a different endpoint.
+ * Git forbids `..` in ref names anyway.
+ */
+function isSafeUrlValue(value: string, pattern: RegExp): boolean {
+  return pattern.test(value) && !value.includes('..')
+}
 
 /**
  * Read the tarball marker, or null when absent, unreadable or malformed.
@@ -60,7 +68,10 @@ export function readInstallMarker(dir: string): InstallMarker | null {
   if (typeof parsed !== 'object' || parsed === null) return null
   const { source, repo, ref, commit, updatedAt } = parsed as Record<string, unknown>
 
-  if (source !== undefined && source !== 'tarball') return null
+  // `source` is required, not merely "not contradicted": every marker we write
+  // carries it, so demanding it keeps an unrelated JSON file that happens to
+  // hold a 40-hex `commit` from passing as one of ours.
+  if (source !== 'tarball') return null
   if (typeof commit !== 'string' || !COMMIT_PATTERN.test(commit)) return null
 
   // `repo` and `ref` may be omitted (the defaults are what the installer
@@ -68,12 +79,12 @@ export function readInstallMarker(dir: string): InstallMarker | null {
   // replaced — it means the file is not one of ours.
   let repoSlug = DEFAULT_REPO_SLUG
   if (repo !== undefined) {
-    if (typeof repo !== 'string' || !REPO_PATTERN.test(repo)) return null
+    if (typeof repo !== 'string' || !isSafeUrlValue(repo, REPO_PATTERN)) return null
     repoSlug = repo
   }
   let refName = DEFAULT_REF
   if (ref !== undefined) {
-    if (typeof ref !== 'string' || !REF_PATTERN.test(ref)) return null
+    if (typeof ref !== 'string' || !isSafeUrlValue(ref, REF_PATTERN)) return null
     refName = ref
   }
 
