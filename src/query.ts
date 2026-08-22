@@ -1068,7 +1068,6 @@ async function* queryLoop(
 
             yield createAssistantAPIErrorMessage({
               content: `Claude Code is unable to respond to this request — ${renderModelName(innerError.originalModel)} declined it as a possible Usage Policy violation and no further fallback is available. Manual review required.`,
-              error: 'invalid_request',
             })
             return { reason: 'refusal' }
           }
