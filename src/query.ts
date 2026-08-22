@@ -1049,10 +1049,23 @@ async function* queryLoop(
             // unreachable — claude.ts yields createBothModelsRefusedMessage /
             // the refusal instead of throwing when the fallback equals the
             // current model). Surface as a terminal API-error (is_error -> exit 1).
+            //
+            // Tear the refused attempt down first, as the retry branch above
+            // does: tombstone whatever the refusal already streamed so it isn't
+            // shown next to the terminal error, close out any open tool_use, and
+            // drop pending results so nothing orphaned reaches a resumed session.
+            for (const msg of assistantMessages) {
+              yield { type: 'tombstone' as const, message: msg }
+            }
             yield* yieldMissingToolResultBlocks(
               assistantMessages,
               'Model refusal — no fallback remaining',
             )
+            assistantMessages.length = 0
+            toolResults.length = 0
+            toolUseBlocks.length = 0
+            streamingToolExecutor?.discard()
+
             yield createAssistantAPIErrorMessage({
               content: `Claude Code is unable to respond to this request — ${renderModelName(innerError.originalModel)} declined it as a possible Usage Policy violation and no further fallback is available. Manual review required.`,
               error: 'invalid_request',

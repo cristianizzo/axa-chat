@@ -233,6 +233,16 @@ export function getDefaultSonnetModel(): ModelName {
   return getModelStrings().sonnet5
 }
 
+// Whether two model IDs name the same model. The same model can be spelled
+// several ways (first-party ID, provider-prefixed ID, a Bedrock ARN supplied
+// via modelOverrides), so a raw string comparison reports "different" for what
+// is really one model — which would make a fallback retry the model that just
+// failed. Canonical names are version-specific, so Opus 4.6 and Opus 4.8 stay
+// distinct.
+export function isSameModel(a: ModelName, b: ModelName): boolean {
+  return getCanonicalName(a) === getCanonicalName(b)
+}
+
 // When a model declines a request as a possible Usage Policy violation
 // (stop_reason: "refusal"), retry the turn on a more compliant model. This is
 // internal and needs no --fallback-model flag: Opus-family models refuse where
@@ -242,7 +252,7 @@ export function getDefaultSonnetModel(): ModelName {
 export function getRefusalFallbackModel(model: ModelName): ModelName | undefined {
   if (model.includes('opus')) {
     const sonnet = getDefaultSonnetModel()
-    return sonnet === model ? undefined : sonnet
+    return isSameModel(sonnet, model) ? undefined : sonnet
   }
   return undefined
 }

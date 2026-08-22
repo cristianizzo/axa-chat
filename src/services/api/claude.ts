@@ -89,6 +89,7 @@ import {
   getRefusalFallbackModel,
   getSmallFastModel,
   isNonCustomOpusModel,
+  isSameModel,
 } from '../../utils/model/model.js'
 import {
   asSystemPrompt,
@@ -2292,7 +2293,7 @@ async function* queryModel(
               // Only hand off to query.ts if the fallback is a DIFFERENT model.
               const refusalFallback =
                 options.fallbackModel ?? getRefusalFallbackModel(options.model)
-              if (refusalFallback && refusalFallback !== options.model) {
+              if (refusalFallback && !isSameModel(refusalFallback, options.model)) {
                 // Mirrors the 529 FallbackTriggeredError contract — query.ts
                 // performs the actual model switch and retries the turn.
                 throw new RefusalFallbackError(options.model, refusalFallback)
@@ -2643,7 +2644,7 @@ async function* queryModel(
         // an explicit --fallback-model still wins. Mirror the streaming path.
         const refusalFallback =
           options.fallbackModel ?? getRefusalFallbackModel(options.model)
-        if (refusalFallback && refusalFallback !== options.model) {
+        if (refusalFallback && !isSameModel(refusalFallback, options.model)) {
           throw new RefusalFallbackError(options.model, refusalFallback)
         }
       }
@@ -2773,7 +2774,7 @@ async function* queryModel(
           // an explicit --fallback-model still wins. Mirror the streaming path.
           const refusalFallback =
             options.fallbackModel ?? getRefusalFallbackModel(options.model)
-          if (refusalFallback && refusalFallback !== options.model) {
+          if (refusalFallback && !isSameModel(refusalFallback, options.model)) {
             throw new RefusalFallbackError(options.model, refusalFallback)
           }
         }
