@@ -261,6 +261,15 @@ export type GlobalConfig = {
     model: string
   }
   /**
+   * DeepSeek API key credentials, stored separately from Anthropic and Codex.
+   * The key is sent as a Bearer token to api.deepseek.com and is never forwarded
+   * to Anthropic's servers. No OAuth flow — the user pastes the key at login.
+   */
+  deepseekAuth?: {
+    apiKey: string
+  }
+
+  /**
    * Per-account model memory, keyed by auth provider id. Each account (Anthropic,
    * Codex, Ollama…) remembers the model last chosen while it was active, so
    * switching accounts restores that account's model instead of leaking the

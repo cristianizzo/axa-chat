@@ -1,10 +1,12 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { getInitialMainLoopModel } from '../../bootstrap/state.js'
-import { CODEX_MODELS } from 'src/config/codex.js'
+import { getActiveAuthProvider } from '../activeAuthProvider.js'
+import { getProviderModelCatalog } from 'src/config/providerModels.js'
 import {
   getOllamaAuth,
   isClaudeAISubscriber,
   isCodexSubscriber,
+  isDeepSeekSubscriber,
   isMaxSubscriber,
   isOllamaSubscriber,
   isTeamPremiumSubscriber,
@@ -232,10 +234,12 @@ function getHaikuOption(): ModelOption {
     : getHaiku35Option()
 }
 
-// OpenAI Codex model options, derived from CODEX_MODELS so the picker can
+// Derive picker options from the provider model catalog so the picker can
 // never drift from the list the fetch adapter recognises.
-function getCodexModelOptions(): ModelOption[] {
-  return CODEX_MODELS.map(m => ({
+function getCatalogModelOptions(provider: ReturnType<typeof getActiveAuthProvider>): ModelOption[] {
+  const catalog = getProviderModelCatalog(provider)
+  if (!catalog) return []
+  return catalog.models.map(m => ({
     value: m.id,
     label: m.label,
     description: `${m.label} · ${m.description}`,
@@ -399,11 +403,15 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     return [getDefaultOptionForUser(fastMode)]
   }
 
+  // Codex and DeepSeek: show only what their catalog declares. Codex gets a
+  // "Default (recommended)" entry since it has a known preferred model; DeepSeek
+  // shows its two models directly without a redundant default alias.
   if (isCodexSubscriber()) {
-    return [
-      getDefaultOptionForUser(),
-      ...getCodexModelOptions(),
-    ]
+    return [getDefaultOptionForUser(), ...getCatalogModelOptions(getActiveAuthProvider())]
+  }
+
+  if (isDeepSeekSubscriber()) {
+    return getCatalogModelOptions(getActiveAuthProvider())
   }
 
   // All Claude users (subscribers + PAYG): Default + family pickers
@@ -532,12 +540,10 @@ export function getModelOptions(fastMode = false): ModelOption[] {
 function getModelOptionsInternal(fastMode = false): ModelOption[] {
   const options = getModelOptionsBase(fastMode)
 
-  // Ollama serves only its one model. Skip every augmentation below — env
-  // custom models, bootstrap-cached Anthropic options, the current/initial
-  // model fallback — since none of them can be served by this provider. The
-  // availableModels allowlist is an Anthropic-model restriction that would
-  // wrongly filter out Ollama's tag and leave the picker empty, so bypass it.
-  if (isOllamaSubscriber()) {
+  // Ollama and DeepSeek serve only their provider-specific model lists. Skip
+  // Anthropic-specific augmentation and allowlist filtering below, which could
+  // otherwise add unservable Claude models to their pickers.
+  if (isOllamaSubscriber() || isDeepSeekSubscriber()) {
     return options
   }
 

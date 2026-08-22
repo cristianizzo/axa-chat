@@ -11,7 +11,7 @@ import { getSSLErrorHint } from '../services/api/errorUtils.js';
 import { sendNotification } from '../services/notifier.js';
 import { runCodexOAuthFlow } from '../services/oauth/codex-client.js';
 import { OAuthService } from '../services/oauth/index.js';
-import { getOauthAccountInfo, saveCodexOAuthTokens, saveOllamaAuth, validateForceLoginOrg } from '../utils/auth.js';
+import { getOauthAccountInfo, saveCodexOAuthTokens, saveDeepSeekAuth, saveOllamaAuth, validateForceLoginOrg } from '../utils/auth.js';
 import { getOllamaAuthToken, getOllamaBaseUrl } from '../config/ollama.js';
 import { logError } from '../utils/log.js';
 import { getSettings_DEPRECATED } from '../utils/settings/settings.js';
@@ -35,6 +35,9 @@ type OAuthStatus = {
 | {
   state: 'ollama_model_select';
 } // Ollama chosen: pick which installed model to use
+| {
+  state: 'deepseek_api_key';
+} // DeepSeek chosen: enter API key
 | {
   state: 'ready_to_start';
 } // Flow started, waiting for browser to open
@@ -403,7 +406,7 @@ function OAuthStatusMessage(t0) {
   switch (oauthStatus.state) {
     case "idle":
       {
-        const t1 = startingMessage ? startingMessage : "Sign in with a Claude subscription or Anthropic Console account, an OpenAI Codex account, or a local/self-hosted Ollama model.";
+        const t1 = startingMessage ? startingMessage : "Sign in with a Claude subscription or Anthropic Console account, an OpenAI Codex account, a local/self-hosted Ollama model, or a DeepSeek API key.";
         let t2;
         if ($[0] !== t1) {
           t2 = <Text bold={true}>{t1}</Text>;
@@ -450,6 +453,9 @@ function OAuthStatusMessage(t0) {
           }, {
             label: <Text>Ollama ·{" "}<Text dimColor={true}>Local or self-hosted model</Text>{"\n"}</Text>,
             value: "ollama"
+          }, {
+            label: <Text>DeepSeek ·{" "}<Text dimColor={true}>R1 / V3 via API key (pay-per-token)</Text>{"\n"}</Text>,
+            value: "deepseek"
           }];
           $[5] = t6;
         } else {
@@ -477,6 +483,11 @@ function OAuthStatusMessage(t0) {
                 // thing to record. Let the user pick it from the installed
                 // models rather than driving the OAuth state machine.
                 setOAuthStatus({ state: "ollama_model_select" });
+              } else if (value_0 === "deepseek") {
+                logEvent("tengu_oauth_deepseek_selected", {});
+                setLoginWithCodex(false);
+                setLoginWithClaudeAi(false);
+                setOAuthStatus({ state: "deepseek_api_key" });
               } else {
                 setLoginWithCodex(false);
                 setOAuthStatus({
@@ -695,6 +706,34 @@ function OAuthStatusMessage(t0) {
         }
         return t3;
       }
+    case "deepseek_api_key":
+      return <Box flexDirection="column" gap={1}>
+          <Text bold={true}>Enter your DeepSeek API key:</Text>
+          <Text dimColor={true}>Get one at platform.deepseek.com → API keys</Text>
+          <TextInput value={pastedCode} onChange={setPastedCode} onSubmit={value => {
+            const trimmed = value.trim();
+            if (!trimmed) return;
+            // Basic format guard: DeepSeek keys are printable ASCII, 8–512 chars
+            if (!/^[\x21-\x7E]{8,512}$/.test(trimmed)) {
+              setOAuthStatus({
+                state: "error",
+                message: "That doesn't look like a valid DeepSeek API key. Check the value and try again.",
+                toRetry: {
+                  state: "deepseek_api_key"
+                }
+              });
+              return;
+            }
+            saveDeepSeekAuth({
+              apiKey: trimmed
+            });
+            setPastedCode('');
+            logEvent("tengu_oauth_deepseek_success", {});
+            setOAuthStatus({
+              state: "success"
+            });
+          }} cursorOffset={cursorOffset} onChangeCursorOffset={setCursorOffset} columns={textInputColumns} mask="*" />
+        </Box>;
     default:
       {
         return null;

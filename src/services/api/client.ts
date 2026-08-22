@@ -12,9 +12,11 @@ import {
   getApiKeyFromApiKeyHelper,
   getClaudeAIOAuthTokens,
   getCodexOAuthTokens,
+  getDeepSeekAuth,
   getOllamaAuth,
   isClaudeAISubscriber,
   isCodexSubscriber,
+  isDeepSeekSubscriber,
   isOllamaSubscriber,
   refreshAndGetAwsCredentials,
   refreshGcpCredentialsIfNeeded,
@@ -38,6 +40,7 @@ import {
   isEnvTruthy,
 } from '../../utils/envUtils.js'
 import { createCodexFetch } from './codex-fetch-adapter.js'
+import { createDeepSeekFetch } from './deepseek-fetch-adapter.js'
 import { createOllamaFetch } from './ollama-fetch-adapter.js'
 
 /**
@@ -341,6 +344,24 @@ export async function getAnthropicClient({
       }
       return new Anthropic(clientConfig)
     }
+  }
+
+  // ── DeepSeek provider via fetch adapter ───────────────────────────
+  if (isDeepSeekSubscriber()) {
+    const deepseek = getDeepSeekAuth()
+    if (deepseek?.apiKey) {
+      const deepseekFetch = createDeepSeekFetch(deepseek.apiKey)
+      const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
+        apiKey: 'deepseek-placeholder', // SDK requires a key; fetch adapter handles auth
+        ...ARGS,
+        fetch: deepseekFetch as unknown as typeof globalThis.fetch,
+        ...(isDebugToStdErr() && { logger: createStderrLogger() }),
+      }
+      return new Anthropic(clientConfig)
+    }
+    // TOCTOU: provider is deepseek but key vanished between the subscriber check and here.
+    // Fall through to the default client; it will surface an auth error to the user.
+    logForDebugging('DeepSeek provider active but API key is missing; falling through to default client', { level: 'warn' })
   }
 
   // Determine authentication method based on available tokens

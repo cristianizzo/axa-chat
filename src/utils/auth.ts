@@ -5,6 +5,7 @@ import { mkdir, stat } from 'fs/promises'
 import memoize from 'lodash-es/memoize.js'
 import { join } from 'path'
 import { CODEX_PROVIDER_ID } from 'src/config/codex.js'
+import { DEEPSEEK_PROVIDER_ID } from 'src/config/deepseek.js'
 import { OLLAMA_PROVIDER_ID } from 'src/config/ollama.js'
 import { CLAUDE_AI_PROFILE_SCOPE } from 'src/constants/oauth.js'
 import {
@@ -1428,6 +1429,65 @@ export function clearOllamaAuth(): void {
     const { ollamaAuth: _removed, ...rest } = cfg
     return rest as typeof cfg
   })
+}
+
+// ── DeepSeek API key storage ─────────────────────────────────────────────────
+// DeepSeek credentials live in GlobalConfig alongside Codex and Ollama, never
+// in the keychain. The API key is sent as a Bearer token to api.deepseek.com
+// and is never forwarded to Anthropic's servers.
+
+export type DeepSeekAuth = {
+  apiKey: string
+}
+
+/**
+ * Saves the DeepSeek API key to GlobalConfig and makes DeepSeek the active
+ * provider. Written atomically so the key and the active provider cannot
+ * disagree. Mirrors {@link saveCodexOAuthTokens} and {@link saveOllamaAuth}.
+ */
+export function saveDeepSeekAuth(auth: DeepSeekAuth): void {
+  saveGlobalConfig((cfg) => ({
+    ...cfg,
+    activeAuthProvider: DEEPSEEK_PROVIDER_ID,
+    deepseekAuth: {
+      apiKey: auth.apiKey,
+    },
+  }))
+}
+
+/**
+ * Retrieves the stored DeepSeek API key from GlobalConfig.
+ * Returns null if no key has been stored.
+ */
+export function getDeepSeekAuth(): DeepSeekAuth | null {
+  const stored = getGlobalConfig().deepseekAuth
+  if (!stored?.apiKey) return null
+  return { apiKey: stored.apiKey }
+}
+
+/**
+ * Removes the DeepSeek API key from GlobalConfig (e.g., on logout).
+ */
+export function clearDeepSeekAuth(): void {
+  saveGlobalConfig((cfg) => {
+    const { deepseekAuth: _removed, ...rest } = cfg
+    return rest as typeof cfg
+  })
+}
+
+/**
+ * Whether DeepSeek is the active, usable provider.
+ *
+ * Same shape as {@link isCodexSubscriber} and {@link isOllamaSubscriber}:
+ * the provider check keeps this false whenever some other account is active,
+ * and the stored-key check ensures we do not route to a backend we cannot
+ * authenticate to — e.g. after a logout cleared the key.
+ *
+ * @returns Whether DeepSeek is the active, usable provider
+ */
+export function isDeepSeekSubscriber(): boolean {
+  if (getAPIProvider() !== 'deepseek') return false
+  return !!getDeepSeekAuth()?.apiKey
 }
 
 

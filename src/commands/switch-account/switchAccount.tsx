@@ -6,6 +6,7 @@ import {
   type AuthProviderId,
 } from '../../config/authProviders.js'
 import { CODEX_PROVIDER_ID } from '../../config/codex.js'
+import { DEEPSEEK_PROVIDER_ID } from '../../config/deepseek.js'
 import { OLLAMA_PROVIDER_ID } from '../../config/ollama.js'
 import { Box, Text } from '../../ink.js'
 import type {
@@ -34,6 +35,7 @@ const PROVIDER_ALIASES: Record<string, AuthProviderId> = {
   codex: CODEX_PROVIDER_ID,
   openai: CODEX_PROVIDER_ID,
   ollama: OLLAMA_PROVIDER_ID,
+  deepseek: DEEPSEEK_PROVIDER_ID,
 }
 
 /**

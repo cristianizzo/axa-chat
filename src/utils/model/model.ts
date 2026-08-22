@@ -27,6 +27,10 @@ import {
   getCodexModelLabel,
   isCodexModelId,
 } from 'src/config/codex.js'
+import {
+  getProviderModelCatalog,
+  getProviderModelCatalogForModel,
+} from 'src/config/providerModels.js'
 import { getModelDescriptor } from './registry.js'
 import {
   has1mContext,
@@ -95,7 +99,19 @@ export function isServableByActiveProvider(model: string): boolean {
   if (ollamaModel && model === ollamaModel) {
     return false
   }
-  return isCodexSubscriber() === isCodexModelId(model)
+  // For providers whose full catalog is registered, check the active provider's
+  // catalog and reject models from other catalogs.
+  const activeCatalog = getProviderModelCatalog(getActiveAuthProvider())
+  if (activeCatalog) {
+    return activeCatalog.acceptsModel(model)
+  }
+  const modelCatalog = getProviderModelCatalogForModel(model)
+  if (modelCatalog) {
+    // The model belongs to a catalog provider but the active provider has no
+    // catalog — must be Anthropic/Ollama, which cannot serve it.
+    return false
+  }
+  return true
 }
 
 /**
@@ -272,8 +288,11 @@ export function getDefaultMainLoopModelSetting(): ModelName | ModelAlias {
     return getOllamaAuth()?.model ?? getDefaultSonnetModel()
   }
 
-  if (isCodexSubscriber()) {
-    return getModelStrings().gpt56terra
+  // For catalog providers (Codex, DeepSeek, any future addition), use the
+  // catalog's declared default rather than a hardcoded constant.
+  const catalog = getProviderModelCatalog(getActiveAuthProvider())
+  if (catalog) {
+    return catalog.defaultModel
   }
 
   // Ants default to defaultModel from flag config, or Opus 1M if not configured
@@ -477,11 +496,13 @@ export function renderModelSetting(setting: ModelName | ModelAlias): string {
  * if the model is not recognized as a public model.
  */
 export function getPublicModelDisplayName(model: ModelName): string | null {
-  // Labels come from CODEX_MODELS so the picker and every rendered name agree.
-  // An unlisted `gpt-*` ID is a deliberate passthrough (see
-  // mapClaudeModelToCodex) that we have no label for, so show it verbatim.
-  if (isCodexModelId(model)) {
-    return getCodexModelLabel(model) ?? model
+  // Catalog providers (Codex, DeepSeek, …): labels come from the catalog so
+  // the picker and rendered names always agree. Unlisted gpt-* IDs are
+  // deliberate Codex passthroughs with no label, so show verbatim.
+  const catalogEntry = getProviderModelCatalogForModel(model)
+  if (catalogEntry) {
+    const found = catalogEntry.models.find(m => m.id === model)
+    return found ? found.label : model
   }
 
   // Registry-first: 4.5+/5-series models derive their display name (and 1M
@@ -808,11 +829,11 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   if (canonical.includes('claude-3-5-haiku')) {
     return 'Claude 3.5 Haiku'
   }
-  // OpenAI Codex models. Returning undefined here degrades the system prompt,
-  // so cover every model the picker offers by reading the same list it does.
-  const codexLabel = getCodexModelLabel(canonical)
-  if (codexLabel) {
-    return codexLabel
+  // Catalog providers (Codex, DeepSeek, …). Returning undefined here degrades
+  // the system prompt, so cover every model the picker offers.
+  const catalogEntry = getProviderModelCatalogForModel(canonical)
+  if (catalogEntry) {
+    return catalogEntry.models.find(m => m.id === canonical)?.label
   }
 
   return undefined

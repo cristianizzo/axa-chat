@@ -13,6 +13,7 @@ import {
   isAuthProviderId,
 } from '../config/authProviders.js'
 import { CODEX_PROVIDER_ID } from '../config/codex.js'
+import { DEEPSEEK_PROVIDER_ID } from '../config/deepseek.js'
 import { OLLAMA_PROVIDER_ID } from '../config/ollama.js'
 import { getGlobalConfig, saveGlobalConfig } from './config.js'
 
@@ -37,6 +38,8 @@ export function hasCredentialsForAuthProvider(id: AuthProviderId): boolean {
         // completed Ollama login writes both the base URL and the chosen model;
         // require both so a half-written record isn't offered as an account.
         return !!config.ollamaAuth?.baseUrl && !!config.ollamaAuth?.model
+      case DEEPSEEK_PROVIDER_ID:
+        return !!config.deepseekAuth?.apiKey
       default:
         // Anthropic tokens live in the keychain, not the config file, and
         // reading them is async and comparatively expensive. oauthAccount is
@@ -73,6 +76,9 @@ export function getActiveAuthProvider(): AuthProviderId {
     }
     if (config.ollamaAuth?.baseUrl && config.ollamaAuth?.model) {
       return OLLAMA_PROVIDER_ID
+    }
+    if (config.deepseekAuth?.apiKey) {
+      return DEEPSEEK_PROVIDER_ID
     }
     return DEFAULT_AUTH_PROVIDER
   } catch {
