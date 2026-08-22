@@ -16,8 +16,11 @@ import { execFileSync } from 'node:child_process'
  *     on top of upstream — aborting cleanly on conflict so the working tree and
  *     branch are never left in a broken state.
  *
- * Either way it returns 0 (fetch never errors out the update) and hands off to
- * `bun install` and `bun run build:dev` in the `update` script.
+ * Exit behavior: returns 0 on the skip, fast-forward, and successful rebase
+ * paths; sets exitCode 1 if a rebase hits a conflict that was aborted. Note a
+ * hard failure (e.g. `git fetch` failing, or being outside a git repo where the
+ * early checks throw) will still surface an error to the `update` script, which
+ * then stops rather than proceeding to `bun install`.
  */
 
 function git(args: string[], opts: { allowFailure?: boolean } = {}): string {
@@ -30,7 +33,7 @@ function git(args: string[], opts: { allowFailure?: boolean } = {}): string {
 }
 
 function resolveOrNull(args: string[]): string | null {
-  const v = git(args)
+  const v = git(args, { allowFailure: true })
   return v ? v : null
 }
 
@@ -55,10 +58,16 @@ function main(): void {
 
   // `upstream..HEAD` counts commits on HEAD not on upstream = how far ahead.
   // `HEAD..upstream` counts commits on upstream not on HEAD = how far behind.
+  // An empty result means `rev-list` failed; treat that as "can't reconcile"
+  // and skip rather than guessing the branch is up to date.
   const aheadStr = git(['rev-list', '--count', `${upstream}..HEAD`], { allowFailure: true })
   const behindStr = git(['rev-list', '--count', `HEAD..${upstream}`], { allowFailure: true })
-  const ahead = Number(aheadStr || 0)
-  const behind = Number(behindStr || 0)
+  if (aheadStr === '' || behindStr === '') {
+    console.error(`Could not compare HEAD with ${upstream} — skipping pull; can still reinstall + rebuild.`)
+    return
+  }
+  const ahead = Number(aheadStr)
+  const behind = Number(behindStr)
 
   if (behind === 0) {
     // Nothing new upstream: either already up to date or ahead-only. Rebasing
