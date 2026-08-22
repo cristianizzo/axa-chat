@@ -182,10 +182,21 @@ export async function syncFromTarball(
   const tmpFile = join(mkdtempSync(join(tmpdir(), 'axa-src-')), 'source.tar.gz')
   try {
     writeFileSync(tmpFile, new Uint8Array(await res.arrayBuffer()))
-    // --strip-components=1 drops GitHub's `<repo>-<sha>/` wrapper directory.
-    execFileSync('tar', ['-xzf', tmpFile, '--strip-components=1', '-C', dir], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    try {
+      // --strip-components=1 drops GitHub's `<repo>-<sha>/` wrapper directory.
+      execFileSync('tar', ['-xzf', tmpFile, '--strip-components=1', '-C', dir], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+    } catch (e) {
+      // A missing tar surfaces as a bare ENOENT that names no command, which
+      // reads like a problem with the source tree rather than a missing tool.
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error(
+          'tar was not found on PATH, and it is required to update an install made without git.',
+        )
+      }
+      throw e
+    }
   } finally {
     rmSync(dirname(tmpFile), { recursive: true, force: true })
   }

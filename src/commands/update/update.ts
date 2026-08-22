@@ -90,13 +90,20 @@ async function gitLine(repoDir: string, args: string[]): Promise<string> {
   }
 }
 
-/** Short SHA of the recorded tarball revision, or '' when there is no marker. */
+/**
+ * Short SHA of the recorded tarball revision, or '' when the marker is absent
+ * or is not one of ours. Mirrors the validation in `scripts/source.ts`: both
+ * writers always set `source`, so requiring it keeps an unrelated JSON file
+ * that happens to carry a `commit` from nominating its directory.
+ */
 function markerSha(repoDir: string): string {
   try {
-    const { commit } = JSON.parse(
+    const { source, commit } = JSON.parse(
       readFileSync(join(repoDir, INSTALL_MARKER), 'utf8'),
-    ) as { commit?: string }
-    return typeof commit === 'string' && /^[0-9a-f]{40}$/.test(commit)
+    ) as { source?: unknown; commit?: unknown }
+    return source === 'tarball' &&
+      typeof commit === 'string' &&
+      /^[0-9a-f]{40}$/.test(commit)
       ? commit.slice(0, 7)
       : ''
   } catch {
