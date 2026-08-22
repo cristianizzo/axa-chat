@@ -8,3 +8,4 @@ CLAUDE.md
 *.bun-build
 .idea/
 conversation-backup.jsonl
+.claude/
