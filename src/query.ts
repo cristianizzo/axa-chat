@@ -970,83 +970,106 @@ async function* queryLoop(
 
             continue
           }
-          if (innerError instanceof RefusalFallbackError && fallbackModel) {
-            // Refusal was triggered - switch model and retry, same recovery
-            // as the 529 fallback above.
-            currentModel = fallbackModel
-            refusalFallbackOriginalModel = innerError.originalModel
-            attemptWithFallback = true
+          if (innerError instanceof RefusalFallbackError) {
+            // The model declined the request (AUP refusal) and claude.ts chose a
+            // more compliant fallback — internal opus->sonnet (no flag needed)
+            // OR an explicit --fallback-model. Drive the switch off the target
+            // the error carries (innerError.fallbackModel), NOT the --fallback
+            // param, so the internal case works too.
+            const target = innerError.fallbackModel
+            if (target && target !== currentModel) {
+              currentModel = target
+              // Record the original refusing model so that, if the fallback
+              // ALSO refuses, claude.ts can emit the both-models-refused message
+              // instead of a generic refusal.
+              refusalFallbackOriginalModel = innerError.originalModel
+              attemptWithFallback = true
 
-            // The refusal may have already streamed and yielded partial
-            // content (e.g. the refusal text itself) before the error hit.
-            // Tombstone it so the UI/transcript don't show the original
-            // refusal alongside the fallback model's response — mirrors the
-            // streamingFallbackOccured handling above for the same "orphaned
-            // partial attempt" case.
+              // The refusal may have already streamed partial content (e.g. the
+              // refusal text) before the error hit. Tombstone it so the
+              // transcript doesn't show the original refusal alongside the
+              // fallback model's response.
+              for (const msg of assistantMessages) {
+                yield { type: 'tombstone' as const, message: msg }
+              }
+              logEvent('tengu_orphaned_messages_tombstoned', {
+                orphanedMessageCount: assistantMessages.length,
+                queryChainId: queryChainIdForAnalytics,
+                queryDepth: queryTracking.depth,
+              })
+
+              yield* yieldMissingToolResultBlocks(
+                assistantMessages,
+                'Model declined the request',
+              )
+              assistantMessages.length = 0
+              toolResults.length = 0
+              toolUseBlocks.length = 0
+              needsFollowUp = false
+
+              // Discard pending results from the refused attempt and rebuild the
+              // executor so orphan tool_use_ids don't leak into the retry.
+              if (streamingToolExecutor) {
+                streamingToolExecutor.discard()
+                streamingToolExecutor = new StreamingToolExecutor(
+                  toolUseContext.options.tools,
+                  canUseTool,
+                  toolUseContext,
+                )
+              }
+
+              toolUseContext.options.mainLoopModel = target
+
+              // Thinking signatures are model-bound; strip before retrying on
+              // the fallback model (see the FallbackTriggeredError branch).
+              if (process.env.USER_TYPE === 'ant') {
+                messagesForQuery = stripSignatureBlocks(messagesForQuery)
+              }
+
+              logEvent('tengu_refusal_fallback_triggered', {
+                original_model:
+                  innerError.originalModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+                fallback_model:
+                  target as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+                entrypoint:
+                  'cli' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+                queryChainId: queryChainIdForAnalytics,
+                queryDepth: queryTracking.depth,
+              })
+
+              yield createSystemMessage(
+                `Switched to ${renderModelName(target)} after ${renderModelName(innerError.originalModel)} declined this request for policy reasons`,
+                'warning',
+              )
+
+              continue
+            }
+
+            // Defensive terminal: no distinct model left to switch to (normally
+            // unreachable — claude.ts yields createBothModelsRefusedMessage /
+            // the refusal instead of throwing when the fallback equals the
+            // current model). Surface as a terminal API-error (is_error -> exit 1).
+            //
+            // Tear the refused attempt down first, as the retry branch above
+            // does: tombstone whatever the refusal already streamed so it isn't
+            // shown next to the terminal error, close out any open tool_use, and
+            // drop pending results so nothing orphaned reaches a resumed session.
             for (const msg of assistantMessages) {
               yield { type: 'tombstone' as const, message: msg }
             }
-            logEvent('tengu_orphaned_messages_tombstoned', {
-              orphanedMessageCount: assistantMessages.length,
-              queryChainId: queryChainIdForAnalytics,
-              queryDepth: queryTracking.depth,
-            })
-
-            // Clear assistant messages since we'll retry the entire request.
-            // Distinct message from the 529 branch above: the tool call was
-            // interrupted by a policy refusal, not a fallback-triggering
-            // server error.
             yield* yieldMissingToolResultBlocks(
               assistantMessages,
-              'Model declined the request',
+              'Model refusal — no fallback remaining',
             )
             assistantMessages.length = 0
             toolResults.length = 0
             toolUseBlocks.length = 0
-            needsFollowUp = false
+            streamingToolExecutor?.discard()
 
-            // Discard pending results from the failed attempt and create a
-            // fresh executor. This prevents orphan tool_results (with old
-            // tool_use_ids) from leaking into the retry.
-            if (streamingToolExecutor) {
-              streamingToolExecutor.discard()
-              streamingToolExecutor = new StreamingToolExecutor(
-                toolUseContext.options.tools,
-                canUseTool,
-                toolUseContext,
-              )
-            }
-
-            // Update tool use context with new model
-            toolUseContext.options.mainLoopModel = fallbackModel
-
-            // Thinking signatures are model-bound: replaying a protected-thinking
-            // block (e.g. capybara) to an unprotected fallback (e.g. opus) 400s.
-            // Strip before retry so the fallback model gets clean history.
-            if (process.env.USER_TYPE === 'ant') {
-              messagesForQuery = stripSignatureBlocks(messagesForQuery)
-            }
-
-            // Log the fallback event
-            logEvent('tengu_refusal_fallback_triggered', {
-              original_model:
-                innerError.originalModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-              fallback_model:
-                fallbackModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-              entrypoint:
-                'cli' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-              queryChainId: queryChainIdForAnalytics,
-              queryDepth: queryTracking.depth,
+            yield createAssistantAPIErrorMessage({
+              content: `Claude Code is unable to respond to this request — ${renderModelName(innerError.originalModel)} declined it as a possible Usage Policy violation and no further fallback is available. Manual review required.`,
             })
-
-            // Yield system message about fallback — use 'warning' level so
-            // users see the notification without needing verbose mode
-            yield createSystemMessage(
-              `Switched to ${renderModelName(innerError.fallbackModel)} after ${renderModelName(innerError.originalModel)} declined this request for policy reasons`,
-              'warning',
-            )
-
-            continue
+            return { reason: 'refusal' }
           }
           throw innerError
         }

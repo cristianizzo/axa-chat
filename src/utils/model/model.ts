@@ -233,6 +233,34 @@ export function getDefaultSonnetModel(): ModelName {
   return getModelStrings().sonnet5
 }
 
+// Whether two model IDs name the same model. The same model can be spelled
+// several ways (first-party ID, provider-prefixed ID, a Bedrock ARN supplied
+// via modelOverrides), so a raw string comparison reports "different" for what
+// is really one model — which would make a fallback retry the model that just
+// failed. Canonical names are version-specific, so Opus 4.6 and Opus 4.8 stay
+// distinct.
+export function isSameModel(a: ModelName, b: ModelName): boolean {
+  return getCanonicalName(a) === getCanonicalName(b)
+}
+
+// When a model declines a request as a possible Usage Policy violation
+// (stop_reason: "refusal"), retry the turn on a more compliant model. This is
+// internal and needs no --fallback-model flag: Opus-family models refuse where
+// Sonnet complies (empirically ~100% of AUP refusals are Opus, 0 Sonnet), so
+// Opus falls back to Sonnet. Returns undefined when there is no distinct
+// fallback (non-Opus models), which lets the refusal surface terminally.
+export function getRefusalFallbackModel(model: ModelName): ModelName | undefined {
+  // Detect Opus on the canonical name, not the raw ID: modelOverrides can map
+  // an Opus model to an arbitrary provider string (a Bedrock ARN, say) with no
+  // "opus" in it, and a substring check on the raw ID would skip the fallback
+  // for precisely the users who configured an override.
+  if (getCanonicalName(model).includes('opus')) {
+    const sonnet = getDefaultSonnetModel()
+    return isSameModel(sonnet, model) ? undefined : sonnet
+  }
+  return undefined
+}
+
 // @[MODEL LAUNCH]: Update the default Haiku model (3P providers may lag so keep defaults unchanged).
 export function getDefaultHaikuModel(): ModelName {
   if (process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL) {
