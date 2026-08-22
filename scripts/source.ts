@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
@@ -66,6 +66,10 @@ export function readInstallMarker(dir: string): InstallMarker | null {
     return null
   }
   if (typeof parsed !== 'object' || parsed === null) return null
+  // A marker on its own does not make a directory a source root. Requiring the
+  // package.json that every axa-chat tree has mirrors the installer's guard, so
+  // a stray marker cannot nominate an arbitrary directory for extraction.
+  if (!existsSync(join(dir, 'package.json'))) return null
   const { source, repo, ref, commit, updatedAt } = parsed as Record<string, unknown>
 
   // `source` is required, not merely "not contradicted": every marker we write

@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync } from 'fs'
 import { dirname } from 'path'
-import { readInstallMarker } from './source.js'
+import { findInstallRoot } from './source.js'
 
 const pkg = await Bun.file(new URL('../package.json', import.meta.url)).json() as {
   name: string
@@ -67,11 +67,13 @@ function runCommand(cmd: string[]): string | null {
 
 // Tarball installs have no git to ask for the revision, so fall back to the
 // commit the installer/updater recorded (see scripts/source.ts). Without this
-// every non-git build would be stamped "shaunknown".
+// every non-git build would be stamped "shaunknown". The marker is searched for
+// upwards, since git also answers from any depth and a build run from a
+// subdirectory should stamp the same version either way.
 function getSourceSha(): string | null {
   return (
     runCommand(['git', 'rev-parse', '--short=8', 'HEAD']) ??
-    readInstallMarker(process.cwd())?.commit.slice(0, 8) ??
+    findInstallRoot(process.cwd())?.marker.commit.slice(0, 8) ??
     null
   )
 }
