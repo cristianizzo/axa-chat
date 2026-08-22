@@ -1,7 +1,20 @@
 import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import {
+  DEFAULT_REF,
+  DEFAULT_REPO_SLUG,
+  readInstallMarker,
+  resolveLatestCommit,
+  syncFromTarball,
+} from './source.js'
 
 /**
  * Self-update helper for the `update` script.
+ *
+ * Installs without git have no `.git` to pull from, so those trees are
+ * refreshed from a GitHub source tarball instead (see `scripts/source.ts`).
+ * Everything below applies to the git path.
  *
  * `git pull` refuses to proceed on a divergent branch ("Need to specify how to
  * reconcile divergent branches", exit 128) and a plain `--rebase` can leave the
@@ -17,7 +30,9 @@ import { execFileSync } from 'node:child_process'
  *     tree and branch are never left in a broken state.
  *
  * Exit behavior: returns 0 on the skip, fast-forward, and successful rebase
- * paths; sets exitCode 1 if a rebase failed and was aborted. Note a
+ * paths; sets exitCode 1 if a rebase failed and was aborted, or if a tarball
+ * refresh could not complete (so the caller stops instead of rebuilding a stale
+ * tree and reporting success). Note a
  * hard failure (e.g. `git fetch` failing, or being outside a git repo where the
  * early checks throw) will still surface an error to the `update` script, which
  * then stops rather than proceeding to `bun install`.
@@ -37,7 +52,42 @@ function resolveOrNull(args: string[]): string | null {
   return v ? v : null
 }
 
-function main(): void {
+/**
+ * Refresh a tarball install in place. Skips the download when the recorded
+ * commit already matches upstream, so a no-op update costs one API call.
+ */
+async function updateFromTarball(dir: string): Promise<void> {
+  const marker = readInstallMarker(dir)
+  const repo = marker?.repo ?? DEFAULT_REPO_SLUG
+  const ref = marker?.ref ?? DEFAULT_REF
+
+  const latest = await resolveLatestCommit(repo, ref)
+  if (marker?.commit === latest) {
+    console.log(`Already on the latest ${repo}@${ref} (${latest.slice(0, 8)}).`)
+    return
+  }
+
+  const from = marker ? `${marker.commit.slice(0, 8)} → ` : ''
+  console.log(`Updating source from ${repo}@${ref} (${from}${latest.slice(0, 8)})…`)
+  await syncFromTarball(dir, repo, ref, latest)
+}
+
+async function main(): Promise<void> {
+  // No checkout to reconcile: this tree came from a tarball (or git is not
+  // installed at all), so refresh it the same way the installer seeded it.
+  if (!existsSync(join(process.cwd(), '.git'))) {
+    try {
+      await updateFromTarball(process.cwd())
+    } catch (e) {
+      // Stop the `update` script rather than rebuilding a stale tree: the user
+      // asked to update, and silently building the old source would look like
+      // the update worked.
+      console.error(`Could not refresh the source tree: ${(e as Error).message}`)
+      process.exitCode = 1
+    }
+    return
+  }
+
   // `rev-parse --abbrev-ref HEAD` returns "HEAD" when detached (not empty).
   // In that unusual state there's no branch whose upstream we can reconcile,
   // so skip the pull.
@@ -45,6 +95,15 @@ function main(): void {
   if (!branch || branch === 'HEAD') {
     console.error('Not on a branch (detached HEAD) — skipping pull; can still reinstall + rebuild.')
     return
+  }
+
+  // Older installers cloned with `--depth 1`. A shallow clone has no merge base
+  // with upstream, so the ahead/behind counts below are meaningless and a rebase
+  // cannot replay local commits — deepen once and the repo behaves normally from
+  // then on. Best-effort: a non-shallow repo makes this a no-op.
+  if (git(['rev-parse', '--is-shallow-repository'], { allowFailure: true }) === 'true') {
+    console.log('Shallow clone detected — fetching full history…')
+    git(['fetch', '--unshallow'], { allowFailure: true })
   }
 
   git(['fetch'])
@@ -113,4 +172,4 @@ function main(): void {
   }
 }
 
-main()
+await main()

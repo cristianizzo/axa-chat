@@ -9,3 +9,4 @@ CLAUDE.md
 .idea/
 conversation-backup.jsonl
 .claude/
+.axa-install.json
