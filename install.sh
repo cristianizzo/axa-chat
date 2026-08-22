@@ -134,7 +134,9 @@ fetch_tarball() {
   local sha tmp
   sha="$(curl -fsSL -H 'Accept: application/vnd.github.sha' \
     "https://api.github.com/repos/${REPO_SLUG}/commits/${BRANCH}" 2>/dev/null || true)"
-  if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+  # Matched with a bash built-in rather than grep, to keep the git-less path
+  # dependent on nothing beyond curl and tar.
+  if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
     fail "Could not resolve the latest ${BRANCH} commit from GitHub.
     Check your network connection and try again."
   fi
@@ -143,7 +145,8 @@ fetch_tarball() {
   mkdir -p "$INSTALL_DIR"
   # Download to a temp file first so a failed transfer cannot leave a partly
   # extracted source tree behind.
-  tmp="$(mktemp)"
+  # Explicit template: portable across GNU and BSD mktemp.
+  tmp="$(mktemp "${TMPDIR:-/tmp}/axa-src.XXXXXX")"
   if ! curl -fsSL "https://codeload.github.com/${REPO_SLUG}/tar.gz/${sha}" -o "$tmp"; then
     rm -f "$tmp"
     fail "Failed to download the source tarball."
