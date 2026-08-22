@@ -159,6 +159,8 @@ function translateMessages(
           })
         } else if (block.type === 'text' && typeof block.text === 'string') {
           textParts.push(block.text)
+        } else {
+          textParts.push(`[Unsupported ${block.type} attachment omitted from this request.]`)
         }
       }
 
@@ -356,12 +358,8 @@ async function translateOpenAIStreamToAnthropic(
     let outputTokens = 0
     let textBlockOpen = false
     let thinkingBlockOpen = false
-    let toolBlockOpen = false
-    let currentToolCallIndex = -1
-    let currentToolCallId = ''
-    let currentToolCallName = ''
-    let currentToolArgs = ''
-    let toolArgsDeltaSent = false
+    const toolCalls = new Map<number, { id: string; name: string; args: string }>()
+    let toolBlocksFlushed = false
     let hadToolCalls = false
     let streamErrored = false
     let finishReasonReceived = false
@@ -424,28 +422,33 @@ async function translateOpenAIStreamToAnthropic(
       thinkingBlockOpen = false
     }
 
-    function flushToolArgs(): void {
-      if (toolArgsDeltaSent || !currentToolArgs) return
-      safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
-        type: 'content_block_delta',
-        index: contentBlockIndex,
-        delta: { type: 'input_json_delta', partial_json: currentToolArgs },
-      }))))
-      toolArgsDeltaSent = true
+    function flushToolBlocks(): void {
+      if (toolBlocksFlushed || toolCalls.size === 0) return
+      for (const toolCall of toolCalls.values()) {
+        safeEnqueue(encoder.encode(formatSSE('content_block_start', JSON.stringify({
+          type: 'content_block_start',
+          index: contentBlockIndex,
+          content_block: {
+            type: 'tool_use',
+            id: toolCall.id,
+            name: toolCall.name,
+            input: {},
+          },
+        }))))
+        safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
+          type: 'content_block_delta',
+          index: contentBlockIndex,
+          delta: { type: 'input_json_delta', partial_json: toolCall.args },
+        }))))
+        safeEnqueue(encoder.encode(formatSSE('content_block_stop', JSON.stringify({
+          type: 'content_block_stop',
+          index: contentBlockIndex,
+        }))))
+        contentBlockIndex++
+      }
+      toolBlocksFlushed = true
     }
 
-    function closeToolBlock(): void {
-      if (!toolBlockOpen) return
-      flushToolArgs()
-      safeEnqueue(encoder.encode(formatSSE('content_block_stop', JSON.stringify({
-        type: 'content_block_stop',
-        index: contentBlockIndex,
-      }))))
-      contentBlockIndex++
-      toolBlockOpen = false
-      currentToolArgs = ''
-      toolArgsDeltaSent = false
-    }
 
     const reader = openAIResponse.body?.getReader()
     if (!reader) {
@@ -526,7 +529,7 @@ async function translateOpenAIStreamToAnthropic(
           // ── Reasoning content (DeepSeek R1) ──────────────────────────────
           if (delta.reasoning_content) {
             closeTextBlock()
-            closeToolBlock()
+            flushToolBlocks()
             openThinkingBlock()
             safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
               type: 'content_block_delta',
@@ -539,7 +542,7 @@ async function translateOpenAIStreamToAnthropic(
           // ── Text content ──────────────────────────────────────────────────
           if (delta.content) {
             closeThinkingBlock()
-            closeToolBlock()
+            flushToolBlocks()
             openTextBlock()
             safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
               type: 'content_block_delta',
@@ -556,57 +559,28 @@ async function translateOpenAIStreamToAnthropic(
 
             for (const tc of delta.tool_calls) {
               const tcIndex = tc.index ?? 0
+              const existing = toolCalls.get(tcIndex)
 
-              // New tool call: name chunk signals the start of a new block
               if (tc.function?.name !== undefined) {
-                // Close any previously open tool block for a different index
-                if (toolBlockOpen && tcIndex !== currentToolCallIndex) {
-                  closeToolBlock()
-                }
-                if (!toolBlockOpen) {
-                  currentToolCallIndex = tcIndex
-                  currentToolCallId = tc.id ?? `toolu_${Date.now()}`
-                  currentToolCallName = tc.function.name ?? ''
-                  currentToolArgs = ''
-                  toolArgsDeltaSent = false
+                if (existing) {
+                  existing.name = tc.function.name
+                } else {
+                  toolCalls.set(tcIndex, {
+                    id: tc.id ?? `toolu_${Date.now()}`,
+                    name: tc.function.name,
+                    args: '',
+                  })
                   hadToolCalls = true
-                  toolBlockOpen = true
-                  safeEnqueue(encoder.encode(formatSSE('content_block_start', JSON.stringify({
-                    type: 'content_block_start',
-                    index: contentBlockIndex,
-                    content_block: {
-                      type: 'tool_use',
-                      id: currentToolCallId,
-                      name: currentToolCallName,
-                      input: {},
-                    },
-                  }))))
-                  // Emit any arguments that arrived in the same chunk as the name
-                  const initialArgs = tc.function.arguments ?? ''
-                  if (initialArgs) {
-                    currentToolArgs = initialArgs
-                    toolArgsDeltaSent = true
-                    safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
-                      type: 'content_block_delta',
-                      index: contentBlockIndex,
-                      delta: { type: 'input_json_delta', partial_json: initialArgs },
-                    }))))
-                  }
                 }
-              } else if (tc.function?.arguments !== undefined) {
-                if (toolBlockOpen && tcIndex === currentToolCallIndex) {
-                  // Streaming argument delta for the current tool block
-                  const argDelta = tc.function.arguments
-                  currentToolArgs += argDelta
-                  toolArgsDeltaSent = true
-                  safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
-                    type: 'content_block_delta',
-                    index: contentBlockIndex,
-                    delta: { type: 'input_json_delta', partial_json: argDelta },
-                  }))))
+              }
+
+              if (tc.function?.arguments !== undefined) {
+                const toolCall = toolCalls.get(tcIndex)
+                if (toolCall) {
+                  toolCall.args += tc.function.arguments
                 } else {
                   logForDebugging(
-                    `DeepSeek SSE: argument delta for tool index ${tcIndex} but current open block is ${currentToolCallIndex}; delta dropped`,
+                    `DeepSeek SSE: argument delta for unknown tool index ${tcIndex}`,
                     { level: 'warn' },
                   )
                 }
@@ -632,7 +606,7 @@ async function translateOpenAIStreamToAnthropic(
       const userMsg = '\n\n[The connection to DeepSeek was interrupted. Please try again.]'
       if (!textBlockOpen) {
         closeThinkingBlock()
-        closeToolBlock()
+        flushToolBlocks()
         openTextBlock()
       }
       safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
@@ -650,7 +624,7 @@ async function translateOpenAIStreamToAnthropic(
       logForDebugging('DeepSeek SSE: stream ended without finish_reason — response may be incomplete', { level: 'warn' })
       if (!textBlockOpen) {
         closeThinkingBlock()
-        closeToolBlock()
+        flushToolBlocks()
         openTextBlock()
       }
       safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
@@ -663,7 +637,7 @@ async function translateOpenAIStreamToAnthropic(
     // Close any open blocks
     closeTextBlock()
     closeThinkingBlock()
-    closeToolBlock()
+    flushToolBlocks()
 
     await finishStream({ inputTokens, outputTokens, hadToolCalls, errored: streamErrored, lengthTruncated })
   }
