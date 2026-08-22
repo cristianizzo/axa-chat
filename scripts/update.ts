@@ -13,11 +13,11 @@ import { execFileSync } from 'node:child_process'
  *   - fast-forward when the local branch is behind upstream and has no local
  *     commits of its own (the normal case),
  *   - rebase with --autostash when local has diverged, so local commits survive
- *     on top of upstream — aborting cleanly on conflict so the working tree and
- *     branch are never left in a broken state.
+ *     on top of upstream — aborting cleanly on any rebase failure so the working
+ *     tree and branch are never left in a broken state.
  *
  * Exit behavior: returns 0 on the skip, fast-forward, and successful rebase
- * paths; sets exitCode 1 if a rebase hits a conflict that was aborted. Note a
+ * paths; sets exitCode 1 if a rebase failed and was aborted. Note a
  * hard failure (e.g. `git fetch` failing, or being outside a git repo where the
  * early checks throw) will still surface an error to the `update` script, which
  * then stops rather than proceeding to `bun install`.
@@ -85,8 +85,8 @@ function main(): void {
   }
 
   // Diverged: rebase local commits on top of upstream, stashing uncommitted
-  // changes so they're not lost. On conflict, abort to restore the original
-  // branch and let the user reconcile their work themselves.
+  // changes so they're not lost. If the rebase fails for any reason, abort to
+  // restore the original branch and let the user reconcile their work themselves.
   console.log(`Diverged from ${upstream} — rebasing local commits…`)
   try {
     execFileSync('git', ['rebase', '--autostash', upstream], {
@@ -96,7 +96,7 @@ function main(): void {
   } catch (e) {
     // Best-effort abort: if the rebase never created a state (e.g. refused
     // before starting), there is nothing to abort — ignore any failure here so
-    // the conflict guidance below is always printed.
+    // the guidance below is always printed.
     try {
       git(['rebase', '--abort'])
     } catch {
@@ -105,8 +105,9 @@ function main(): void {
     const msg =
       (e as { stderr?: string }).stderr?.toString() || (e as { message?: string }).message || ''
     console.error(
-      `Rebase on ${upstream} hit a conflict and was aborted. Your local commits and ` +
-        `working tree are untouched — resolve the conflict manually before updating again.\n${msg.slice(-500)}`,
+      `Rebase on ${upstream} failed and was aborted. Your local commits and working ` +
+        `tree are untouched — see the git output below (a merge conflict is the most ` +
+        `common cause) and resolve it before updating again.\n${msg.slice(-500)}`,
     )
     process.exitCode = 1
   }
