@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
 import {
+  findInstallRoot,
   INSTALL_MARKER,
   type InstallMarker,
-  readInstallMarker,
   resolveLatestCommit,
   syncFromTarball,
 } from './source.js'
@@ -74,15 +74,16 @@ async function updateFromTarball(dir: string, marker: InstallMarker): Promise<vo
 async function main(): Promise<void> {
   const cwd = process.cwd()
 
-  // The marker is checked before git, and identifies this exact directory as a
+  // The marker is looked for before git, and identifies a directory as a
   // tarball install. Requiring it is what makes the extract below safe: it is
-  // the only positive proof that `cwd` is a source root we own, so a stray
-  // invocation from some other directory errors out instead of unpacking a
-  // tarball over whatever happens to be there.
-  const marker = readInstallMarker(cwd)
-  if (marker) {
+  // the only positive proof of a source root we own, so a stray invocation from
+  // an unrelated directory errors out instead of unpacking a tarball over
+  // whatever happens to be there.
+  const install = findInstallRoot(cwd)
+  if (install) {
+    if (install.dir !== cwd) console.log(`Updating the install at ${install.dir}…`)
     try {
-      await updateFromTarball(cwd, marker)
+      await updateFromTarball(install.dir, install.marker)
     } catch (e) {
       // Stop the `update` script rather than rebuilding a stale tree: the user
       // asked to update, and silently building the old source would look like
@@ -93,10 +94,23 @@ async function main(): Promise<void> {
     return
   }
 
-  // No marker, so this must be a checkout. Ask git rather than looking for a
-  // `.git` entry: git commands work from anywhere inside a work tree, but
-  // `.git` only exists at its root, so a directory test would misread a
-  // subdirectory as "not a checkout".
+  // No marker, so this can only be a checkout. Distinguish "git is missing"
+  // from "this is not a checkout": without git the rev-parse below fails the
+  // same way an unrelated directory does, and blaming the directory would send
+  // someone looking in entirely the wrong place.
+  if (!git(['--version'], { allowFailure: true })) {
+    console.error(
+      `git is not installed, and ${cwd} is not a tarball install either (no ${INSTALL_MARKER} ` +
+        'here or in any parent) — cannot update. Install git, or reinstall with install.sh to ' +
+        'get a tarball install that updates without it.',
+    )
+    process.exitCode = 1
+    return
+  }
+
+  // Ask git rather than looking for a `.git` entry: git commands work from
+  // anywhere inside a work tree, but `.git` only exists at its root, so a
+  // directory test would misread a subdirectory as "not a checkout".
   if (resolveOrNull(['rev-parse', '--is-inside-work-tree']) !== 'true') {
     console.error(
       `${cwd} is neither a git checkout nor a tarball install (no .git, no ${INSTALL_MARKER}) — ` +

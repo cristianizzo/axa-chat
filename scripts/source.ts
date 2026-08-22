@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 /**
  * Source-tree provenance for installs that have no git checkout.
@@ -84,6 +84,22 @@ export function readInstallMarker(dir: string): InstallMarker | null {
     commit,
     // Cosmetic only, so a bad value degrades to empty instead of rejecting.
     updatedAt: typeof updatedAt === 'string' ? updatedAt : '',
+  }
+}
+
+/**
+ * Find the tarball install root at or above `start`, or null when there is
+ * none. Walking up mirrors git, which resolves its work tree from any depth, so
+ * an update run from a subdirectory behaves the same for both install types.
+ */
+export function findInstallRoot(start: string): { dir: string; marker: InstallMarker } | null {
+  let dir = resolve(start)
+  for (;;) {
+    const marker = readInstallMarker(dir)
+    if (marker) return { dir, marker }
+    const parent = dirname(dir)
+    if (parent === dir) return null // reached the filesystem root
+    dir = parent
   }
 }
 

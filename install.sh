@@ -126,6 +126,17 @@ write_install_marker() {
 EOF
 }
 
+# True when $1 holds no entries at all, dotfiles included. Written with globs
+# rather than `ls -A` so the git-less path stays free of extra tooling: an
+# unmatched glob stays literal, and `-e` on a literal is false.
+dir_is_empty() {
+  local entry
+  for entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+    if [ -e "$entry" ]; then return 1; fi
+  done
+  return 0
+}
+
 # Download the branch head as a tarball and unpack it over $INSTALL_DIR.
 # Resolve the SHA first so the download is pinned to an exact commit and the
 # marker records what was actually installed.
@@ -184,7 +195,14 @@ fetch_source() {
     git clone "$REPO" "$INSTALL_DIR"
   else
     # No git, or a pre-existing directory that is not a checkout.
-    if [ -d "$INSTALL_DIR" ]; then
+    if [ -d "$INSTALL_DIR" ] && ! dir_is_empty "$INSTALL_DIR"; then
+      # Unpacking over a directory we do not recognise could bury someone
+      # else's files, and unlike the git path there is no clone step to refuse
+      # first — so require a sign this is an axa-chat tree before writing.
+      if [ ! -f "$INSTALL_DIR/package.json" ] && [ ! -f "$INSTALL_DIR/.axa-install.json" ]; then
+        fail "$INSTALL_DIR already exists but does not look like an axa-chat install.
+    Move or remove it, then run the installer again."
+      fi
       warn "$INSTALL_DIR already exists — refreshing it from the tarball"
     fi
     fetch_tarball
