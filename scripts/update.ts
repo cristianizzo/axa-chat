@@ -1,9 +1,7 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
 import {
-  DEFAULT_REF,
-  DEFAULT_REPO_SLUG,
+  INSTALL_MARKER,
+  type InstallMarker,
   readInstallMarker,
   resolveLatestCommit,
   syncFromTarball,
@@ -12,8 +10,9 @@ import {
 /**
  * Self-update helper for the `update` script.
  *
- * Installs without git have no `.git` to pull from, so those trees are
- * refreshed from a GitHub source tarball instead (see `scripts/source.ts`).
+ * Installs without git have no checkout to pull from, so those trees are
+ * refreshed from a GitHub source tarball instead (see `scripts/source.ts`);
+ * they are recognised by the marker file the installer leaves behind.
  * Everything below applies to the git path.
  *
  * `git pull` refuses to proceed on a divergent branch ("Need to specify how to
@@ -30,9 +29,10 @@ import {
  *     tree and branch are never left in a broken state.
  *
  * Exit behavior: returns 0 on the skip, fast-forward, and successful rebase
- * paths; sets exitCode 1 if a rebase failed and was aborted, or if a tarball
- * refresh could not complete (so the caller stops instead of rebuilding a stale
- * tree and reporting success). Note a
+ * paths; sets exitCode 1 if a rebase failed and was aborted, if a tarball
+ * refresh could not complete, or if the directory is neither kind of install
+ * (so the caller stops instead of rebuilding a stale tree and reporting
+ * success). Note a
  * hard failure (e.g. `git fetch` failing, or being outside a git repo where the
  * early checks throw) will still surface an error to the `update` script, which
  * then stops rather than proceeding to `bun install`.
@@ -56,28 +56,33 @@ function resolveOrNull(args: string[]): string | null {
  * Refresh a tarball install in place. Skips the download when the recorded
  * commit already matches upstream, so a no-op update costs one API call.
  */
-async function updateFromTarball(dir: string): Promise<void> {
-  const marker = readInstallMarker(dir)
-  const repo = marker?.repo ?? DEFAULT_REPO_SLUG
-  const ref = marker?.ref ?? DEFAULT_REF
+async function updateFromTarball(dir: string, marker: InstallMarker): Promise<void> {
+  const { repo, ref } = marker
 
   const latest = await resolveLatestCommit(repo, ref)
-  if (marker?.commit === latest) {
+  if (marker.commit === latest) {
     console.log(`Already on the latest ${repo}@${ref} (${latest.slice(0, 8)}).`)
     return
   }
 
-  const from = marker ? `${marker.commit.slice(0, 8)} → ` : ''
-  console.log(`Updating source from ${repo}@${ref} (${from}${latest.slice(0, 8)})…`)
+  console.log(
+    `Updating source from ${repo}@${ref} (${marker.commit.slice(0, 8)} → ${latest.slice(0, 8)})…`,
+  )
   await syncFromTarball(dir, repo, ref, latest)
 }
 
 async function main(): Promise<void> {
-  // No checkout to reconcile: this tree came from a tarball (or git is not
-  // installed at all), so refresh it the same way the installer seeded it.
-  if (!existsSync(join(process.cwd(), '.git'))) {
+  const cwd = process.cwd()
+
+  // The marker is checked before git, and identifies this exact directory as a
+  // tarball install. Requiring it is what makes the extract below safe: it is
+  // the only positive proof that `cwd` is a source root we own, so a stray
+  // invocation from some other directory errors out instead of unpacking a
+  // tarball over whatever happens to be there.
+  const marker = readInstallMarker(cwd)
+  if (marker) {
     try {
-      await updateFromTarball(process.cwd())
+      await updateFromTarball(cwd, marker)
     } catch (e) {
       // Stop the `update` script rather than rebuilding a stale tree: the user
       // asked to update, and silently building the old source would look like
@@ -85,6 +90,19 @@ async function main(): Promise<void> {
       console.error(`Could not refresh the source tree: ${(e as Error).message}`)
       process.exitCode = 1
     }
+    return
+  }
+
+  // No marker, so this must be a checkout. Ask git rather than looking for a
+  // `.git` entry: git commands work from anywhere inside a work tree, but
+  // `.git` only exists at its root, so a directory test would misread a
+  // subdirectory as "not a checkout".
+  if (resolveOrNull(['rev-parse', '--is-inside-work-tree']) !== 'true') {
+    console.error(
+      `${cwd} is neither a git checkout nor a tarball install (no .git, no ${INSTALL_MARKER}) — ` +
+        'cannot update. Run this from your axa-chat source directory.',
+    )
+    process.exitCode = 1
     return
   }
 
