@@ -250,7 +250,11 @@ export function isSameModel(a: ModelName, b: ModelName): boolean {
 // Opus falls back to Sonnet. Returns undefined when there is no distinct
 // fallback (non-Opus models), which lets the refusal surface terminally.
 export function getRefusalFallbackModel(model: ModelName): ModelName | undefined {
-  if (model.includes('opus')) {
+  // Detect Opus on the canonical name, not the raw ID: modelOverrides can map
+  // an Opus model to an arbitrary provider string (a Bedrock ARN, say) with no
+  // "opus" in it, and a substring check on the raw ID would skip the fallback
+  // for precisely the users who configured an override.
+  if (getCanonicalName(model).includes('opus')) {
     const sonnet = getDefaultSonnetModel()
     return isSameModel(sonnet, model) ? undefined : sonnet
   }
