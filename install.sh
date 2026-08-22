@@ -137,6 +137,18 @@ dir_is_empty() {
   return 0
 }
 
+# Whether $1 holds an axa-chat source tree. A package.json alone is far too
+# common a thing to find in a directory, so accept either our own marker or a
+# pair of files specific to this project.
+looks_like_axa_source() {
+  if [ -f "$1/.axa-install.json" ]; then return 0; fi
+  if [ -f "$1/package.json" ] && [ -f "$1/scripts/build.ts" ] &&
+     [ -f "$1/src/entrypoints/cli.tsx" ]; then
+    return 0
+  fi
+  return 1
+}
+
 # Download the branch head as a tarball and unpack it over $INSTALL_DIR.
 # Resolve the SHA first so the download is pinned to an exact commit and the
 # marker records what was actually installed.
@@ -199,7 +211,7 @@ fetch_source() {
       # Unpacking over a directory we do not recognise could bury someone
       # else's files, and unlike the git path there is no clone step to refuse
       # first — so require a sign this is an axa-chat tree before writing.
-      if [ ! -f "$INSTALL_DIR/package.json" ] && [ ! -f "$INSTALL_DIR/.axa-install.json" ]; then
+      if ! looks_like_axa_source "$INSTALL_DIR"; then
         fail "$INSTALL_DIR already exists but does not look like an axa-chat install.
     Move or remove it, then run the installer again."
       fi

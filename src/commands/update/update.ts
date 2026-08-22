@@ -25,7 +25,10 @@ const INSTALL_MARKER = '.axa-install.json'
  */
 function isRepoRoot(dir: string): boolean {
   if (!existsSync(join(dir, 'package.json'))) return false
-  return existsSync(join(dir, '.git')) || existsSync(join(dir, INSTALL_MARKER))
+  // The marker has to parse, not merely exist: an empty or malformed file of
+  // that name would otherwise nominate its directory, and `bun run update`
+  // would then run there.
+  return existsSync(join(dir, '.git')) || markerSha(dir) !== ''
 }
 
 /** Walk up from `start` until a source root or fs root. */
