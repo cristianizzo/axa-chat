@@ -1,5 +1,13 @@
 import { execFile, spawn } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { delimiter as pathDelimiter, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -17,9 +25,9 @@ import { logError } from './log.js'
  * is a commit. This runs in two phases:
  *
  *   1. download + install deps + build, into `cli-dev.next` beside the live
- *      binary. Slow (minutes) but harmless: nothing the running process depends
- *      on is touched, because the compiled binary reads nothing from the source
- *      tree at runtime.
+ *      binary. Slow (minutes) but harmless: the compiled binary has its own
+ *      copy of everything it executes, so rewriting the source under it changes
+ *      nothing about the session already running.
  *   2. swap, by renaming the staged binary over the live one. rename(2) is
  *      atomic and the running process keeps its own inode, so this is safe to
  *      do mid-session; the new build is picked up on the next start.
@@ -37,9 +45,15 @@ const DEFAULT_REF = 'main'
 
 /**
  * The binary `install.sh` builds and symlinks `axa` to, and the staged path
- * that `bun run update:staged` writes. Auto-update only runs when the process
- * really is that binary, so the hardcoded name in the package script and the
- * file we swap can never refer to different things.
+ * that `bun run update:staged` writes beside it.
+ *
+ * Both names are duplicated in `package.json`, which the build actually obeys;
+ * nothing checks that the two agree. `update:staged` compiles to
+ * `cli-dev.next.tmp` and renames — the compile must not be interruptible at the
+ * path this module then swaps from, or a killed build would leave a truncated
+ * file that looks staged and gets promoted to the live binary. Change either
+ * name in one place only and every update fails with "was not produced by
+ * bun run update:staged".
  */
 const LIVE_BINARY = 'cli-dev'
 const STAGED_BINARY = 'cli-dev.next'
@@ -50,6 +64,12 @@ const PROGRESS_PREFIX = '##axa-update '
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 /** Cap on the two remote lookups, both of which run while holding the lock. */
 const NETWORK_TIMEOUT_MS = 20 * 1000
+/**
+ * Cap on the local probes (`git ...`, `bun --version`). These are expected to
+ * return in milliseconds, but they run while holding the lock and inside the
+ * awaited housekeeping chain, so one wedged process must not stall either.
+ */
+const PROBE_TIMEOUT_MS = 10 * 1000
 /** Generous: a cold update reinstalls node_modules and compiles from scratch. */
 const LOCK_STALE_MS = 30 * 60 * 1000
 
@@ -62,9 +82,9 @@ export type UpdateProgress =
 
 /**
  * Share of the overall bar each stage gets, weighted by how long each actually
- * takes: the tarball is a few megabytes, `bun install` pulls ~400MB, and the
- * compile is seconds. Only `install` and `build` really move the bar, and
- * neither reports sub-progress, so the bar advances at stage boundaries while
+ * takes: the source download is small, `bun install` dominates, and the compile
+ * is comparatively quick. Only the download reports sub-progress, so for most
+ * of the run the bar sits at the boundary the last stage change put it at and
  * the byte counter and spinner carry liveness.
  */
 const STAGE_RANGE: Record<UpdateStage, { start: number; span: number }> = {
@@ -164,9 +184,12 @@ function readMarker(dir: string): InstallMarker | null {
  *
  * Tested by files specific to this project, not by `package.json` plus a `.git`
  * — that describes most repositories on the machine, and `/update` runs
- * `bun run update` in whatever this returns, which would mean executing a
- * script defined by someone else's package.json. Mirrors `looks_like_axa_source`
- * in install.sh.
+ * `bun run update:staged` in whatever this returns, which would mean executing
+ * a script defined by someone else's package.json.
+ *
+ * Stricter than `looks_like_axa_source` in install.sh, which accepts a tree
+ * carrying the marker *or* these files: this one requires all three, because
+ * the marker is attacker-writable and is checked separately.
  */
 function isRepoRoot(dir: string): boolean {
   return (
@@ -195,24 +218,28 @@ function walkUpToRepoRoot(start: string): string | null {
  * cloned with git or unpacked from a tarball).
  */
 export function findRepoDir(): string | null {
-  const candidates: string[] = []
   try {
     const binary = isInBundledMode() ? realpathSync(process.execPath) : (process.argv[1] ?? '')
-    if (binary) candidates.push(dirname(binary))
+    if (binary) {
+      const root = walkUpToRepoRoot(dirname(binary))
+      if (root) return root
+    }
   } catch {
     // realpathSync can throw on a dangling symlink — fall through to fallbacks.
   }
-  if (process.env.HOME) candidates.push(join(process.env.HOME, 'axa-chat'))
+
+  // The installer's directory exactly, with no walk up: this is a guess at
+  // where an install lives, not a path we were launched from, and a parent of
+  // it is $HOME. A home directory that happens to hold a package.json, a
+  // scripts/build.ts and a src/entrypoints/cli.tsx would otherwise nominate
+  // itself, and `/update` runs `bun run update:staged` in whatever this returns.
+  const installed = process.env.HOME ? join(process.env.HOME, 'axa-chat') : ''
+  if (installed && isRepoRoot(installed)) return installed
+
   // cwd only when running from source, where the tree we are in is by
   // definition the one to update. For a compiled binary the cwd is the user's
   // project, which is not ours to pull or rebuild.
-  if (!isInBundledMode()) candidates.push(process.cwd())
-
-  for (const dir of candidates) {
-    const root = walkUpToRepoRoot(dir)
-    if (root) return root
-  }
-  return null
+  return isInBundledMode() ? null : walkUpToRepoRoot(process.cwd())
 }
 
 /** Find a runnable `bun` — PATH first, then the standard install locations. */
@@ -222,10 +249,10 @@ export async function findBun(): Promise<string> {
   candidates.push('/opt/homebrew/bin/bun', '/usr/local/bin/bun')
   for (const bun of candidates) {
     try {
-      await pexec(bun, ['--version'])
+      await pexec(bun, ['--version'], { timeout: PROBE_TIMEOUT_MS })
       return bun
     } catch {
-      // try next candidate
+      /* not here */
     }
   }
   throw new Error(
@@ -255,7 +282,11 @@ export function withBunOnPath(bun: string): NodeJS.ProcessEnv {
  * than `gitLine`: `git status --porcelain` prints nothing for a clean tree, so
  * collapsing failure to `''` would read "git is broken" as "clean".
  */
-async function tryGit(repoDir: string, args: string[], timeout?: number): Promise<string | null> {
+async function tryGit(
+  repoDir: string,
+  args: string[],
+  timeout: number = PROBE_TIMEOUT_MS,
+): Promise<string | null> {
   try {
     const { stdout } = await pexec('git', ['-C', repoDir, ...args], { timeout })
     return stdout.trim()
@@ -291,9 +322,19 @@ async function latestUpstreamSha(repoDir: string): Promise<string | null> {
   if (existsSync(join(repoDir, '.git'))) {
     const branch = await tryGit(repoDir, ['rev-parse', '--abbrev-ref', 'HEAD'])
     if (!branch || branch === 'HEAD') return null
+
+    // The branch's configured upstream, not `origin/<branch>`. `scripts/update.ts`
+    // fast-forwards to `@{upstream}`, so a branch tracking anything else would
+    // be compared against a commit the pull is never going to land on: the
+    // ancestry test would never match and the tree would reinstall and
+    // recompile every day chasing it.
+    const remote = await tryGit(repoDir, ['config', '--get', `branch.${branch}.remote`])
+    const merge = await tryGit(repoDir, ['config', '--get', `branch.${branch}.merge`])
+    if (!remote || !merge) return null
+
     // Bounded: this runs under the lock, and a blackholed network would
     // otherwise hold it until the stale window expires.
-    const line = await tryGit(repoDir, ['ls-remote', 'origin', branch], NETWORK_TIMEOUT_MS)
+    const line = await tryGit(repoDir, ['ls-remote', remote, merge], NETWORK_TIMEOUT_MS)
     const sha = line?.split(/\s/)[0] ?? ''
     return /^[0-9a-f]{40}$/.test(sha) ? sha : null
   }
@@ -305,12 +346,14 @@ async function latestUpstreamSha(repoDir: string): Promise<string | null> {
 /**
  * Whether the tree already contains `latest`. An equality test is not enough:
  * `scripts/update.ts` skips the pull when HEAD is not behind its upstream, so a
- * tree that is level with or ahead of `origin/<branch>` would otherwise look
+ * tree that is level with or ahead of its upstream would otherwise look
  * perpetually out of date and rebuild itself every single day.
  */
 async function isAlreadyApplied(repoDir: string, latest: string, local: string): Promise<boolean> {
   if (latest === local) return true
   if (!existsSync(join(repoDir, '.git'))) return false
+  // `--is-ancestor` answers by exit status and prints nothing, so a non-null
+  // return (an empty string) is the yes.
   return (await tryGit(repoDir, ['merge-base', '--is-ancestor', latest, 'HEAD'])) !== null
 }
 
@@ -320,13 +363,21 @@ async function isAlreadyApplied(repoDir: string, latest: string, local: string):
  */
 async function resolveLatestCommit(repo: string, ref: string): Promise<string | null> {
   const path = `${repo.split('/').map(encodeURIComponent).join('/')}/commits/${encodeURIComponent(ref)}`
-  const res = await fetch(`https://api.github.com/repos/${path}`, {
-    headers: { accept: 'application/vnd.github.sha', 'user-agent': 'axa-chat-updater' },
-    signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
-  })
-  if (!res.ok) return null
-  const sha = (await res.text()).trim()
-  return /^[0-9a-f]{40}$/.test(sha) ? sha : null
+  try {
+    const res = await fetch(`https://api.github.com/repos/${path}`, {
+      headers: { accept: 'application/vnd.github.sha', 'user-agent': 'axa-chat-updater' },
+      signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
+    })
+    if (!res.ok) return null
+    const sha = (await res.text()).trim()
+    return /^[0-9a-f]{40}$/.test(sha) ? sha : null
+  } catch {
+    // Offline, DNS down, rate limited, timed out. Indistinguishable from "no
+    // newer commit" as far as this run is concerned, and not worth reporting:
+    // the check runs on every idle period, so a laptop off the network would
+    // otherwise file the same error all day.
+    return null
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -341,6 +392,11 @@ type UpdateState = {
    * or a shutdown in between leaves a tree that is already at `latest` with a
    * binary that is not. Comparing against this instead of the tree means such a
    * run is retried rather than mistaken for up to date forever.
+   *
+   * Recorded as the tree's revision at the moment of the swap, which is exact
+   * because the two always move together: the same `update:staged` run that
+   * pulls the tree is the one that produces the binary swapped in, and the lock
+   * keeps a second run from moving the tree in between.
    */
   builtSha?: string
 }
@@ -386,17 +442,57 @@ function writeState(repoDir: string, state: UpdateState): void {
  * `/update` so a foreground run and a background one cannot run `bun install`
  * and a compile over each other in the same tree.
  *
+ * Throws on anything that is not contention. Only `ELOCKED` means "someone else
+ * is mid-update"; an unwritable tree or a missing directory fails here too, and
+ * flattening those to null would have `/update` tell the user to wait for a run
+ * that does not exist and is never going to finish.
+ *
  * `realpath: false` because the state file may not exist yet on a first run.
  */
 export async function acquireUpdateLock(repoDir: string): Promise<(() => Promise<void>) | null> {
-  return lock(stateFilePath(repoDir), {
-    stale: LOCK_STALE_MS,
-    realpath: false,
-    // Default is to rethrow, from inside an fs callback — an uncaught exception
-    // that would take axa down. A compromised lock (the machine slept past the
-    // stale window, or another process reaped it) is worth a log, not a crash.
-    onCompromised: logError,
-  }).catch(() => null)
+  let compromised = false
+  let release: () => Promise<void>
+  try {
+    release = await lock(stateFilePath(repoDir), {
+      stale: LOCK_STALE_MS,
+      realpath: false,
+      // Default is to rethrow, from inside an fs callback — an uncaught exception
+      // that would take axa down. A compromised lock (the machine slept past the
+      // stale window, or another process reaped it) is worth a log, not a crash.
+      onCompromised: e => {
+        compromised = true
+        logError(e)
+      },
+    })
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ELOCKED') return null
+    throw e
+  }
+
+  // axa leaves via `process.exit`, which never settles the pending promise the
+  // async release returns, so quitting mid-update would strand the lock
+  // directory with a fresh mtime. Every session for the next half hour would
+  // then be told an update is already running with nothing running at all —
+  // and quitting mid-update is the normal case, since the build only starts
+  // after the user has been idle and then takes minutes. Hence a synchronous
+  // teardown as well.
+  const lockDir = `${stateFilePath(repoDir)}.lock`
+  const onExit = () => {
+    // No longer ours: another process may have reaped and retaken it, and
+    // removing it then would hand a third one a lock over a live update.
+    if (compromised) return
+    try {
+      rmSync(lockDir, { recursive: true, force: true })
+    } catch {
+      // Exiting anyway; the stale window is the backstop.
+    }
+  }
+  process.once('exit', onExit)
+
+  return async () => {
+    process.removeListener('exit', onExit)
+    await release()
+  }
 }
 
 /**
@@ -412,27 +508,29 @@ export async function recordBuiltSha(repoDir: string): Promise<void> {
 // Phase 1: stage a new build
 // ---------------------------------------------------------------------------
 
-function handleProgressLine(line: string): void {
-  if (!line.startsWith(PROGRESS_PREFIX)) return
+/** Apply one line of child output, returning what it reported, or null. */
+function handleProgressLine(line: string): { stage: UpdateStage; percent: number } | null {
+  if (!line.startsWith(PROGRESS_PREFIX)) return null
   let parsed: unknown
   try {
     parsed = JSON.parse(line.slice(PROGRESS_PREFIX.length))
   } catch {
-    return
+    return null
   }
-  if (typeof parsed !== 'object' || parsed === null) return
+  if (typeof parsed !== 'object' || parsed === null) return null
   const { stage, percent, detail } = parsed as Record<string, unknown>
-  if (stage !== 'download' && stage !== 'install' && stage !== 'build') return
-  if (typeof percent !== 'number' || !Number.isFinite(percent)) return
+  if (stage !== 'download' && stage !== 'install' && stage !== 'build') return null
+  if (typeof percent !== 'number' || !Number.isFinite(percent)) return null
 
-  // Everything the child writes to stdout is parsed here, `bun install`'s
-  // output included, so `detail` is not fully under our control — bound it
-  // rather than handing an arbitrary string to the renderer.
+  // `detail` comes from the child's stdout, and `bun install` and the compile
+  // both write there too — a line of theirs that happened to carry the prefix
+  // would reach the renderer. Bound it rather than trusting the length.
   setRunning(stage, percent, typeof detail === 'string' ? detail.slice(0, 80) : undefined)
 
   // Nothing instruments `bun install`, so its span is inferred: it is whatever
   // happens between the download finishing and the build announcing itself.
   if (stage === 'download' && percent >= 100) setRunning('install', 0)
+  return { stage, percent }
 }
 
 /** Beyond this, the update is assumed wedged (a hung fetch, a stuck install). */
@@ -455,12 +553,16 @@ export function runStagedUpdate(repoDir: string, bun: string): Promise<void> {
       const { pid } = child
       if (pid === undefined) return
       try {
-        // Negative pid: the process group, so the whole `bun run` tree goes.
         process.kill(-pid, sig)
       } catch {
         // Already gone.
       }
     }
+
+    // Whether the child is past `scripts/update.ts`, which reports `download`
+    // and hands over at 100. Everything before that point is git (or tar);
+    // everything after is `bun install` and the compile.
+    let pastSourcePhase = false
 
     /** SIGKILL after a grace period, since a wedged child may ignore SIGTERM. */
     const kill = () => {
@@ -477,10 +579,18 @@ export function runStagedUpdate(repoDir: string, bun: string): Promise<void> {
 
     // A staged build left running past exit would keep writing into the tree
     // with nothing left to swap it in, and the lock it was covered by dies with
-    // us. SIGKILL directly: 'exit' handlers run synchronously on a process that
+    // us. One signal only: 'exit' handlers run synchronously on a process that
     // is already leaving, so a deferred escalation would never fire, and
     // `detached` means the child does not get the terminal's SIGHUP either.
-    const onExit = () => signalGroup('SIGKILL')
+    //
+    // Which signal depends on where it got to. SIGKILL during the git phase can
+    // leave `.git/index.lock` or a half-written ref behind, and from then on
+    // every git call in this tree fails — which fails closed, so auto-update
+    // would be off for good and `/update` broken, until the user finds the lock
+    // file themselves. git tears those down on SIGTERM. After that phase it is
+    // `bun install` and the compile, both re-runnable from scratch, so those
+    // get the signal that is actually guaranteed to stop them.
+    const onExit = () => signalGroup(pastSourcePhase ? 'SIGKILL' : 'SIGTERM')
     process.once('exit', onExit)
 
     const cleanup = () => {
@@ -490,11 +600,19 @@ export function runStagedUpdate(repoDir: string, bun: string): Promise<void> {
 
     // Progress lines can be split across chunks; hold the trailing partial.
     let pending = ''
+    // `scripts/update.ts` explains itself on stdout ("git is not installed",
+    // "no such ref"), so a tail of it is kept for the failure message — several
+    // ways this child fails say why there and exit without touching stderr.
+    let stdout = ''
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
       const lines = (pending + chunk).split('\n')
       pending = (lines.pop() ?? '').slice(-MAX_PENDING_LINE)
-      for (const line of lines) handleProgressLine(line)
+      for (const line of lines) {
+        const reported = handleProgressLine(line)
+        if (!reported) stdout = `${stdout}${line}\n`.slice(-2000)
+        else if (reported.stage !== 'download' || reported.percent >= 100) pastSourcePhase = true
+      }
     })
 
     let stderr = ''
@@ -507,7 +625,7 @@ export function runStagedUpdate(repoDir: string, bun: string): Promise<void> {
       cleanup()
       reject(e)
     })
-    child.on('close', code => {
+    child.on('close', (code, signal) => {
       cleanup()
       // The child can exit without a trailing newline; that last line still
       // carries the final progress marker.
@@ -517,7 +635,19 @@ export function runStagedUpdate(repoDir: string, bun: string): Promise<void> {
       } else if (code === 0) {
         resolve()
       } else {
-        reject(new Error(stderr.trim() || `bun run update:staged exited with ${code}`))
+        // How it died leads, and the captured output follows. A `bun install`
+        // that the OOM killer takes out exits on a signal with an empty or
+        // unrelated stderr, so reporting the output alone would describe the
+        // wrong failure — or none at all.
+        const how = signal ? `killed by ${signal}` : `exited with ${code}`
+        const output = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n')
+        reject(
+          new Error(
+            output
+              ? `bun run update:staged ${how}:\n${output}`
+              : `bun run update:staged ${how}`,
+          ),
+        )
       }
     })
   })
@@ -536,8 +666,28 @@ export function runStagedUpdate(repoDir: string, bun: string): Promise<void> {
  */
 export function applyStagedBinary(repoDir: string): boolean {
   const staged = join(repoDir, STAGED_BINARY)
-  if (!existsSync(staged)) return false
-  renameSync(staged, join(repoDir, LIVE_BINARY))
+  let stats
+  try {
+    stats = lstatSync(staged)
+  } catch {
+    return false
+  }
+  // lstat, and a real file: rename(2) moves a symlink rather than following it,
+  // so a `cli-dev.next` symlink planted in the tree would make the live binary
+  // point at something we never built — and axa would exec it on next launch.
+  if (!stats.isFile()) return false
+
+  // A staged build is applied by a later session than the one that made it, and
+  // `bun run build:dev` in the meantime writes the live binary directly. Older
+  // wins nothing: promoting it would quietly undo that rebuild.
+  const live = join(repoDir, LIVE_BINARY)
+  try {
+    if (lstatSync(live).mtimeMs > stats.mtimeMs) return false
+  } catch {
+    // No live binary to lose to.
+  }
+
+  renameSync(staged, live)
   return true
 }
 
@@ -569,7 +719,14 @@ async function isUnattendedUpdateSafe(repoDir: string): Promise<boolean> {
   // Every check below fails closed — a null is git erroring out, not a clean
   // tree, and "we could not tell" must never authorise a rebase and rebuild.
   const status = await tryGit(repoDir, ['status', '--porcelain'])
-  if (status !== '') return false
+  if (status !== '') {
+    // A dirty tree is the ordinary answer and stays quiet. `git status` failing
+    // outright is not: no git on PATH, a corrupt index, an unreadable objects
+    // directory. That disables auto-update permanently and silently, so it is
+    // the one branch here worth a report.
+    if (status === null) logError(new Error(`git status failed in ${repoDir}`))
+    return false
+  }
 
   // Detached HEAD or a branch with no upstream: `git pull` in the updater has
   // nothing well-defined to fast-forward to, so leave the tree alone.

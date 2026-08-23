@@ -5,6 +5,7 @@ import { isInBundledMode } from '../../utils/bundledMode.js'
 import {
   acquireUpdateLock,
   applyStagedBinary,
+  clearUpdateProgress,
   currentRevision,
   findBun,
   findRepoDir,
@@ -32,7 +33,15 @@ export const call: LocalCommandCall = async () => {
 
   // The same lock the background updater takes: both run `bun install` and a
   // compile in this tree, and interleaving those corrupts node_modules.
-  const release = await acquireUpdateLock(repoDir)
+  let release: (() => Promise<void>) | null
+  try {
+    release = await acquireUpdateLock(repoDir)
+  } catch (e) {
+    return {
+      type: 'text',
+      value: `Could not take the update lock in ${repoDir}:\n${(e as Error).message}`,
+    }
+  }
   if (!release) {
     return {
       type: 'text',
@@ -98,6 +107,11 @@ export const call: LocalCommandCall = async () => {
         : `Already on the latest commit (${after || 'unknown'}); rebuilt${trimNote}.\nRestart axa to be safe.`,
     }
   } finally {
+    // `runStagedUpdate` drives the same progress store the background updater
+    // renders above the prompt. Here the result is reported in the command's
+    // own output instead, so leaving the bar behind would strand it at whatever
+    // percentage the child last emitted for the rest of the session.
+    clearUpdateProgress()
     await release().catch(() => {})
   }
 }

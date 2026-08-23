@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   emitProgress,
   findInstallRoot,
@@ -80,8 +82,14 @@ async function main(): Promise<void> {
   // the only positive proof of a source root we own, so a stray invocation from
   // an unrelated directory errors out instead of unpacking a tarball over
   // whatever happens to be there.
+  //
+  // A checkout is never refreshed this way, even if it carries a tarball
+  // marker. The marker is gitignored and so invisible to every guard that
+  // watches the tree for changes, and taking this path on the strength of one
+  // would swap a `git pull` from the checkout's own remote for an extract of
+  // whatever repository the file happens to name.
   const install = findInstallRoot(cwd)
-  if (install) {
+  if (install && !existsSync(join(install.dir, '.git'))) {
     if (install.dir !== cwd) console.log(`Updating the install at ${install.dir}…`)
     try {
       await updateFromTarball(install.dir, install.marker)
@@ -95,7 +103,7 @@ async function main(): Promise<void> {
     return
   }
 
-  // No marker, so this can only be a checkout. Distinguish "git is missing"
+  // No tarball marker, so this can only be a checkout. Distinguish "git is missing"
   // from "this is not a checkout": without git the rev-parse below fails the
   // same way an unrelated directory does, and blaming the directory would send
   // someone looking in entirely the wrong place.
@@ -114,8 +122,9 @@ async function main(): Promise<void> {
   // directory test would misread a subdirectory as "not a checkout".
   if (resolveOrNull(['rev-parse', '--is-inside-work-tree']) !== 'true') {
     console.error(
-      `${cwd} is neither a git checkout nor a tarball install (no .git, no ${INSTALL_MARKER}) — ` +
-        'cannot update. Run this from your axa-chat source directory.',
+      `${cwd} is not a usable git checkout, and is not a tarball install either — cannot ` +
+        `update. Run this from your axa-chat source directory. (A tree with a .git is always ` +
+        `updated through git; a ${INSTALL_MARKER} in one is ignored.)`,
     )
     process.exitCode = 1
     return

@@ -9,9 +9,9 @@ import { dirname, join, resolve } from 'node:path'
  * `install.sh` clones with git when it is available, but git is not installable
  * on every machine someone wants to run axa on. Without it the installer falls
  * back to downloading a source tarball from GitHub, which leaves no `.git` to
- * read the current revision from — so the tarball path writes the marker file
- * below instead, and `scripts/update.ts` / `scripts/build.ts` read it wherever
- * they would otherwise have shelled out to git.
+ * read the current revision from — so the marker file below stands in, and
+ * `scripts/update.ts` / `scripts/build.ts` read it wherever they would
+ * otherwise have shelled out to git.
  *
  * Keep this in sync with the tarball logic in `install.sh`, which performs the
  * very first fetch (it runs before this file exists on disk) and writes the
@@ -21,10 +21,18 @@ import { dirname, join, resolve } from 'node:path'
 export const DEFAULT_REPO_SLUG = 'cristianizzo/axa-chat'
 export const DEFAULT_REF = 'main'
 
-/** Written at the source-tree root by tarball installs; absent for git checkouts. */
+/**
+ * Written at the source-tree root by `install.sh`, on both install paths.
+ *
+ * Git installs get one too, carrying `source: "git"`, for a different consumer:
+ * `src/utils/sourceUpdate.ts` uses its presence as the proof that a tree is an
+ * install rather than someone's own clone. Everything in this file is about the
+ * tarball path, so `readInstallMarker` below accepts only `source: "tarball"`.
+ */
 export const INSTALL_MARKER = '.axa-install.json'
 
 export type InstallMarker = {
+  /** Only tarball markers are read here; see `INSTALL_MARKER`. */
   source: 'tarball'
   repo: string
   ref: string
@@ -161,6 +169,8 @@ export function emitProgress(stage: UpdateStage, percent: number, detail?: strin
 }
 
 const USER_AGENT = 'axa-chat-updater'
+/** Cap on the metadata lookup, which has a watching parent and no output of its own. */
+const RESOLVE_TIMEOUT_MS = 20 * 1000
 
 /** Resolve `ref` to a commit SHA over the GitHub API (no git required). */
 export async function resolveLatestCommit(repo: string, ref: string): Promise<string> {
@@ -168,7 +178,10 @@ export async function resolveLatestCommit(repo: string, ref: string): Promise<st
   // avoids parsing the (large) commit JSON just to read one field.
   const res = await fetch(
     `https://api.github.com/repos/${repo}/commits/${encodeURIComponent(ref)}`,
-    { headers: { accept: 'application/vnd.github.sha', 'user-agent': USER_AGENT } },
+    {
+      headers: { accept: 'application/vnd.github.sha', 'user-agent': USER_AGENT },
+      signal: AbortSignal.timeout(RESOLVE_TIMEOUT_MS),
+    },
   )
   if (!res.ok) {
     throw new Error(
