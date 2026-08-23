@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync } from 'fs'
 import { dirname } from 'path'
-import { findInstallRoot } from './source.js'
+import { emitProgress, findInstallRoot } from './source.js'
 
 const pkg = await Bun.file(new URL('../package.json', import.meta.url)).json() as {
   name: string
@@ -10,6 +10,19 @@ const pkg = await Bun.file(new URL('../package.json', import.meta.url)).json() a
 const args = process.argv.slice(2)
 const compile = args.includes('--compile')
 const dev = args.includes('--dev')
+
+/** Read `--flag value` or `--flag=value`, or null when the flag is absent. */
+function flagValue(name: string): string | null {
+  const inline = args.find(a => a.startsWith(`${name}=`))
+  if (inline) return inline.slice(name.length + 1) || null
+  const i = args.indexOf(name)
+  return i === -1 ? null : (args[i + 1] ?? null)
+}
+
+// Staged updates build the new binary beside the live one rather than over it:
+// `bun build --outfile` truncates its target in place, which would corrupt the
+// running axa binary that started the build. See src/utils/sourceUpdate.ts.
+const outfileOverride = flagValue('--outfile')
 
 const fullExperimentalFeatures = [
   'AGENT_MEMORY_SNAPSHOT',
@@ -132,13 +145,9 @@ for (const f of featureSet) {
 }
 const features = [...featureSet]
 
-const outfile = compile
-  ? dev
-    ? './dist/cli-dev'
-    : './dist/cli'
-  : dev
-    ? './cli-dev'
-    : './cli'
+const outfile =
+  outfileOverride ??
+  (compile ? (dev ? './dist/cli-dev' : './dist/cli') : dev ? './cli-dev' : './cli')
 const buildTime = new Date().toISOString()
 const version = dev ? getDevVersion(pkg.version) : pkg.version
 
@@ -212,6 +221,10 @@ for (const [key, value] of Object.entries(defines)) {
   cmd.push('--define', `${key}=${value}`)
 }
 
+// `bun build` reports its own stages but not a percentage, so the build reads
+// as two points to a watching parent. It is the shortest of the three stages.
+emitProgress('build', 0)
+
 const proc = Bun.spawnSync({
   cmd,
   cwd: process.cwd(),
@@ -222,6 +235,8 @@ const proc = Bun.spawnSync({
 if (proc.exitCode !== 0) {
   process.exit(proc.exitCode ?? 1)
 }
+
+emitProgress('build', 100)
 
 if (existsSync(outfile)) {
   chmodSync(outfile, 0o755)

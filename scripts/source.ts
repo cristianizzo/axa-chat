@@ -130,6 +130,36 @@ export function writeInstallMarker(
   writeFileSync(join(dir, INSTALL_MARKER), `${JSON.stringify(contents, null, 2)}\n`)
 }
 
+/**
+ * Stages of a staged update, in the order `bun run update:staged` runs them.
+ * `install` has no marker of its own: nothing instruments `bun install`, so the
+ * reader infers that stage from the gap between `download` finishing and
+ * `build` starting.
+ */
+export type UpdateStage = 'download' | 'install' | 'build'
+
+/**
+ * Line prefix for progress reported to a parent axa process. Kept out of
+ * stderr so it cannot be mistaken for build output, and behind an env var so
+ * an interactive `bun run update` stays readable.
+ *
+ * Duplicated in `src/utils/sourceUpdate.ts`, which parses these lines —
+ * `scripts/` is not part of the CLI bundle, so the two cannot share a module.
+ */
+const PROGRESS_PREFIX = '##axa-update '
+
+/**
+ * @param percent progress within `stage`, 0-100.
+ * @param detail short human-readable qualifier, shown beside the stage name.
+ */
+export function emitProgress(stage: UpdateStage, percent: number, detail?: string): void {
+  if (!process.env.AXA_UPDATE_PROGRESS) return
+  const clamped = Math.max(0, Math.min(100, Math.round(percent)))
+  process.stdout.write(
+    `${PROGRESS_PREFIX}${JSON.stringify({ stage, percent: clamped, detail })}\n`,
+  )
+}
+
 const USER_AGENT = 'axa-chat-updater'
 
 /** Resolve `ref` to a commit SHA over the GitHub API (no git required). */
@@ -150,6 +180,43 @@ export async function resolveLatestCommit(repo: string, ref: string): Promise<st
     throw new Error(`Unexpected commit SHA for ${repo}@${ref}: ${JSON.stringify(sha.slice(0, 80))}`)
   }
   return sha
+}
+
+/**
+ * Buffer a response body, reporting download progress as it arrives.
+ *
+ * Read as a stream rather than via `arrayBuffer()` so there is something to
+ * report at all. codeload generates archives on the fly and sends them chunked,
+ * with no `content-length`, so there is usually no total to compute a
+ * percentage against — hence the byte count, which is honest either way.
+ */
+async function readWithProgress(res: Response): Promise<Uint8Array> {
+  if (!res.body) return new Uint8Array(await res.arrayBuffer())
+
+  const total = Number(res.headers.get('content-length') ?? '')
+  const hasTotal = Number.isFinite(total) && total > 0
+
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+  let lastReported = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+    received += value.length
+    // Report per megabyte rather than per chunk: tens of lines instead of
+    // thousands, and still smooth at any plausible download speed.
+    if (received - lastReported >= 1024 * 1024) {
+      lastReported = received
+      emitProgress(
+        'download',
+        hasTotal ? (received / total) * 100 : 0,
+        `${(received / (1024 * 1024)).toFixed(1)} MB`,
+      )
+    }
+  }
+  return Buffer.concat(chunks)
 }
 
 /**
@@ -181,7 +248,7 @@ export async function syncFromTarball(
 
   const tmpFile = join(mkdtempSync(join(tmpdir(), 'axa-src-')), 'source.tar.gz')
   try {
-    writeFileSync(tmpFile, new Uint8Array(await res.arrayBuffer()))
+    writeFileSync(tmpFile, await readWithProgress(res))
     try {
       // --strip-components=1 drops GitHub's `<repo>-<sha>/` wrapper directory.
       execFileSync('tar', ['-xzf', tmpFile, '--strip-components=1', '-C', dir], {

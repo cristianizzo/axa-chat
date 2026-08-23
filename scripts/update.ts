@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import {
+  emitProgress,
   findInstallRoot,
   INSTALL_MARKER,
   type InstallMarker,
@@ -204,4 +205,12 @@ async function main(): Promise<void> {
   }
 }
 
-await main()
+// Bracket every exit path so a watching parent never stalls at the value the
+// last chunk left behind. The tarball path reports real percentages in
+// between; the git path has no equivalent hook, so it just jumps 0 → 100.
+emitProgress('download', 0)
+try {
+  await main()
+} finally {
+  emitProgress('download', 100)
+}

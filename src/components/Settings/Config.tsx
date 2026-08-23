@@ -609,6 +609,25 @@ export function Config({
         value: String(copyFullResponse) as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
       });
     }
+  }, {
+    id: 'autoUpdate',
+    label: 'Auto-update in the background',
+    value: globalConfig.autoUpdate,
+    type: 'boolean' as const,
+    onChange(autoUpdate: boolean) {
+      saveGlobalConfig(current_auto => ({
+        ...current_auto,
+        autoUpdate
+      }));
+      setGlobalConfig({
+        ...getGlobalConfig(),
+        autoUpdate
+      });
+      logEvent('tengu_config_changed', {
+        setting: 'autoUpdate' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+        value: String(autoUpdate) as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
+      });
+    }
   },
   // Copy-on-select is only meaningful with in-app selection (fullscreen
   // alt-screen mode). In inline mode the terminal emulator owns selection.
@@ -1144,6 +1163,9 @@ export function Config({
     }
     if (globalConfig.copyFullResponse !== initialConfig.current.copyFullResponse) {
       formattedChanges.push(`${globalConfig.copyFullResponse ? 'Enabled' : 'Disabled'} always copy full response`);
+    }
+    if (globalConfig.autoUpdate !== initialConfig.current.autoUpdate) {
+      formattedChanges.push(`${globalConfig.autoUpdate ? 'Enabled' : 'Disabled'} background auto-update`);
     }
     if (globalConfig.copyOnSelect !== initialConfig.current.copyOnSelect) {
       formattedChanges.push(`${globalConfig.copyOnSelect ? 'Enabled' : 'Disabled'} copy on select`);

@@ -111,19 +111,37 @@ install_bun() {
 # Clone & build
 # -------------------------------------------------------------------
 
-# Record the revision a tarball tree came from. Without .git this marker is the
-# only provenance the updater and the build's version stamp have to go on — it
-# must match the shape read by scripts/source.ts.
+# Record how this tree was installed. $1 is "tarball" or "git", $2 the commit.
+#
+# For tarball installs this is the only provenance there is: without .git the
+# updater and the build's version stamp have nothing else to read a revision
+# from, so the shape must match scripts/source.ts.
+#
+# Git installs write it too, for a different reason: it is the only thing that
+# distinguishes an install from a developer's checkout, which is otherwise
+# identical on disk. Background auto-update refuses to touch a tree without it,
+# so nobody's working copy gets rebased and rebuilt behind their back.
 write_install_marker() {
   cat > "$INSTALL_DIR/.axa-install.json" <<EOF
 {
-  "source": "tarball",
+  "source": "$1",
   "repo": "${REPO_SLUG}",
   "ref": "${BRANCH}",
-  "commit": "$1",
+  "commit": "$2",
   "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
+}
+
+# Marker for a git install, using the checkout's own HEAD. Skipped rather than
+# written with a bogus commit if HEAD cannot be read: the marker is a provenance
+# record, and an install that cannot prove its revision should read as absent.
+write_git_install_marker() {
+  local sha
+  sha="$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)"
+  if [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+    write_install_marker "git" "$sha"
+  fi
 }
 
 # True when $1 holds no entries at all, dotfiles included. Written with globs
@@ -184,7 +202,7 @@ fetch_tarball() {
   fi
   rm -f "$tmp"
 
-  write_install_marker "$sha"
+  write_install_marker "tarball" "$sha"
 }
 
 fetch_source() {
@@ -200,11 +218,13 @@ fetch_source() {
     git -C "$INSTALL_DIR" pull --ff-only origin "$BRANCH" 2>/dev/null || {
       warn "Pull failed, continuing with existing copy"
     }
+    write_git_install_marker
   elif [ "$HAS_GIT" = "1" ] && [ ! -d "$INSTALL_DIR" ]; then
     # Full clone, not --depth 1: a shallow repo has no merge base with upstream,
     # which breaks the divergence handling in scripts/update.ts.
     info "Cloning repository..."
     git clone "$REPO" "$INSTALL_DIR"
+    write_git_install_marker
   else
     # No git, or a pre-existing directory that is not a checkout.
     if [ -d "$INSTALL_DIR" ] && ! dir_is_empty "$INSTALL_DIR"; then

@@ -21,6 +21,7 @@ import {
 } from './cleanup.js'
 import { cleanupOldVersions } from './nativeInstaller/index.js'
 import { autoUpdateMarketplacesAndPluginsInBackground } from './plugins/pluginAutoupdate.js'
+import { maybeUpdateSourceInBackground } from './sourceUpdate.js'
 
 // 24 hours in milliseconds
 const RECURRING_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -72,6 +73,17 @@ export function startBackgroundHousekeeping(): void {
     }
 
     await cleanupOldVersions()
+
+    // Last, and deliberately inside runVerySlowOps: staging a new build runs
+    // `bun install` and a full compile, so it rides the same "wait until the
+    // user is idle" gate as the other expensive operations.
+    //
+    // Interactive only. The idle gate above is itself interactive-only, so a
+    // headless run (SDK, CI, a long `-p` session) would start a multi-minute
+    // build with no progress bar and no notification, then kill it on exit.
+    if (getIsInteractive()) {
+      await maybeUpdateSourceInBackground()
+    }
   }
 
   setTimeout(

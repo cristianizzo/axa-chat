@@ -511,6 +511,11 @@ export type GlobalConfig = {
   // Copy command behavior
   copyFullResponse: boolean // Whether /copy always copies the full response instead of showing the picker
 
+  // Background source updates. Distinct from `autoUpdates`, which drives the
+  // npm/GCS semver updater and is inert here: axa ships as a source tree, so
+  // its updates are commits, not published versions. See utils/sourceUpdate.ts
+  autoUpdate: boolean // Whether to download and build new commits in the background (default: true)
+
   // Fullscreen in-app text selection behavior
   copyOnSelect?: boolean // Auto-copy to clipboard on mouse-up (undefined → true; lets cmd+c "work" via no-op)
 
@@ -677,6 +682,7 @@ function createDefaultGlobalConfig(): GlobalConfig {
     cachedGrowthBookFeatures: {},
     respectGitignore: true,
     copyFullResponse: false,
+    autoUpdate: true,
   }
 }
 
@@ -716,6 +722,7 @@ export const GLOBAL_CONFIG_KEYS = [
   'lspRecommendationNeverPlugins',
   'lspRecommendationIgnoredCount',
   'copyFullResponse',
+  'autoUpdate',
   'copyOnSelect',
   'permissionExplainerEnabled',
   'prStatusFooterEnabled',

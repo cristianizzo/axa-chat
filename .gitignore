@@ -2,6 +2,8 @@ node_modules/
 dist/
 cli
 cli-dev
+cli-dev.next
+cli-dev.next.tmp
 openclaw/
 docs/
 CLAUDE.md
@@ -10,3 +12,5 @@ CLAUDE.md
 conversation-backup.jsonl
 .claude/
 .axa-install.json
+.axa-update.json
+.axa-update.json.lock

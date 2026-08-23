@@ -212,6 +212,19 @@ bun run build:dev
 bun run update
 ```
 
+Installs made by `install.sh` also update themselves. Once a day an idle session
+checks for a newer commit and, if there is one, downloads and builds it into
+`cli-dev.next` beside the live binary — progress shows above the prompt — then
+swaps it in with an atomic rename. The running session is unaffected; the new
+build starts with the next `axa`. Turn it off with `autoUpdate` in `/config`.
+
+Only installs update themselves, never a checkout you cloned yourself: the
+installer records `.axa-install.json` at the source root, and without it the
+background updater leaves the tree alone — so an install predating that marker
+needs `install.sh` run once more to opt in. A tree with uncommitted changes,
+unpushed commits, a detached HEAD, or a branch with no upstream is skipped as
+well. In a checkout, run `bun run update` yourself.
+
 ### Custom Feature Flags
 
 Enable specific flags without the full bundle:
