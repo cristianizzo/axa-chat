@@ -12,6 +12,7 @@ import {
   gitLine,
   recordBuiltSha,
   runStagedUpdate,
+  type UpdateLock,
 } from '../../utils/sourceUpdate.js'
 
 export const call: LocalCommandCall = async () => {
@@ -33,16 +34,16 @@ export const call: LocalCommandCall = async () => {
 
   // The same lock the background updater takes: both run `bun install` and a
   // compile in this tree, and interleaving those corrupts node_modules.
-  let release: (() => Promise<void>) | null
+  let lock: UpdateLock | null
   try {
-    release = await acquireUpdateLock(repoDir)
+    lock = await acquireUpdateLock(repoDir)
   } catch (e) {
     return {
       type: 'text',
       value: `Could not take the update lock in ${repoDir}:\n${(e as Error).message}`,
     }
   }
-  if (!release) {
+  if (!lock) {
     return {
       type: 'text',
       value:
@@ -53,13 +54,13 @@ export const call: LocalCommandCall = async () => {
   try {
     const before = await currentRevision(repoDir)
 
-    // `update:staged`, not `update`: the plain script builds to ./cli-dev,
-    // which for a compiled install is the binary running this very command.
-    // `bun build --outfile` truncates its target in place, so that either fails
-    // outright or takes the session down. Staging beside it and renaming is
-    // both safe and what the background updater already does.
+    // `update:staged`, not `update`. Both stage their build and rename it into
+    // place — `bun build --outfile` truncates its target, which for a compiled
+    // install is the binary running this very command — but `update` renames
+    // onto the live binary immediately, and the swap has to happen under this
+    // command's own control so it can report what it did.
     try {
-      await runStagedUpdate(repoDir, bun)
+      await runStagedUpdate(repoDir, bun, lock.lost)
     } catch (e) {
       return {
         type: 'text',
@@ -112,6 +113,6 @@ export const call: LocalCommandCall = async () => {
     // own output instead, so leaving the bar behind would strand it at whatever
     // percentage the child last emitted for the rest of the session.
     clearUpdateProgress()
-    await release().catch(() => {})
+    await lock.release().catch(() => {})
   }
 }

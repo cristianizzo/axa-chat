@@ -29,6 +29,25 @@ const RECURRING_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
 // 10 minutes after start.
 const DELAY_VERY_SLOW_OPERATIONS_THAT_HAPPEN_EVERY_SESSION = 10 * 60 * 1000
 
+// How often to give the source check another chance. Not how often it runs:
+// the check throttles itself to once a day and returns immediately in
+// between. This only exists because `runVerySlowOps` is a one-shot timer, so
+// a REPL left open for a week would otherwise check on day one and never again.
+const SOURCE_UPDATE_RECHECK_INTERVAL_MS = 60 * 60 * 1000
+
+let sourceUpdateInterval: NodeJS.Timeout | undefined
+
+function scheduleRecurringSourceUpdateCheck(): void {
+  if (sourceUpdateInterval) return
+  sourceUpdateInterval = setInterval(() => {
+    // Same courtesy as runVerySlowOps: a check can start a multi-minute build,
+    // so never off the back of something the user just did.
+    if (getLastInteractionTime() > Date.now() - 1000 * 60) return
+    void maybeUpdateSourceInBackground()
+  }, SOURCE_UPDATE_RECHECK_INTERVAL_MS)
+  sourceUpdateInterval.unref()
+}
+
 export function startBackgroundHousekeeping(): void {
   void initMagicDocs()
   void initSkillImprovement()
@@ -83,6 +102,7 @@ export function startBackgroundHousekeeping(): void {
     // build with no progress bar and no notification, then kill it on exit.
     if (getIsInteractive()) {
       await maybeUpdateSourceInBackground()
+      scheduleRecurringSourceUpdateCheck()
     }
   }
 

@@ -48,12 +48,14 @@ const DEFAULT_REF = 'main'
  * that `bun run update:staged` writes beside it.
  *
  * Both names are duplicated in `package.json`, which the build actually obeys;
- * nothing checks that the two agree. `update:staged` compiles to
- * `cli-dev.next.tmp` and renames — the compile must not be interruptible at the
- * path this module then swaps from, or a killed build would leave a truncated
- * file that looks staged and gets promoted to the live binary. Change either
- * name in one place only and every update fails with "was not produced by
- * bun run update:staged".
+ * nothing checks that the two agree, so changing either name in one place only
+ * means every update fails with "was not produced by bun run update:staged".
+ *
+ * Both package scripts compile to `cli-dev.next.tmp` and rename from there,
+ * never straight to their destination: `bun build --outfile` truncates its
+ * target in place, so a build interrupted at `cli-dev.next` would leave a
+ * truncated file that still looks staged and gets promoted to the live binary,
+ * and one interrupted at `cli-dev` would destroy the binary outright.
  */
 const LIVE_BINARY = 'cli-dev'
 const STAGED_BINARY = 'cli-dev.next'
@@ -300,13 +302,29 @@ export async function gitLine(repoDir: string, args: string[]): Promise<string> 
   return (await tryGit(repoDir, args)) ?? ''
 }
 
-/** Current revision, short, from git when there is a checkout and the marker otherwise. */
+/**
+ * Current revision, from git when `repoDir` is itself a checkout and from the
+ * marker otherwise.
+ *
+ * The `.git` test matters: git answers from anywhere inside a work tree, so a
+ * tarball install unpacked under one — `$HOME` being a checkout is enough —
+ * would otherwise be stamped with an unrelated repository's HEAD, and rebuild
+ * itself every day chasing a commit that has nothing to do with it.
+ */
 export async function currentRevision(repoDir: string): Promise<string> {
-  return (await gitLine(repoDir, ['rev-parse', '--short', 'HEAD'])) || markerCommit(repoDir).slice(0, 7)
+  return (await revision(repoDir, '--short')).slice(0, 7)
 }
 
 async function currentFullSha(repoDir: string): Promise<string> {
-  return (await gitLine(repoDir, ['rev-parse', 'HEAD'])) || markerCommit(repoDir)
+  return revision(repoDir)
+}
+
+async function revision(repoDir: string, ...flags: string[]): Promise<string> {
+  if (existsSync(join(repoDir, '.git'))) {
+    const sha = await gitLine(repoDir, ['rev-parse', ...flags, 'HEAD'])
+    if (sha) return sha
+  }
+  return markerCommit(repoDir)
 }
 
 /**
@@ -449,7 +467,19 @@ function writeState(repoDir: string, state: UpdateState): void {
  *
  * `realpath: false` because the state file may not exist yet on a first run.
  */
-export async function acquireUpdateLock(repoDir: string): Promise<(() => Promise<void>) | null> {
+export type UpdateLock = {
+  release: () => Promise<void>
+  /**
+   * Fires when the lock stops being ours — proper-lockfile refreshes its mtime
+   * while we hold it, so this means the process was suspended past the stale
+   * window (a laptop lid) and another session reaped and retook it. Whatever
+   * the lock was protecting has to stop.
+   */
+  lost: AbortSignal
+}
+
+export async function acquireUpdateLock(repoDir: string): Promise<UpdateLock | null> {
+  const lostController = new AbortController()
   let compromised = false
   let release: () => Promise<void>
   try {
@@ -457,11 +487,12 @@ export async function acquireUpdateLock(repoDir: string): Promise<(() => Promise
       stale: LOCK_STALE_MS,
       realpath: false,
       // Default is to rethrow, from inside an fs callback — an uncaught exception
-      // that would take axa down. A compromised lock (the machine slept past the
-      // stale window, or another process reaped it) is worth a log, not a crash.
+      // that would take axa down. A compromised lock is worth a log and a stop,
+      // not a crash.
       onCompromised: e => {
         compromised = true
         logError(e)
+        lostController.abort()
       },
     })
   } catch (e) {
@@ -489,9 +520,12 @@ export async function acquireUpdateLock(repoDir: string): Promise<(() => Promise
   }
   process.once('exit', onExit)
 
-  return async () => {
-    process.removeListener('exit', onExit)
-    await release()
+  return {
+    lost: lostController.signal,
+    release: async () => {
+      process.removeListener('exit', onExit)
+      await release()
+    },
   }
 }
 
@@ -538,7 +572,7 @@ const UPDATE_TIMEOUT_MS = 30 * 60 * 1000
 /** Cap on a partial line held across chunks, so garbage output cannot grow unbounded. */
 const MAX_PENDING_LINE = 64 * 1024
 
-export function runStagedUpdate(repoDir: string, bun: string): Promise<void> {
+export function runStagedUpdate(repoDir: string, bun: string, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(bun, ['run', 'update:staged'], {
       cwd: repoDir,
@@ -565,9 +599,14 @@ export function runStagedUpdate(repoDir: string, bun: string): Promise<void> {
     let pastSourcePhase = false
 
     /** SIGKILL after a grace period, since a wedged child may ignore SIGTERM. */
+    let escalation: NodeJS.Timeout | undefined
     const kill = () => {
       signalGroup('SIGTERM')
-      setTimeout(() => signalGroup('SIGKILL'), 5000).unref()
+      // Held so `cleanup` can cancel it: once the child is gone its pid is free
+      // to be reused, and firing this late would signal a stranger's process
+      // group instead.
+      escalation = setTimeout(() => signalGroup('SIGKILL'), 5000)
+      escalation.unref()
     }
 
     let timedOut = false
@@ -576,6 +615,16 @@ export function runStagedUpdate(repoDir: string, bun: string): Promise<void> {
       kill()
     }, UPDATE_TIMEOUT_MS)
     timer.unref()
+
+    // The lock stopped being ours mid-build — the machine slept past the stale
+    // window and another session reaped it. Stop, rather than let two updates
+    // write `node_modules` and the staged binary at once.
+    let lockLost = false
+    const onLockLost = () => {
+      lockLost = true
+      kill()
+    }
+    signal?.addEventListener('abort', onLockLost, { once: true })
 
     // A staged build left running past exit would keep writing into the tree
     // with nothing left to swap it in, and the lock it was covered by dies with
@@ -595,6 +644,8 @@ export function runStagedUpdate(repoDir: string, bun: string): Promise<void> {
 
     const cleanup = () => {
       clearTimeout(timer)
+      if (escalation) clearTimeout(escalation)
+      signal?.removeEventListener('abort', onLockLost)
       process.removeListener('exit', onExit)
     }
 
@@ -630,7 +681,9 @@ export function runStagedUpdate(repoDir: string, bun: string): Promise<void> {
       // The child can exit without a trailing newline; that last line still
       // carries the final progress marker.
       if (pending) handleProgressLine(pending)
-      if (timedOut) {
+      if (lockLost) {
+        reject(new Error('the update lock was taken by another process; stopped mid-build'))
+      } else if (timedOut) {
         reject(new Error(`bun run update:staged timed out after ${UPDATE_TIMEOUT_MS / 60000}min`))
       } else if (code === 0) {
         resolve()
@@ -718,7 +771,10 @@ async function isUnattendedUpdateSafe(repoDir: string): Promise<boolean> {
 
   // Every check below fails closed — a null is git erroring out, not a clean
   // tree, and "we could not tell" must never authorise a rebase and rebuild.
-  const status = await tryGit(repoDir, ['status', '--porcelain'])
+  // `--untracked-files` explicitly, because `status.showUntrackedFiles` is a
+  // config a user can set to `no` — and then a tree full of untracked work
+  // reports clean and this guard waves it through.
+  const status = await tryGit(repoDir, ['status', '--porcelain', '--untracked-files=normal'])
   if (status !== '') {
     // A dirty tree is the ordinary answer and stays quiet. `git status` failing
     // outright is not: no git on PATH, a corrupt index, an unreadable objects
@@ -803,27 +859,30 @@ export async function maybeUpdateSourceInBackground(): Promise<void> {
     // Hold the lock for the whole check-and-build so two axa sessions cannot
     // run `bun install` over each other in the same tree — and so the rename
     // below cannot land while another session is mid-build.
-    const release = await acquireUpdateLock(repoDir)
+    const lock = await acquireUpdateLock(repoDir)
     // Another session is already on it.
-    if (!release) return
+    if (!lock) return
 
     try {
+      // Re-checked under the lock, before anything is touched: the snapshot
+      // above was taken before waiting, and the user may have started editing
+      // in the meantime.
+      if (!(await isUnattendedUpdateSafe(repoDir))) return
+
       // A build staged by an earlier session that was closed before it could
       // swap. Inside the lock: an unlocked rename could pull the binary out
       // from under a build another session is still writing.
       if (applyStagedBinary(repoDir)) {
         const full = await currentFullSha(repoDir)
         if (full) writeState(repoDir, { ...readState(repoDir), builtSha: full })
+        // That earlier session installed node_modules and never got to trim it.
+        await trimNodeModules(repoDir)
         progressStore.setState(() => ({ status: 'ready', sha: full.slice(0, 7) || 'unknown' }))
         return
       }
 
       const state = readState(repoDir)
       if (state.lastCheckAt && Date.now() - state.lastCheckAt < CHECK_INTERVAL_MS) return
-
-      // Re-checked under the lock: the snapshot above was taken before waiting,
-      // and the user may have started editing in the meantime.
-      if (!(await isUnattendedUpdateSafe(repoDir))) return
 
       const [local, latest] = await Promise.all([
         currentFullSha(repoDir),
@@ -843,7 +902,7 @@ export async function maybeUpdateSourceInBackground(): Promise<void> {
 
       const bun = await findBun()
       setRunning('download', 0)
-      await runStagedUpdate(repoDir, bun)
+      await runStagedUpdate(repoDir, bun, lock.lost)
 
       // Only a swap that actually happened is an update. Without a staged
       // binary the build produced nothing, and announcing "restart to use the
@@ -858,7 +917,7 @@ export async function maybeUpdateSourceInBackground(): Promise<void> {
       await trimNodeModules(repoDir)
       progressStore.setState(() => ({ status: 'ready', sha: built.slice(0, 7) }))
     } finally {
-      await release().catch(() => {})
+      await lock.release().catch(() => {})
     }
   } catch (e) {
     clearUpdateProgress()
