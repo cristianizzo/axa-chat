@@ -209,7 +209,21 @@ fetch_source() {
   # -f as well as -d: in a linked worktree (and a submodule) .git is a file
   # pointing at the real git dir, and treating one as "not a checkout" would
   # extract a tarball straight over the user's working tree.
-  if [ "$HAS_GIT" = "1" ] && { [ -d "$INSTALL_DIR/.git" ] || [ -f "$INSTALL_DIR/.git" ]; }; then
+  local is_checkout=0
+  if [ -d "$INSTALL_DIR/.git" ] || [ -f "$INSTALL_DIR/.git" ]; then is_checkout=1; fi
+
+  # Decided before git is considered, because the tarball branch below is the
+  # one that unpacks over whatever is there: a checkout carries the marker (or
+  # looks like axa source either way), so without git it would sail past
+  # `looks_like_axa_source` and bury the user's branch and uncommitted work.
+  # There is nothing useful to do with a checkout without git, so stop.
+  if [ "$is_checkout" = "1" ] && [ "$HAS_GIT" != "1" ]; then
+    fail "$INSTALL_DIR is a git checkout, but git is not installed.
+    Install git and run the installer again, or move the checkout aside first —
+    refreshing it from a tarball would overwrite your branch and any local work."
+  fi
+
+  if [ "$HAS_GIT" = "1" ] && [ "$is_checkout" = "1" ]; then
     warn "$INSTALL_DIR already exists"
     # Earlier versions of this installer cloned with --depth 1; deepen so
     # ahead/behind comparisons and rebases work on later updates.

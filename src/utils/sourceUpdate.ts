@@ -17,6 +17,7 @@ import { getGlobalConfig } from './config.js'
 import { isEnvTruthy } from './envUtils.js'
 import { lock } from './lockfile.js'
 import { logError } from './log.js'
+import { isEssentialTrafficOnly } from './privacyLevel.js'
 
 /**
  * Background updates for source installs.
@@ -571,6 +572,12 @@ export async function acquireUpdateLock(repoDir: string): Promise<UpdateLock | n
     lost: lostController.signal,
     release: async () => {
       process.removeListener('exit', onExit)
+      // The same reasoning as the exit handler, for the same reason: after a
+      // compromise the directory at that path is somebody else's, and
+      // proper-lockfile's release removes it by path without rechecking. It
+      // has already stopped treating the lock as ours, so there is nothing
+      // left here to give back.
+      if (compromised) return
       await release()
     },
   }
@@ -641,11 +648,22 @@ export function runStagedUpdate(
   { lost: signal, ffOnly }: StagedUpdateOptions = {},
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    // Checked before spawning, not just subscribed to: a signal that has
+    // already fired never calls a listener added afterwards, and the lock can
+    // be lost during the awaits that precede this call.
+    if (signal?.aborted) {
+      reject(new Error('the update lock was lost before the build started'))
+      return
+    }
+
     const child = spawn(bun, ['run', 'update:staged'], {
       cwd: repoDir,
       env: {
         ...withBunOnPath(bun),
         AXA_UPDATE_PROGRESS: '1',
+        // This process holds the update lock on the child's behalf, so the
+        // child must not refuse on finding one — it would be refusing over us.
+        AXA_UPDATE_LOCK_HELD: '1',
         ...(ffOnly ? { AXA_UPDATE_FF_ONLY: '1' } : {}),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -672,6 +690,11 @@ export function runStagedUpdate(
     /** SIGKILL after a grace period, since a wedged child may ignore SIGTERM. */
     let escalation: NodeJS.Timeout | undefined
     const kill = () => {
+      // One escalation only. The timeout and the lock loss can both fire before
+      // the child is reaped, and a second call would overwrite the handle
+      // `cleanup` cancels — leaving an orphan to signal a process group that by
+      // then belongs to whoever inherited the pid.
+      if (escalation) return
       signalGroup('SIGTERM')
       // Held so `cleanup` can cancel it: once the child is gone its pid is free
       // to be reused, and firing this late would signal a stranger's process
@@ -822,17 +845,29 @@ export function applyStagedBinary(repoDir: string): boolean {
   // A staged build is applied by a later session than the one that made it, and
   // `bun run build:dev` in the meantime writes the live binary directly. Older
   // wins nothing: promoting it would quietly undo that rebuild.
+  //
+  // `>=`, not `>`: equal mtimes are no evidence the stage is the later of the
+  // two, and on a filesystem with one-second timestamps they are what a manual
+  // rebuild right after a staged one looks like. Keeping the live binary is the
+  // recoverable way to be wrong — the stage is rebuilt, a discarded rebuild is
+  // not.
   const live = join(repoDir, LIVE_BINARY)
   try {
     const liveMtime = lstatSync(live).mtimeMs
-    if (liveMtime > stats.mtimeMs) {
+    if (liveMtime >= stats.mtimeMs) {
       return discard(
-        `${LIVE_BINARY} is newer (${new Date(liveMtime).toISOString()} vs ` +
+        `${LIVE_BINARY} is not older (${new Date(liveMtime).toISOString()} vs ` +
           `${new Date(stats.mtimeMs).toISOString()})`,
       )
     }
-  } catch {
-    // No live binary to lose to.
+  } catch (e) {
+    // Only "there is no live binary" is safe to carry on from. Anything else —
+    // a permission error, an I/O error — leaves a live binary that may well be
+    // newer, unread, and this is the check that stops it being overwritten.
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logError(e)
+      return false
+    }
   }
 
   renameSync(staged, live)
@@ -947,6 +982,9 @@ export async function maybeUpdateSourceInBackground(): Promise<void> {
     // The env var only, not `getAutoUpdaterDisabledReason()`: that also reports
     // disabled for a development build, and every install this runs in is one.
     if (isEnvTruthy(process.env.DISABLE_AUTOUPDATER)) return
+    // Auto-updates are named in what `essential-traffic` suppresses, and this
+    // reaches GitHub on every check.
+    if (isEssentialTrafficOnly()) return
     if (!getGlobalConfig().autoUpdate) return
 
     const repoDir = autoUpdatableRepoDir()
@@ -982,6 +1020,12 @@ export async function maybeUpdateSourceInBackground(): Promise<void> {
       // above was taken before waiting, and the user may have started editing
       // in the meantime.
       if (!(await isUnattendedUpdateSafe(repoDir))) return
+
+      // The lock can be lost across any await in here, not only the build —
+      // it goes when the machine is suspended past the stale window and
+      // another session reaps it, which can happen mid-`git status` as easily
+      // as mid-compile. Checked before each thing that writes.
+      if (lock.lost.aborted) return
 
       // A build staged by an earlier session that was closed before it could
       // swap. Inside the lock: an unlocked rename could pull the binary out
@@ -1036,6 +1080,12 @@ export async function maybeUpdateSourceInBackground(): Promise<void> {
       })
       setRunning('download', 0)
       await runStagedUpdate(repoDir, bun, { lost: lock.lost, ffOnly: true })
+
+      // `runStagedUpdate` stops the child on loss, but the loss can also land
+      // in the moment between the child closing and this line.
+      if (lock.lost.aborted) {
+        throw new Error('the update lock was lost before the staged binary could be applied')
+      }
 
       // Only a swap that actually happened is an update. Without a staged
       // binary the build produced nothing, and announcing "restart to use the

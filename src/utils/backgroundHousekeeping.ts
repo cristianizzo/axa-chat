@@ -93,6 +93,19 @@ export function startBackgroundHousekeeping(): void {
 
     await cleanupOldVersions()
 
+    // Idle re-check, because the one above is now stale: `cleanupOldVersions`
+    // can run for a while, and what follows is the most expensive thing here.
+    if (
+      getIsInteractive() &&
+      getLastInteractionTime() > Date.now() - 1000 * 60
+    ) {
+      setTimeout(
+        runVerySlowOps,
+        DELAY_VERY_SLOW_OPERATIONS_THAT_HAPPEN_EVERY_SESSION,
+      ).unref()
+      return
+    }
+
     // Last, and deliberately inside runVerySlowOps: staging a new build runs
     // `bun install` and a full compile, so it rides the same "wait until the
     // user is idle" gate as the other expensive operations.

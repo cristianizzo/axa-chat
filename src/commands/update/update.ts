@@ -68,6 +68,17 @@ export const call: LocalCommandCall = async () => {
       }
     }
 
+    // The build can outlast the lock: a suspend past the stale window has
+    // another session reap and retake it, and the swap and the state write
+    // below would then race whatever that session is doing.
+    if (lock.lost.aborted) {
+      return {
+        type: 'text',
+        value:
+          'The update built, but this session lost the update lock while it ran (the machine was likely asleep) and another session has taken it. Nothing was replaced. Try again once that one has finished.',
+      }
+    }
+
     if (!applyStagedBinary(repoDir)) {
       return {
         type: 'text',
