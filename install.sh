@@ -206,7 +206,10 @@ fetch_tarball() {
 }
 
 fetch_source() {
-  if [ "$HAS_GIT" = "1" ] && [ -d "$INSTALL_DIR/.git" ]; then
+  # -f as well as -d: in a linked worktree (and a submodule) .git is a file
+  # pointing at the real git dir, and treating one as "not a checkout" would
+  # extract a tarball straight over the user's working tree.
+  if [ "$HAS_GIT" = "1" ] && { [ -d "$INSTALL_DIR/.git" ] || [ -f "$INSTALL_DIR/.git" ]; }; then
     warn "$INSTALL_DIR already exists"
     # Earlier versions of this installer cloned with --depth 1; deepen so
     # ahead/behind comparisons and rebases work on later updates.

@@ -222,9 +222,13 @@ async function readWithProgress(res: Response): Promise<Uint8Array> {
     // thousands, and still smooth at any plausible download speed.
     if (received - lastReported >= 1024 * 1024) {
       lastReported = received
+      // Capped below 100: the parent reads `download 100` as "the source phase
+      // is over, the rest is install and compile" and switches the signal it
+      // kills the child with on the strength of it. Reaching it here, with the
+      // extract still to come, would have a quit SIGKILL tar mid-write.
       emitProgress(
         'download',
-        hasTotal ? (received / total) * 100 : 0,
+        hasTotal ? Math.min(99, (received / total) * 100) : 0,
         `${(received / (1024 * 1024)).toFixed(1)} MB`,
       )
     }

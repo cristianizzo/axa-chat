@@ -60,7 +60,7 @@ export const call: LocalCommandCall = async () => {
     // onto the live binary immediately, and the swap has to happen under this
     // command's own control so it can report what it did.
     try {
-      await runStagedUpdate(repoDir, bun, lock.lost)
+      await runStagedUpdate(repoDir, bun, { lost: lock.lost })
     } catch (e) {
       return {
         type: 'text',

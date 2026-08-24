@@ -185,9 +185,22 @@ async function main(): Promise<void> {
     return
   }
 
-  // Diverged: rebase local commits on top of upstream, stashing uncommitted
-  // changes so they're not lost. If the rebase fails for any reason, abort to
-  // restore the original branch and let the user reconcile their work themselves.
+  // Diverged. An unattended run stops here: a rebase rewrites the user's own
+  // commits, and on a conflict there is nobody watching to resolve it. The
+  // abort path below would recover the tree, but the update would then fail
+  // once an hour forever with no explanation the user ever sees.
+  if (process.env.AXA_UPDATE_FF_ONLY) {
+    console.error(
+      `Diverged from ${upstream} (${ahead} local commit(s), ${behind} upstream) — refusing to ` +
+        'rebase during a background update. Run `bun run update` yourself to reconcile.',
+    )
+    process.exitCode = 1
+    return
+  }
+
+  // Rebase local commits on top of upstream, stashing uncommitted changes so
+  // they're not lost. If the rebase fails for any reason, abort to restore the
+  // original branch and let the user reconcile their work themselves.
   console.log(`Diverged from ${upstream} — rebasing local commits…`)
   try {
     execFileSync('git', ['rebase', '--autostash', upstream], {

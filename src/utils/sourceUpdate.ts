@@ -14,6 +14,7 @@ import { promisify } from 'node:util'
 import { createStore } from '../state/store.js'
 import { isInBundledMode } from './bundledMode.js'
 import { getGlobalConfig } from './config.js'
+import { isEnvTruthy } from './envUtils.js'
 import { lock } from './lockfile.js'
 import { logError } from './log.js'
 
@@ -64,6 +65,16 @@ const STAGED_BINARY = 'cli-dev.next'
 const PROGRESS_PREFIX = '##axa-update '
 
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Shorter window used when the tree holds a commit the live binary was not
+ * built from — the update pulled, then the build was killed when the session
+ * quit, which is the normal way for one to end. There is nothing to check for
+ * in that state, only a rebuild owed, so waiting out the full day would leave
+ * the source and the binary disagreeing for it. Still a window rather than no
+ * gate at all, to bound a build that fails every time it is tried.
+ */
+const REBUILD_RETRY_INTERVAL_MS = 60 * 60 * 1000
 /** Cap on the two remote lookups, both of which run while holding the lock. */
 const NETWORK_TIMEOUT_MS = 20 * 1000
 /**
@@ -370,9 +381,16 @@ async function latestUpstreamSha(repoDir: string): Promise<string | null> {
 async function isAlreadyApplied(repoDir: string, latest: string, local: string): Promise<boolean> {
   if (latest === local) return true
   if (!existsSync(join(repoDir, '.git'))) return false
-  // `--is-ancestor` answers by exit status and prints nothing, so a non-null
-  // return (an empty string) is the yes.
-  return (await tryGit(repoDir, ['merge-base', '--is-ancestor', latest, 'HEAD'])) !== null
+  return isAncestor(repoDir, latest, 'HEAD')
+}
+
+/**
+ * `git merge-base --is-ancestor` answers by exit status and prints nothing, so
+ * a non-null return (an empty string) is the yes. A commit git does not have
+ * makes it error out, which reads as false and so fails closed.
+ */
+async function isAncestor(repoDir: string, ancestor: string, descendant: string): Promise<boolean> {
+  return (await tryGit(repoDir, ['merge-base', '--is-ancestor', ancestor, descendant])) !== null
 }
 
 /**
@@ -508,11 +526,22 @@ export async function acquireUpdateLock(repoDir: string): Promise<UpdateLock | n
   // after the user has been idle and then takes minutes. Hence a synchronous
   // teardown as well.
   const lockDir = `${stateFilePath(repoDir)}.lock`
+  // Identity of the directory we were handed, so the teardown can tell it apart
+  // from a replacement. `onCompromised` is the reliable signal but it arrives on
+  // a refresh timer, so between a reap and the next tick the flag still reads
+  // clean while the directory on disk belongs to somebody else.
+  let ino: number | undefined
+  try {
+    ino = lstatSync(lockDir).ino
+  } catch {
+    // Nothing to compare against, so the teardown below will leave it alone.
+  }
   const onExit = () => {
     // No longer ours: another process may have reaped and retaken it, and
     // removing it then would hand a third one a lock over a live update.
-    if (compromised) return
+    if (compromised || ino === undefined) return
     try {
+      if (lstatSync(lockDir).ino !== ino) return
       rmSync(lockDir, { recursive: true, force: true })
     } catch {
       // Exiting anyway; the stale window is the backstop.
@@ -572,11 +601,30 @@ const UPDATE_TIMEOUT_MS = 30 * 60 * 1000
 /** Cap on a partial line held across chunks, so garbage output cannot grow unbounded. */
 const MAX_PENDING_LINE = 64 * 1024
 
-export function runStagedUpdate(repoDir: string, bun: string, signal?: AbortSignal): Promise<void> {
+export type StagedUpdateOptions = {
+  /** Aborts when the update lock stops being ours; stops the build. */
+  lost?: AbortSignal
+  /**
+   * Refuse to rebase when the branch has diverged from upstream. Set for
+   * unattended runs: rebasing rewrites the user's local commits, and if it hits
+   * a conflict there is nobody there to resolve it.
+   */
+  ffOnly?: boolean
+}
+
+export function runStagedUpdate(
+  repoDir: string,
+  bun: string,
+  { lost: signal, ffOnly }: StagedUpdateOptions = {},
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(bun, ['run', 'update:staged'], {
       cwd: repoDir,
-      env: { ...withBunOnPath(bun), AXA_UPDATE_PROGRESS: '1' },
+      env: {
+        ...withBunOnPath(bun),
+        AXA_UPDATE_PROGRESS: '1',
+        ...(ffOnly ? { AXA_UPDATE_FF_ONLY: '1' } : {}),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
       // Own process group, so killing it takes the whole `bun run` tree —
       // otherwise the shell dies and the install or compile under it keeps going.
@@ -725,17 +773,29 @@ export function applyStagedBinary(repoDir: string): boolean {
   } catch {
     return false
   }
+  // Rejected here means it will be rejected identically on every later run, so
+  // drop it: the staged file's existence is what makes each new session take
+  // the update lock and look, and leaving one behind makes that permanent.
+  const discard = () => {
+    try {
+      rmSync(staged, { recursive: true, force: true })
+    } catch {
+      // Nothing to fall back on; the next build overwrites it anyway.
+    }
+    return false
+  }
+
   // lstat, and a real file: rename(2) moves a symlink rather than following it,
   // so a `cli-dev.next` symlink planted in the tree would make the live binary
   // point at something we never built — and axa would exec it on next launch.
-  if (!stats.isFile()) return false
+  if (!stats.isFile()) return discard()
 
   // A staged build is applied by a later session than the one that made it, and
   // `bun run build:dev` in the meantime writes the live binary directly. Older
   // wins nothing: promoting it would quietly undo that rebuild.
   const live = join(repoDir, LIVE_BINARY)
   try {
-    if (lstatSync(live).mtimeMs > stats.mtimeMs) return false
+    if (lstatSync(live).mtimeMs > stats.mtimeMs) return discard()
   } catch {
     // No live binary to lose to.
   }
@@ -844,6 +904,14 @@ function autoUpdatableRepoDir(): string | null {
  */
 export async function maybeUpdateSourceInBackground(): Promise<void> {
   try {
+    // The pre-existing opt-out, honoured alongside the new setting.
+    // `migrateAutoUpdatesToSettings` turns an old `autoUpdates: false` into
+    // this env var, so ignoring it would hand background updates back to the
+    // people who had already turned them off.
+    //
+    // The env var only, not `getAutoUpdaterDisabledReason()`: that also reports
+    // disabled for a development build, and every install this runs in is one.
+    if (isEnvTruthy(process.env.DISABLE_AUTOUPDATER)) return
     if (!getGlobalConfig().autoUpdate) return
 
     const repoDir = autoUpdatableRepoDir()
@@ -851,9 +919,20 @@ export async function maybeUpdateSourceInBackground(): Promise<void> {
 
     // Cheap pre-checks, so the common case does not touch the lock file at all.
     // Both are repeated under the lock, where they are the ones that count.
+    //
+    // The shorter window here deliberately: telling the two apart needs the
+    // tree's revision, and asking git for it is the kind of work this check
+    // exists to avoid. Being the looser of the two only costs a session past
+    // its day an hourly `git status` and a lock it immediately gives back.
     const staged = existsSync(join(repoDir, STAGED_BINARY))
     const pre = readState(repoDir)
-    if (!staged && pre.lastCheckAt && Date.now() - pre.lastCheckAt < CHECK_INTERVAL_MS) return
+    if (
+      !staged &&
+      pre.lastCheckAt &&
+      Date.now() - pre.lastCheckAt < REBUILD_RETRY_INTERVAL_MS
+    ) {
+      return
+    }
     if (!(await isUnattendedUpdateSafe(repoDir))) return
 
     // Hold the lock for the whole check-and-build so two axa sessions cannot
@@ -882,13 +961,16 @@ export async function maybeUpdateSourceInBackground(): Promise<void> {
       }
 
       const state = readState(repoDir)
-      if (state.lastCheckAt && Date.now() - state.lastCheckAt < CHECK_INTERVAL_MS) return
+      const local = await currentFullSha(repoDir)
+      if (!local) return
 
-      const [local, latest] = await Promise.all([
-        currentFullSha(repoDir),
-        latestUpstreamSha(repoDir),
-      ])
-      if (!latest || !local) return
+      // Read before the remote lookup, so a throttled run costs no network.
+      const unbuilt = state.builtSha !== undefined && state.builtSha !== local
+      const window = unbuilt ? REBUILD_RETRY_INTERVAL_MS : CHECK_INTERVAL_MS
+      if (state.lastCheckAt && Date.now() - state.lastCheckAt < window) return
+
+      const latest = await latestUpstreamSha(repoDir)
+      if (!latest) return
 
       // First run against an already-current tree: adopt its revision as the
       // built one rather than rebuilding to reach where we already are.
@@ -902,7 +984,7 @@ export async function maybeUpdateSourceInBackground(): Promise<void> {
 
       const bun = await findBun()
       setRunning('download', 0)
-      await runStagedUpdate(repoDir, bun, lock.lost)
+      await runStagedUpdate(repoDir, bun, { lost: lock.lost, ffOnly: true })
 
       // Only a swap that actually happened is an update. Without a staged
       // binary the build produced nothing, and announcing "restart to use the
