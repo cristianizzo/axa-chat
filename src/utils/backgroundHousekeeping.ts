@@ -21,12 +21,32 @@ import {
 } from './cleanup.js'
 import { cleanupOldVersions } from './nativeInstaller/index.js'
 import { autoUpdateMarketplacesAndPluginsInBackground } from './plugins/pluginAutoupdate.js'
+import { maybeUpdateSourceInBackground } from './sourceUpdate.js'
 
 // 24 hours in milliseconds
 const RECURRING_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 // 10 minutes after start.
 const DELAY_VERY_SLOW_OPERATIONS_THAT_HAPPEN_EVERY_SESSION = 10 * 60 * 1000
+
+// How often to give the source check another chance. Not how often it does
+// anything: it throttles itself and returns immediately in between. This only
+// exists because `runVerySlowOps` is a one-shot timer, so a REPL left open for
+// a week would otherwise check on day one and never again.
+const SOURCE_UPDATE_RECHECK_INTERVAL_MS = 60 * 60 * 1000
+
+let sourceUpdateInterval: NodeJS.Timeout | undefined
+
+function scheduleRecurringSourceUpdateCheck(): void {
+  if (sourceUpdateInterval) return
+  sourceUpdateInterval = setInterval(() => {
+    // Same courtesy as runVerySlowOps: a check can start a multi-minute build,
+    // so never off the back of something the user just did.
+    if (getLastInteractionTime() > Date.now() - 1000 * 60) return
+    void maybeUpdateSourceInBackground()
+  }, SOURCE_UPDATE_RECHECK_INTERVAL_MS)
+  sourceUpdateInterval.unref()
+}
 
 export function startBackgroundHousekeeping(): void {
   void initMagicDocs()
@@ -72,6 +92,31 @@ export function startBackgroundHousekeeping(): void {
     }
 
     await cleanupOldVersions()
+
+    // Idle re-check, because the one above is now stale: `cleanupOldVersions`
+    // can run for a while, and what follows is the most expensive thing here.
+    if (
+      getIsInteractive() &&
+      getLastInteractionTime() > Date.now() - 1000 * 60
+    ) {
+      setTimeout(
+        runVerySlowOps,
+        DELAY_VERY_SLOW_OPERATIONS_THAT_HAPPEN_EVERY_SESSION,
+      ).unref()
+      return
+    }
+
+    // Last, and deliberately inside runVerySlowOps: staging a new build runs
+    // `bun install` and a full compile, so it rides the same "wait until the
+    // user is idle" gate as the other expensive operations.
+    //
+    // Interactive only. The idle gate above is itself interactive-only, so a
+    // headless run (SDK, CI, a long `-p` session) would start a multi-minute
+    // build with no progress bar and no notification, then kill it on exit.
+    if (getIsInteractive()) {
+      await maybeUpdateSourceInBackground()
+      scheduleRecurringSourceUpdateCheck()
+    }
   }
 
   setTimeout(

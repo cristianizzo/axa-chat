@@ -1,5 +1,8 @@
 import { execFileSync } from 'node:child_process'
+import { existsSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import {
+  emitProgress,
   findInstallRoot,
   INSTALL_MARKER,
   type InstallMarker,
@@ -71,16 +74,69 @@ async function updateFromTarball(dir: string, marker: InstallMarker): Promise<vo
   await syncFromTarball(dir, repo, ref, latest)
 }
 
+/**
+ * Refuse to start while an axa session holds the update lock.
+ *
+ * The lock itself lives in `src/utils/sourceUpdate.ts`, over `proper-lockfile`,
+ * and covers a whole background update: the pull, `bun install`, and the
+ * compile. This script is only the first of those three — the other two are
+ * separate commands in the `update` npm script — so it cannot hold the lock on
+ * their behalf, and taking one here would be given back too early to mean
+ * anything. Reading it is still worth doing: a manual `bun run update` on top
+ * of a running background one has two `bun install`s writing one
+ * `node_modules`, and this catches the ordering that actually happens, where
+ * the background update was already going.
+ *
+ * Checked without `proper-lockfile` on purpose. A compiled install has no
+ * `node_modules` between updates — the previous update deletes it — so
+ * anything this script imports has to be a Node builtin. The lock is a
+ * directory whose mtime the holder refreshes, which is enough to read directly.
+ */
+const LOCK_STALE_MS = 30 * 60 * 1000
+
+function updateLockHeldBy(dir: string): number | null {
+  // Set by the axa process that spawned us, which is holding the lock so that
+  // this script can run under it. Refusing then would be refusing over our own
+  // parent, and no update would ever run again.
+  if (process.env.AXA_UPDATE_LOCK_HELD) return null
+  try {
+    const { mtimeMs } = statSync(join(dir, '.axa-update.json.lock'))
+    const age = Date.now() - mtimeMs
+    // Past the stale window the holder is gone and never cleaned up; a real one
+    // would have refreshed the mtime long before now.
+    return age < LOCK_STALE_MS ? age : null
+  } catch {
+    return null
+  }
+}
+
 async function main(): Promise<void> {
   const cwd = process.cwd()
+
+  const heldFor = updateLockHeldBy(cwd)
+  if (heldFor !== null) {
+    console.error(
+      `An axa session is updating this source tree (lock held for ${Math.round(heldFor / 1000)}s). ` +
+        'Running a second update would have two `bun install`s writing one node_modules. ' +
+        'Wait for it to finish, or use /update inside axa, which shares the lock.',
+    )
+    process.exitCode = 1
+    return
+  }
 
   // The marker is looked for before git, and identifies a directory as a
   // tarball install. Requiring it is what makes the extract below safe: it is
   // the only positive proof of a source root we own, so a stray invocation from
   // an unrelated directory errors out instead of unpacking a tarball over
   // whatever happens to be there.
+  //
+  // A checkout is never refreshed this way, even if it carries a tarball
+  // marker. The marker is gitignored and so invisible to every guard that
+  // watches the tree for changes, and taking this path on the strength of one
+  // would swap a `git pull` from the checkout's own remote for an extract of
+  // whatever repository the file happens to name.
   const install = findInstallRoot(cwd)
-  if (install) {
+  if (install && !existsSync(join(install.dir, '.git'))) {
     if (install.dir !== cwd) console.log(`Updating the install at ${install.dir}…`)
     try {
       await updateFromTarball(install.dir, install.marker)
@@ -94,7 +150,7 @@ async function main(): Promise<void> {
     return
   }
 
-  // No marker, so this can only be a checkout. Distinguish "git is missing"
+  // No tarball marker, so this can only be a checkout. Distinguish "git is missing"
   // from "this is not a checkout": without git the rev-parse below fails the
   // same way an unrelated directory does, and blaming the directory would send
   // someone looking in entirely the wrong place.
@@ -113,8 +169,9 @@ async function main(): Promise<void> {
   // directory test would misread a subdirectory as "not a checkout".
   if (resolveOrNull(['rev-parse', '--is-inside-work-tree']) !== 'true') {
     console.error(
-      `${cwd} is neither a git checkout nor a tarball install (no .git, no ${INSTALL_MARKER}) — ` +
-        'cannot update. Run this from your axa-chat source directory.',
+      `${cwd} is not a usable git checkout, and is not a tarball install either — cannot ` +
+        `update. Run this from your axa-chat source directory. (A tree with a .git is always ` +
+        `updated through git; a ${INSTALL_MARKER} in one is ignored.)`,
     )
     process.exitCode = 1
     return
@@ -175,9 +232,22 @@ async function main(): Promise<void> {
     return
   }
 
-  // Diverged: rebase local commits on top of upstream, stashing uncommitted
-  // changes so they're not lost. If the rebase fails for any reason, abort to
-  // restore the original branch and let the user reconcile their work themselves.
+  // Diverged. An unattended run stops here: a rebase rewrites the user's own
+  // commits, and on a conflict there is nobody watching to resolve it. The
+  // abort path below would recover the tree, but the update would then fail
+  // once an hour forever with no explanation the user ever sees.
+  if (process.env.AXA_UPDATE_FF_ONLY) {
+    console.error(
+      `Diverged from ${upstream} (${ahead} local commit(s), ${behind} upstream) — refusing to ` +
+        'rebase during a background update. Run `bun run update` yourself to reconcile.',
+    )
+    process.exitCode = 1
+    return
+  }
+
+  // Rebase local commits on top of upstream, stashing uncommitted changes so
+  // they're not lost. If the rebase fails for any reason, abort to restore the
+  // original branch and let the user reconcile their work themselves.
   console.log(`Diverged from ${upstream} — rebasing local commits…`)
   try {
     execFileSync('git', ['rebase', '--autostash', upstream], {
@@ -204,4 +274,12 @@ async function main(): Promise<void> {
   }
 }
 
-await main()
+// Bracket every exit path so a watching parent never stalls at the value the
+// last chunk left behind. The tarball path reports real percentages in
+// between; the git path has no equivalent hook, so it just jumps 0 → 100.
+emitProgress('download', 0)
+try {
+  await main()
+} finally {
+  emitProgress('download', 100)
+}

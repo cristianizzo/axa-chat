@@ -18,7 +18,8 @@
     "build:dev:full": "bun run ./scripts/build.ts --dev --feature-set=dev-full",
     "compile": "bun run ./scripts/build.ts --compile",
     "dev": "bun run ./src/entrypoints/cli.tsx",
-    "update": "bun run ./scripts/update.ts && bun install && bun run build:dev"
+    "update": "bun run ./scripts/update.ts && bun install && bun run build:dev:full --outfile ./cli-dev.next.tmp && mv -f ./cli-dev.next.tmp ./cli-dev",
+    "update:staged": "bun run ./scripts/update.ts && bun install && bun run build:dev:full --outfile ./cli-dev.next.tmp && mv -f ./cli-dev.next.tmp ./cli-dev.next"
   },
   "dependencies": {
     "@alcalzone/ansi-tokenize": "^0.3.0",

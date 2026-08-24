@@ -212,6 +212,25 @@ bun run build:dev
 bun run update
 ```
 
+Installs made by `install.sh` also update themselves. Once a day an idle session
+checks for a newer commit and, if there is one, downloads and builds it into
+`cli-dev.next` beside the live binary — progress shows above the prompt — then
+swaps it in with an atomic rename and deletes `node_modules`, which the compiled
+binary does not need. The running session is unaffected; the new build starts
+with the next `axa`. Turn it off with `autoUpdate` in `/config`.
+
+What opts a tree in is `.axa-install.json`, which `install.sh` writes at the
+source root. A checkout you cloned yourself has no marker and is left alone, and
+so is an install predating the marker — run `install.sh` once more to opt it in.
+Conversely, running `install.sh` over a clone of your own does mark it, and it
+will then update itself; `autoUpdate: false` turns that off.
+
+A marked tree is still skipped whenever a `git pull` would not be plainly safe:
+any uncommitted change, any untracked file that is not gitignored, unpushed
+commits, a detached HEAD, or a branch with no upstream. The untracked case is
+easy to hit and silent — one scratch file at the source root keeps the tree on
+the build it has. In a checkout, run `bun run update` yourself.
+
 ### Custom Feature Flags
 
 Enable specific flags without the full bundle:
