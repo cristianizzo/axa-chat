@@ -71,10 +71,18 @@ const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
  * built from — the update pulled, then the build was killed when the session
  * quit, which is the normal way for one to end. There is nothing to check for
  * in that state, only a rebuild owed, so waiting out the full day would leave
- * the source and the binary disagreeing for it. Still a window rather than no
- * gate at all, to bound a build that fails every time it is tried.
+ * the source and the binary disagreeing for it.
  */
 const REBUILD_RETRY_INTERVAL_MS = 60 * 60 * 1000
+
+/**
+ * Retries at the short window before falling back to the daily one. Each is a
+ * `bun install` and a full compile, and the two ways one fails to land look the
+ * same from here — a session too short to finish a build, and a build that
+ * cannot succeed at all (no disk, an OOM-killed install, a broken toolchain).
+ * Without a cap the second retries hourly, forever, reporting only to the log.
+ */
+const MAX_REBUILD_ATTEMPTS = 3
 /** Cap on the two remote lookups, both of which run while holding the lock. */
 const NETWORK_TIMEOUT_MS = 20 * 1000
 /**
@@ -435,6 +443,13 @@ type UpdateState = {
    * keeps a second run from moving the tree in between.
    */
   builtSha?: string
+  /**
+   * Consecutive builds started and never landed — killed at exit, or failed.
+   * Counts up because it is written before the build and only cleared by a
+   * swap, so a run that never comes back is counted the same as one that
+   * returns an error.
+   */
+  rebuildAttempts?: number
 }
 
 /**
@@ -453,10 +468,13 @@ function readState(repoDir: string): UpdateState {
   try {
     const parsed: unknown = JSON.parse(readFileSync(stateFilePath(repoDir), 'utf8'))
     if (typeof parsed !== 'object' || parsed === null) return {}
-    const { lastCheckAt, builtSha } = parsed as Record<string, unknown>
+    const { lastCheckAt, builtSha, rebuildAttempts } = parsed as Record<string, unknown>
     return {
       ...(typeof lastCheckAt === 'number' ? { lastCheckAt } : {}),
       ...(typeof builtSha === 'string' && /^[0-9a-f]{40}$/.test(builtSha) ? { builtSha } : {}),
+      ...(typeof rebuildAttempts === 'number' && rebuildAttempts >= 0
+        ? { rebuildAttempts }
+        : {}),
     }
   } catch {
     return {}
@@ -561,10 +579,15 @@ export async function acquireUpdateLock(repoDir: string): Promise<UpdateLock | n
 /**
  * Record that the live binary is built from `repoDir`'s current revision, so a
  * background check right after a foreground `/update` sees it as up to date.
+ *
+ * Clears the retry count too: a build just succeeded here, so whatever the
+ * background attempts were failing on is no longer failing.
  */
 export async function recordBuiltSha(repoDir: string): Promise<void> {
   const built = await currentFullSha(repoDir)
-  if (built) writeState(repoDir, { ...readState(repoDir), builtSha: built })
+  if (built) {
+    writeState(repoDir, { ...readState(repoDir), builtSha: built, rebuildAttempts: 0 })
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -776,7 +799,13 @@ export function applyStagedBinary(repoDir: string): boolean {
   // Rejected here means it will be rejected identically on every later run, so
   // drop it: the staged file's existence is what makes each new session take
   // the update lock and look, and leaving one behind makes that permanent.
-  const discard = () => {
+  //
+  // Logged, because both callers describe a false return as "the build produced
+  // nothing" — the message for the empty case, which is the only one they can
+  // tell apart. A discard is the opposite: something was produced and thrown
+  // away, and without this the only record of it is gone with the file.
+  const discard = (why: string) => {
+    logError(new Error(`Discarded ${STAGED_BINARY} in ${repoDir}: ${why}`))
     try {
       rmSync(staged, { recursive: true, force: true })
     } catch {
@@ -788,14 +817,20 @@ export function applyStagedBinary(repoDir: string): boolean {
   // lstat, and a real file: rename(2) moves a symlink rather than following it,
   // so a `cli-dev.next` symlink planted in the tree would make the live binary
   // point at something we never built — and axa would exec it on next launch.
-  if (!stats.isFile()) return discard()
+  if (!stats.isFile()) return discard('not a regular file')
 
   // A staged build is applied by a later session than the one that made it, and
   // `bun run build:dev` in the meantime writes the live binary directly. Older
   // wins nothing: promoting it would quietly undo that rebuild.
   const live = join(repoDir, LIVE_BINARY)
   try {
-    if (lstatSync(live).mtimeMs > stats.mtimeMs) return discard()
+    const liveMtime = lstatSync(live).mtimeMs
+    if (liveMtime > stats.mtimeMs) {
+      return discard(
+        `${LIVE_BINARY} is newer (${new Date(liveMtime).toISOString()} vs ` +
+          `${new Date(stats.mtimeMs).toISOString()})`,
+      )
+    }
   } catch {
     // No live binary to lose to.
   }
@@ -953,7 +988,9 @@ export async function maybeUpdateSourceInBackground(): Promise<void> {
       // from under a build another session is still writing.
       if (applyStagedBinary(repoDir)) {
         const full = await currentFullSha(repoDir)
-        if (full) writeState(repoDir, { ...readState(repoDir), builtSha: full })
+        if (full) {
+          writeState(repoDir, { ...readState(repoDir), builtSha: full, rebuildAttempts: 0 })
+        }
         // That earlier session installed node_modules and never got to trim it.
         await trimNodeModules(repoDir)
         progressStore.setState(() => ({ status: 'ready', sha: full.slice(0, 7) || 'unknown' }))
@@ -965,8 +1002,12 @@ export async function maybeUpdateSourceInBackground(): Promise<void> {
       if (!local) return
 
       // Read before the remote lookup, so a throttled run costs no network.
+      const attempts = state.rebuildAttempts ?? 0
       const unbuilt = state.builtSha !== undefined && state.builtSha !== local
-      const window = unbuilt ? REBUILD_RETRY_INTERVAL_MS : CHECK_INTERVAL_MS
+      const window =
+        unbuilt && attempts < MAX_REBUILD_ATTEMPTS
+          ? REBUILD_RETRY_INTERVAL_MS
+          : CHECK_INTERVAL_MS
       if (state.lastCheckAt && Date.now() - state.lastCheckAt < window) return
 
       const latest = await latestUpstreamSha(repoDir)
@@ -976,13 +1017,23 @@ export async function maybeUpdateSourceInBackground(): Promise<void> {
       // built one rather than rebuilding to reach where we already are.
       const builtSha = state.builtSha ?? local
 
-      // Burn the daily window before building, not after. A failure that
-      // repeats — no disk, no network, a broken toolchain — then costs one
-      // attempt a day instead of one per idle period.
-      writeState(repoDir, { lastCheckAt: Date.now(), builtSha })
+      // Burn the window before building, not after. A failure that repeats —
+      // no disk, no network, a broken toolchain — then costs one attempt a
+      // window instead of one per idle period.
+      writeState(repoDir, { lastCheckAt: Date.now(), builtSha, rebuildAttempts: attempts })
       if (builtSha === local && (await isAlreadyApplied(repoDir, latest, local))) return
 
       const bun = await findBun()
+
+      // Counted before the build rather than on the way out of a failed one: a
+      // build killed when the session quits never comes back to record
+      // anything, and it has to cost the same as one that fails outright or the
+      // short window above would retry it hourly and forever.
+      writeState(repoDir, {
+        lastCheckAt: Date.now(),
+        builtSha,
+        rebuildAttempts: attempts + 1,
+      })
       setRunning('download', 0)
       await runStagedUpdate(repoDir, bun, { lost: lock.lost, ffOnly: true })
 
@@ -995,7 +1046,7 @@ export async function maybeUpdateSourceInBackground(): Promise<void> {
       // Re-read from the tree rather than trusting `latest`: the pull resolves
       // the branch head itself, which may have moved on since the check.
       const built = (await currentFullSha(repoDir)) || latest
-      writeState(repoDir, { lastCheckAt: Date.now(), builtSha: built })
+      writeState(repoDir, { lastCheckAt: Date.now(), builtSha: built, rebuildAttempts: 0 })
       await trimNodeModules(repoDir)
       progressStore.setState(() => ({ status: 'ready', sha: built.slice(0, 7) }))
     } finally {

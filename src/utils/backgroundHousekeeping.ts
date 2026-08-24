@@ -29,10 +29,10 @@ const RECURRING_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
 // 10 minutes after start.
 const DELAY_VERY_SLOW_OPERATIONS_THAT_HAPPEN_EVERY_SESSION = 10 * 60 * 1000
 
-// How often to give the source check another chance. Not how often it runs:
-// the check throttles itself to once a day and returns immediately in
-// between. This only exists because `runVerySlowOps` is a one-shot timer, so
-// a REPL left open for a week would otherwise check on day one and never again.
+// How often to give the source check another chance. Not how often it does
+// anything: it throttles itself and returns immediately in between. This only
+// exists because `runVerySlowOps` is a one-shot timer, so a REPL left open for
+// a week would otherwise check on day one and never again.
 const SOURCE_UPDATE_RECHECK_INTERVAL_MS = 60 * 60 * 1000
 
 let sourceUpdateInterval: NodeJS.Timeout | undefined
