@@ -1,4 +1,4 @@
-import { stat } from 'fs/promises'
+import { lstat } from 'fs/promises'
 import { resolve } from 'path'
 import { execFileNoThrowWithCwd } from '../../utils/execFileNoThrow.js'
 
@@ -97,7 +97,10 @@ async function stampDigest(gitRoot: string, files: string[]): Promise<string> {
   const stamps = await Promise.all(
     files.map(async file => {
       try {
-        const info = await stat(resolve(gitRoot, file))
+        // lstat, so a symlink is stamped by the link rather than by whatever
+        // it points at. Following it would stamp a file outside the repository
+        // entirely, and a broken link would throw and read as deleted.
+        const info = await lstat(resolve(gitRoot, file))
         return `${file}:${info.size}:${info.mtimeMs}`
       } catch {
         // Deleted since git listed it, which is itself a distinct tree state.

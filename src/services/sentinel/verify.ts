@@ -19,13 +19,10 @@ export type VerifyResult = {
    * is an arbitrary prefix, and which entries survive shifts between runs.
    */
   inconclusive: boolean
-  /** Raw combined output, kept for display. Truncated; diagnostics can be huge. */
-  output: string
 }
 
 /** Long enough for a cold `tsc` on a large project, short enough to not hang a session. */
 const VERIFY_TIMEOUT_MS = 5 * 60 * 1000
-const MAX_OUTPUT_CHARS = 20_000
 /** Beyond this the run is almost certainly a config mistake, not a regression. */
 const MAX_FAILURES = 50
 
@@ -55,7 +52,7 @@ export async function runVerify(
 
   const output = `${result.stdout}\n${result.stderr}`.trim()
   if (result.code === 0) {
-    return { ok: true, failures: [], inconclusive: false, output: '' }
+    return { ok: true, failures: [], inconclusive: false }
   }
 
   const seen = new Set<string>()
@@ -73,10 +70,6 @@ export async function runVerify(
     ok: false,
     failures: [...seen],
     inconclusive: truncated || seen.size === 0,
-    output:
-      output.length > MAX_OUTPUT_CHARS
-        ? `${output.slice(0, MAX_OUTPUT_CHARS)}\n… (truncated)`
-        : output,
   }
 }
 

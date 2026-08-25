@@ -7,7 +7,10 @@ import { getCurrentProjectConfig } from '../../utils/config.js'
  */
 export type SentinelConfig = {
   verify: string
-  /** Empty means "any tracked file", which is the common case. */
+  /**
+   * Empty means any change git reports — modified, staged or untracked —
+   * which is the common case.
+   */
   watch: string[]
   /** Whether to attempt a fix in a throwaway worktree. Off unless asked for. */
   repair: boolean

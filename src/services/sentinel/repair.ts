@@ -73,7 +73,12 @@ export async function attemptRepair({
 }: {
   config: SentinelConfig
   gitRoot: string
-  /** Working-tree paths, relative to `gitRoot`, as reported by git status. */
+  /**
+   * Individual file paths relative to `gitRoot` — everything differing from
+   * HEAD plus everything untracked, as `getTreeChanges` reports it. A staged
+   * rename appears as both paths, the old one absent from disk, which is what
+   * makes it mirror as a deletion rather than leaving a stale duplicate.
+   */
   dirtyPaths: string[]
   /** The failures to fix — already filtered down to the new ones. */
   introduced: string[]
@@ -263,9 +268,23 @@ async function commitAll(cwd: string, message: string): Promise<boolean> {
     timeout: GIT_TIMEOUT_MS,
   })
   if (add.code !== 0) return false
+  // Identity is supplied inline rather than read from config. This commit is
+  // scaffolding — it exists so the later diff has something to be relative to,
+  // and it is deleted with the worktree — so it must not depend on the user
+  // having a global `user.email`, and it must not attribute itself to them.
   const commit = await execFileNoThrowWithCwd(
     'git',
-    ['commit', '--no-verify', '--allow-empty', '-m', message],
+    [
+      '-c',
+      'user.name=sentinel',
+      '-c',
+      'user.email=sentinel@localhost',
+      'commit',
+      '--no-verify',
+      '--allow-empty',
+      '-m',
+      message,
+    ],
     { cwd, timeout: GIT_TIMEOUT_MS },
   )
   return commit.code === 0
