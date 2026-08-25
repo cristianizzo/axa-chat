@@ -78,17 +78,21 @@ export async function executeSentinel(
   if (!getIsInteractive()) return
   if (state.running) return
 
-  const gitRoot = findCanonicalGitRoot(getOriginalCwd())
-  if (!gitRoot) return
-
-  const changes = await getTreeChanges(gitRoot)
-  if (!changes) return
-  if (changes.files.length === 0) return
-  if (changes.digest === state.lastDigest) return
-  if (!matchesWatch(changes.files, config)) return
-
+  // Claimed before the first await, not after the change checks. This is
+  // dispatched fire-and-forget, so a second turn can end while the first is
+  // still deciding whether to verify; claiming late would let both through and
+  // run two verify commands, and two repair agents, over the same tree.
   state.running = true
   try {
+    const gitRoot = findCanonicalGitRoot(getOriginalCwd())
+    if (!gitRoot) return
+
+    const changes = await getTreeChanges(gitRoot)
+    if (!changes) return
+    if (changes.files.length === 0) return
+    if (changes.digest === state.lastDigest) return
+    if (!matchesWatch(changes.files, config)) return
+
     const result = await runVerify(config.verify, gitRoot)
 
     if (result.inconclusive) {

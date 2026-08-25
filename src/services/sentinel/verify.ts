@@ -98,8 +98,10 @@ export function normalizeDiagnostic(line: string, cwd: string): string | null {
 
   // Absolute paths differ between the main tree and a worktree copy, which
   // would otherwise make every diagnostic look new the moment it is re-run
-  // somewhere else.
-  text = text.split(`${cwd}/`).join('')
+  // somewhere else. Both separators, because on Windows `cwd` arrives with
+  // backslashes and tools print paths the same way — stripping only the POSIX
+  // form there would leave the absolute prefix in every key.
+  text = text.split(`${cwd}/`).join('').split(`${cwd}\\`).join('')
 
   text = text.replace(TSC_POSITION, '').replace(COLON_POSITION, '')
 

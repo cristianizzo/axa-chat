@@ -30,8 +30,14 @@ export function getSentinelConfig(): SentinelConfig | null {
   const verify = typeof raw.verify === 'string' ? raw.verify.trim() : ''
   if (!verify) return null
 
+  // Trimmed, because a stray leading space in hand-edited JSON produces a glob
+  // that matches nothing — and the symptom is the sentinel silently never
+  // firing, which is indistinguishable from it being off.
   const watch = Array.isArray(raw.watch)
-    ? raw.watch.filter((p): p is string => typeof p === 'string' && p !== '')
+    ? raw.watch
+        .filter((p): p is string => typeof p === 'string')
+        .map(p => p.trim())
+        .filter(Boolean)
     : []
 
   return { verify, watch, repair: raw.repair === true }

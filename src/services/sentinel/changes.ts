@@ -70,9 +70,11 @@ export async function getTreeChanges(
   )
   if (untracked.code !== 0) return null
 
+  // Sorted so the digest depends on which files changed, not on the order two
+  // separate git commands happened to list them in.
   const files = [
     ...new Set([...splitZ(tracked.stdout), ...splitZ(untracked.stdout)]),
-  ]
+  ].sort()
   if (files.length === 0) return { files: [], digest: 'clean' }
 
   return { files, digest: await stampDigest(gitRoot, files) }
