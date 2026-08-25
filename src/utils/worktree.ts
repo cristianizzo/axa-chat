@@ -1038,6 +1038,10 @@ const EPHEMERAL_WORKTREE_PATTERNS = [
   // Template job worktrees: job-<templateName>-<8hex>. Prefix distinguishes
   // from user-named EnterWorktree slugs that happen to end in 8 hex.
   /^job-[a-zA-Z0-9._-]{1,55}-[0-9a-f]{8}$/,
+  // Sentinel repair worktrees. These are removed in a `finally`, so one only
+  // survives a hard kill mid-repair — but that leaks a whole checkout, so the
+  // 30-day sweep needs to recognise it.
+  /^sentinel-[0-9a-f]{8}$/,
 ]
 
 /**

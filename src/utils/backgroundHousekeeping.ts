@@ -1,6 +1,7 @@
 import { feature } from 'bun:bundle'
 import { initAutoDream } from '../services/autoDream/autoDream.js'
 import { initMagicDocs } from '../services/MagicDocs/magicDocs.js'
+import { initSentinel } from '../services/sentinel/sentinel.js'
 import { initSkillImprovement } from './hooks/skillImprovement.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -55,6 +56,7 @@ export function startBackgroundHousekeeping(): void {
     extractMemoriesModule!.initExtractMemories()
   }
   initAutoDream()
+  initSentinel()
   void autoUpdateMarketplacesAndPluginsInBackground()
   if (feature('LODESTONE') && getIsInteractive()) {
     void registerProtocolModule!.ensureDeepLinkProtocolRegistered()
