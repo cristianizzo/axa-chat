@@ -51,6 +51,7 @@ const jobClassifierModule = feature('TEMPLATES')
 import type { QuerySource } from '../constants/querySource.js'
 import { executeAutoDream } from '../services/autoDream/autoDream.js'
 import { executePromptSuggestion } from '../services/PromptSuggestion/promptSuggestion.js'
+import { executeSentinel } from '../services/sentinel/sentinel.js'
 import { isBareMode, isEnvDefinedFalsy } from '../utils/envUtils.js'
 import {
   createCacheSafeParams,
@@ -153,6 +154,10 @@ export async function* handleStopHooks(
     }
     if (!toolUseContext.agentId) {
       void executeAutoDream(stopHookContext, toolUseContext.appendSystemMessage)
+      // Main thread only: a subagent finishing is not the tree settling, and
+      // running the verify command once per subagent would multiply the cost
+      // by the fan-out.
+      void executeSentinel(stopHookContext, toolUseContext.appendSystemMessage)
     }
   }
 

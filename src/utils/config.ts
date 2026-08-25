@@ -134,6 +134,31 @@ export type ProjectConfig = {
   }
   /** Spawn mode for `claude remote-control` multi-session. Set by first-run dialog or `w` toggle. */
   remoteControlSpawnMode?: 'same-dir' | 'worktree'
+
+  /**
+   * Repo sentinel: run a verification command after turns that changed files,
+   * and report failures the edits introduced. Project-scoped because `verify`
+   * is a per-repo command. Absent means off — see services/sentinel/config.ts.
+   */
+  sentinel?: {
+    /** Off unless explicitly true, so an existing project never opts in by accident. */
+    enabled?: boolean
+    /** Shell command that exits non-zero on failure, e.g. `bun run typecheck`. */
+    verify?: string
+    /**
+     * Globs, relative to the git root, whose changes arm a verify run. Absent
+     * means any change git reports — modified, staged or untracked — which is
+     * gitignore-filtered but not otherwise narrowed.
+     */
+    watch?: string[]
+    /**
+     * On a newly introduced failure, try to fix it in a throwaway worktree and
+     * show the resulting patch. Separate from `enabled` and off by default:
+     * reporting is cheap and passive, whereas this spends model tokens on
+     * every regression without asking first.
+     */
+    repair?: boolean
+  }
 }
 
 const DEFAULT_PROJECT_CONFIG: ProjectConfig = {
