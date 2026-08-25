@@ -148,7 +148,12 @@ export async function executeSentinel(
     )
     // Reported even though the tree is unchanged: the user has just been told
     // something broke, and silence afterwards reads as "the fix is coming".
-    if (patch) appendSystemMessage?.(createSystemMessage(patch, 'info'))
+    //
+    // Deliberately 'warning' rather than 'info', which would be the honest
+    // severity: an 'info' system message is dropped unless the session runs
+    // with --verbose. A patch nobody is shown is a worktree, an agent and a
+    // full verify run spent to produce nothing.
+    if (patch) appendSystemMessage?.(createSystemMessage(patch, 'warning'))
   } catch (e: unknown) {
     logForDebugging(`[sentinel] verify failed to run: ${(e as Error).message}`)
   } finally {
@@ -191,7 +196,9 @@ async function repairInWorktree(
       abortController,
     })
     if (outcome.status === 'fixed') {
-      return `A fix for the above was worked out in a scratch worktree and verified against \`${config.verify}\`. Your working tree is untouched — apply it if you agree:\n\n\`\`\`diff\n${outcome.diff}\n\`\`\``
+      // No code fence: a system message is rendered as plain text, so one would
+      // print its own backticks around the patch rather than formatting it.
+      return `A fix for the above was worked out in a scratch worktree and verified against ${config.verify}. Your working tree is untouched — apply it if you agree:\n\n${outcome.diff}`
     }
     logForDebugging(
       `[sentinel] repair produced no patch: ${outcome.status === 'unavailable' ? outcome.reason : 'no verified fix'}`,
