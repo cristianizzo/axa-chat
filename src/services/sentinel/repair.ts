@@ -23,8 +23,8 @@
 
 import { randomBytes } from 'crypto'
 import type { Stats } from 'fs'
-import { cp, lstat, mkdir, rm } from 'fs/promises'
-import { dirname, isAbsolute, join, relative, resolve } from 'path'
+import { cp, lstat, mkdir, realpath, rm } from 'fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'path'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { Tool } from '../../Tool.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
@@ -243,6 +243,16 @@ async function mirrorDirtyFiles(
       continue
     }
 
+    // git names files individually with one exception: a submodule, or any
+    // nested repository it cannot look inside, comes back as `dir/`. Copying
+    // one in would mean pulling a whole separate repository into the worktree,
+    // and `cp` without `recursive` throws — which would fail the entire repair
+    // over a directory it was never going to fix anything in.
+    if (info.isDirectory()) {
+      logForDebugging(`[sentinel] not mirroring nested repository ${path}`)
+      continue
+    }
+
     await mkdir(dirname(to), { recursive: true })
     await cp(from, to, { force: true })
   }
@@ -260,6 +270,37 @@ async function lstatOrNull(path: string): Promise<Stats | null> {
 function isInside(root: string, candidate: string): boolean {
   const rel = relative(root, candidate)
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+}
+
+/**
+ * Like `isInside`, but answers where the path actually lands rather than what
+ * it spells.
+ *
+ * A string comparison is not enough for a write target. The worktree is a
+ * checkout of HEAD, so any symlink committed to the repository is present in
+ * it — and `<worktree>/docs/link/x` is textually inside the worktree while
+ * resolving wherever `docs/link` points, which for a committed `../../..` is
+ * the user's checkout or beyond.
+ *
+ * The target usually does not exist yet, since the common case is creating a
+ * file, and `realpath` on a missing path just throws. So this walks up to the
+ * deepest ancestor that does exist, resolves that, and re-attaches the rest:
+ * the segments that do not exist cannot be symlinks.
+ */
+async function resolvesInside(root: string, target: string): Promise<boolean> {
+  const realRoot = await realpath(root).catch(() => root)
+  const trailing: string[] = []
+  let existing = target
+  for (;;) {
+    const real = await realpath(existing).catch(() => null)
+    if (real !== null) return isInside(realRoot, resolve(real, ...trailing))
+    const parent = dirname(existing)
+    // Reached the filesystem root without finding anything that exists, which
+    // means the path is not under the worktree by any reading.
+    if (parent === existing) return false
+    trailing.unshift(basename(existing))
+    existing = parent
+  }
 }
 
 async function commitAll(cwd: string, message: string): Promise<boolean> {
@@ -345,7 +386,7 @@ function createRepairCanUseTool(
       const target = isAbsolute(filePath)
         ? filePath
         : join(worktreePath, filePath)
-      if (!isInside(worktreePath, target)) {
+      if (!(await resolvesInside(worktreePath, target))) {
         return deny(
           tool,
           'This agent may only edit files inside its isolated worktree',
