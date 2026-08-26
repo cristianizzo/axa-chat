@@ -293,6 +293,14 @@ export type GlobalConfig = {
   deepseekAuth?: {
     apiKey: string
   }
+  /**
+   * Kimi (Moonshot) API key credentials, stored separately from Anthropic and
+   * Codex. The key is sent to api.moonshot.ai and is never forwarded to
+   * Anthropic's servers. No OAuth flow — the user pastes the key at login.
+   */
+  kimiAuth?: {
+    apiKey: string
+  }
 
   /**
    * Per-account model memory, keyed by auth provider id. Each account (Anthropic,

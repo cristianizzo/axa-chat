@@ -3,7 +3,7 @@ import { getAuthProviderInfo } from '../../config/authProviders.js'
 import { getActiveAuthProvider } from '../activeAuthProvider.js'
 import { isEnvTruthy } from '../envUtils.js'
 
-export type APIProvider = 'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'openai' | 'ollama' | 'deepseek'
+export type APIProvider = 'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'openai' | 'ollama' | 'deepseek' | 'kimi'
 
 /**
  * The API backend requests are served by.

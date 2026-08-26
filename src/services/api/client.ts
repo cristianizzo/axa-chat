@@ -13,10 +13,12 @@ import {
   getClaudeAIOAuthTokens,
   getCodexOAuthTokens,
   getDeepSeekAuth,
+  getKimiAuth,
   getOllamaAuth,
   isClaudeAISubscriber,
   isCodexSubscriber,
   isDeepSeekSubscriber,
+  isKimiSubscriber,
   isOllamaSubscriber,
   refreshAndGetAwsCredentials,
   refreshGcpCredentialsIfNeeded,
@@ -41,7 +43,8 @@ import {
 } from '../../utils/envUtils.js'
 import { createCodexFetch } from './codex-fetch-adapter.js'
 import { createDeepSeekFetch } from './deepseek-fetch-adapter.js'
-import { createOllamaFetch } from './ollama-fetch-adapter.js'
+import { createCountTokensShim } from './count-tokens-shim.js'
+import { KIMI_BASE_URL } from 'src/config/kimi.js'
 
 /**
  * Environment variables for different client types:
@@ -338,8 +341,13 @@ export async function getAnthropicClient({
         authToken: ollama.authToken || 'ollama',
         baseURL: ollama.baseUrl,
         ...ARGS,
+        // See the Kimi branch below: configureApiKeyHeaders may have put an
+        // Anthropic credential in Authorization, and defaultHeaders outrank the
+        // authToken directly above. For a daemon on localhost that is only a
+        // broken request, but an Ollama Cloud base URL makes it a leak.
+        defaultHeaders: withoutAuthorization(defaultHeaders),
         // The daemon has no count_tokens endpoint; answer that one path locally.
-        fetch: createOllamaFetch(resolvedFetch) as unknown as typeof globalThis.fetch,
+        fetch: createCountTokensShim(resolvedFetch) as unknown as typeof globalThis.fetch,
         ...(isDebugToStdErr() && { logger: createStderrLogger() }),
       }
       return new Anthropic(clientConfig)
@@ -362,6 +370,39 @@ export async function getAnthropicClient({
     // TOCTOU: provider is deepseek but key vanished between the subscriber check and here.
     // Fall through to the default client; it will surface an auth error to the user.
     logForDebugging('DeepSeek provider active but API key is missing; falling through to default client', { level: 'warn' })
+  }
+
+  // ── Kimi provider (native Anthropic endpoint) ─────────────────────
+  if (isKimiSubscriber()) {
+    const kimi = getKimiAuth()
+    if (kimi?.apiKey) {
+      // `authToken`, not `apiKey`: Moonshot authenticates the Bearer header and
+      // documents ANTHROPIC_AUTH_TOKEN for this endpoint. `x-api-key`, which is
+      // what the SDK's `apiKey` emits, is the wrong header here and their FAQ
+      // specifically calls out having both as a source of 401s.
+      const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
+        apiKey: null,
+        authToken: kimi.apiKey,
+        baseURL: KIMI_BASE_URL,
+        ...ARGS,
+        // Strip any Authorization put there by configureApiKeyHeaders. That
+        // header carries ANTHROPIC_AUTH_TOKEN or the apiKeyHelper's output —
+        // an Anthropic credential — and defaultHeaders outrank the SDK's own
+        // auth, so leaving it would both break the request and hand a third
+        // party a key meant for Anthropic. Only the native-Anthropic branches
+        // need this: Codex and DeepSeek go through fetch adapters that rebuild
+        // the request from scratch and never copy this header across.
+        defaultHeaders: withoutAuthorization(defaultHeaders),
+        // Moonshot's shim implements messages, not count_tokens; answer that
+        // one path locally exactly as the Ollama daemon requires.
+        fetch: createCountTokensShim(resolvedFetch) as unknown as typeof globalThis.fetch,
+        ...(isDebugToStdErr() && { logger: createStderrLogger() }),
+      }
+      return new Anthropic(clientConfig)
+    }
+    // TOCTOU: provider is kimi but the key vanished between the subscriber
+    // check and here. Fall through; the default client surfaces an auth error.
+    logForDebugging('Kimi provider active but API key is missing; falling through to default client', { level: 'warn' })
   }
 
   // Determine authentication method based on available tokens
@@ -392,6 +433,23 @@ async function configureApiKeyHeaders(
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }
+}
+
+/**
+ * The headers minus `Authorization`, whatever case it arrived in.
+ *
+ * Case-insensitive because the name can come from ANTHROPIC_CUSTOM_HEADERS,
+ * which is free-form user text — a `authorization: Bearer …` line there would
+ * survive a plain `delete headers.Authorization` and still be sent.
+ */
+function withoutAuthorization(
+  headers: Record<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).filter(
+      ([name]) => name.toLowerCase() !== 'authorization',
+    ),
+  )
 }
 
 function getCustomHeaders(): Record<string, string> {

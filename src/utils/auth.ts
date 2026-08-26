@@ -6,6 +6,7 @@ import memoize from 'lodash-es/memoize.js'
 import { join } from 'path'
 import { CODEX_PROVIDER_ID } from 'src/config/codex.js'
 import { DEEPSEEK_PROVIDER_ID } from 'src/config/deepseek.js'
+import { KIMI_PROVIDER_ID } from 'src/config/kimi.js'
 import { OLLAMA_PROVIDER_ID } from 'src/config/ollama.js'
 import { CLAUDE_AI_PROFILE_SCOPE } from 'src/constants/oauth.js'
 import {
@@ -1488,6 +1489,67 @@ export function clearDeepSeekAuth(): void {
 export function isDeepSeekSubscriber(): boolean {
   if (getAPIProvider() !== 'deepseek') return false
   return !!getDeepSeekAuth()?.apiKey
+}
+
+// ── Kimi API key storage ─────────────────────────────────────────────────────
+// Kimi credentials live in GlobalConfig alongside Codex, Ollama and DeepSeek,
+// never in the keychain. The key goes to api.moonshot.ai and is never forwarded
+// to Anthropic's servers — worth stating twice, because unlike DeepSeek the
+// Kimi endpoint is Anthropic-shaped and the request leaving here is one an
+// Anthropic key would also have been valid for.
+
+export type KimiAuth = {
+  apiKey: string
+}
+
+/**
+ * Saves the Kimi API key to GlobalConfig and makes Kimi the active provider.
+ * Written atomically so the key and the active provider cannot disagree.
+ * Mirrors {@link saveDeepSeekAuth}.
+ */
+export function saveKimiAuth(auth: KimiAuth): void {
+  saveGlobalConfig((cfg) => ({
+    ...cfg,
+    activeAuthProvider: KIMI_PROVIDER_ID,
+    kimiAuth: {
+      apiKey: auth.apiKey,
+    },
+  }))
+}
+
+/**
+ * Retrieves the stored Kimi API key from GlobalConfig.
+ * Returns null if no key has been stored.
+ */
+export function getKimiAuth(): KimiAuth | null {
+  const stored = getGlobalConfig().kimiAuth
+  if (!stored?.apiKey) return null
+  return { apiKey: stored.apiKey }
+}
+
+/**
+ * Removes the Kimi API key from GlobalConfig (e.g., on logout).
+ */
+export function clearKimiAuth(): void {
+  saveGlobalConfig((cfg) => {
+    const { kimiAuth: _removed, ...rest } = cfg
+    return rest as typeof cfg
+  })
+}
+
+/**
+ * Whether Kimi is the active, usable provider.
+ *
+ * Same shape as {@link isDeepSeekSubscriber}: the provider check keeps this
+ * false whenever some other account is active, and the stored-key check ensures
+ * we do not route to a backend we cannot authenticate to — e.g. after a logout
+ * cleared the key.
+ *
+ * @returns Whether Kimi is the active, usable provider
+ */
+export function isKimiSubscriber(): boolean {
+  if (getAPIProvider() !== 'kimi') return false
+  return !!getKimiAuth()?.apiKey
 }
 
 
