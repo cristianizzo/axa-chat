@@ -17,6 +17,7 @@ import {
 import {
   DEFAULT_KIMI_MODEL,
   KIMI_CONTEXT_WINDOW,
+  KIMI_MAX_CONCURRENT_REQUESTS,
   KIMI_MAX_OUTPUT_TOKENS,
   KIMI_MODELS,
   KIMI_PROVIDER_ID,
@@ -53,6 +54,17 @@ export type ProviderModelCatalog = {
    * ID falls straight through it and is assumed capable.
    */
   supportsToolSearch: boolean
+  /**
+   * How many requests this endpoint will process at once, if it is few enough
+   * to matter. Omitted means "enough that the CLI need not think about it".
+   *
+   * The CLI fans out up to ten concurrent tool calls, which is fine against a
+   * backend sized for it and useless against one that answers a single request
+   * at a time — the other nine come back as rate-limit errors. Providers that
+   * publish a small concurrency allowance state it here and
+   * `limitRequestConcurrency` spaces the requests out instead.
+   */
+  maxConcurrentRequests?: number
 }
 
 /**
@@ -105,6 +117,7 @@ export const PROVIDER_MODEL_CATALOGS: Partial<
     // `firstParty` — so without this the request goes out with blocks the
     // endpoint has no handler for.
     supportsToolSearch: false,
+    maxConcurrentRequests: KIMI_MAX_CONCURRENT_REQUESTS,
   },
 }
 
@@ -112,6 +125,27 @@ export function getProviderModelCatalog(
   provider: AuthProviderId,
 ): ProviderModelCatalog | undefined {
   return PROVIDER_MODEL_CATALOGS[provider]
+}
+
+/**
+ * Requests allowed in flight at once for a provider, honouring the operator
+ * override.
+ *
+ * @param provider - The account provider serving requests
+ * @returns The limit, or undefined when the provider needs no limiting
+ */
+export function getMaxConcurrentRequests(
+  provider: AuthProviderId,
+): number | undefined {
+  const catalogLimit = getProviderModelCatalog(provider)?.maxConcurrentRequests
+  if (catalogLimit === undefined) {
+    return undefined
+  }
+  const override = parseInt(
+    process.env.CLAUDE_CODE_MAX_CONCURRENT_REQUESTS || '',
+    10,
+  )
+  return override > 0 ? override : catalogLimit
 }
 
 export function getProviderModelCatalogForModel(

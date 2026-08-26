@@ -126,3 +126,14 @@ export const KIMI_MAX_OUTPUT_TOKENS = {
   default: 131_072,
   upperLimit: 131_072,
 } as const
+
+/**
+ * Requests Moonshot will process at once.
+ *
+ * One, on the tiers a new account lands in — the same tiers that allow 3
+ * requests per minute. The number rises with spend, and an account that has
+ * moved up can say so with CLAUDE_CODE_MAX_CONCURRENT_REQUESTS rather than
+ * being held at the entry-tier figure. Nothing in the API reports the current
+ * tier, so it cannot be discovered at runtime.
+ */
+export const KIMI_MAX_CONCURRENT_REQUESTS = 1
