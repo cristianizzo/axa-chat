@@ -11,7 +11,10 @@ import { isAwsCredentialsProviderError } from 'src/utils/aws.js'
 import { logForDebugging } from 'src/utils/debug.js'
 import { logError } from 'src/utils/log.js'
 import { createSystemAPIErrorMessage } from 'src/utils/messages.js'
-import { getAPIProviderForStatsig } from 'src/utils/model/providers.js'
+import {
+  getAPIProvider,
+  getAPIProviderForStatsig,
+} from 'src/utils/model/providers.js'
 import {
   clearApiKeyHelperCache,
   clearAwsCredentialsCache,
@@ -55,11 +58,16 @@ const MAX_529_RETRIES = 3
 export const BASE_DELAY_MS = 500
 
 // Foreground query sources where the user IS blocking on the result — these
-// retry on 529. Everything else (summaries, titles, suggestions, classifiers)
-// bails immediately: during a capacity cascade each retry is 3-10× gateway
-// amplification, and the user never sees those fail anyway. New sources
-// default to no-retry — add here only if the user is waiting on the result.
-const FOREGROUND_529_RETRY_SOURCES = new Set<QuerySource>([
+// retry when the backend pushes back. Everything else (summaries, titles,
+// suggestions, classifiers) bails immediately: during a capacity cascade each
+// retry is 3-10× gateway amplification, and the user never sees those fail
+// anyway. The same holds under a rate limit, where the amplification is spent
+// against a budget the user is waiting on — a session title retrying ten times
+// against a provider that allows three requests a minute costs the next few
+// minutes of foreground work to produce a label nobody is looking at. New
+// sources default to no-retry — add here only if the user is waiting on the
+// result.
+const FOREGROUND_RETRY_SOURCES = new Set<QuerySource>([
   'repl_main_thread',
   'repl_main_thread:outputStyle:custom',
   'repl_main_thread:outputStyle:Explanatory',
@@ -81,11 +89,11 @@ const FOREGROUND_529_RETRY_SOURCES = new Set<QuerySource>([
   ...(feature('BASH_CLASSIFIER') ? (['bash_classifier'] as const) : []),
 ])
 
-function shouldRetry529(querySource: QuerySource | undefined): boolean {
+function shouldRetryWhenThrottled(
+  querySource: QuerySource | undefined,
+): boolean {
   // undefined → retry (conservative for untagged call paths)
-  return (
-    querySource === undefined || FOREGROUND_529_RETRY_SOURCES.has(querySource)
-  )
+  return querySource === undefined || FOREGROUND_RETRY_SOURCES.has(querySource)
 }
 
 // CLAUDE_CODE_UNATTENDED_RETRY: for unattended sessions (ant-only). Retries 429/529
@@ -330,12 +338,18 @@ export async function* withRetry<T>(
         continue
       }
 
-      // Non-foreground sources bail immediately on 529 — no retry amplification
-      // during capacity cascades. User never sees these fail.
-      if (is529Error(error) && !shouldRetry529(options.querySource)) {
+      // Non-foreground sources bail immediately when the backend pushes back —
+      // no retry amplification during capacity cascades, and none against a
+      // rate-limit budget the foreground needs. User never sees these fail.
+      if (
+        isTransientCapacityError(error) &&
+        !shouldRetryWhenThrottled(options.querySource)
+      ) {
+        // Event name predates the 429 case; `status` separates the two.
         logEvent('tengu_api_529_background_dropped', {
           query_source:
             options.querySource as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          status: error instanceof APIError ? error.status : undefined,
         })
         throw new CannotRetryError(error, retryContext)
       }
@@ -552,7 +566,11 @@ export function getRetryDelay(
   if (retryAfterHeader) {
     const seconds = parseInt(retryAfterHeader, 10)
     if (!isNaN(seconds)) {
-      return seconds * 1000
+      // `Retry-After: 0` is a real thing to send at the boundary of a
+      // per-minute window, and taken literally it means retrying with no delay
+      // at all — ten immediate requests at a provider that just said no. Honour
+      // the header, but never below the backoff floor.
+      return Math.max(seconds * 1000, BASE_DELAY_MS)
     }
   }
 
@@ -782,6 +800,16 @@ function shouldRetry(error: APIError): boolean {
   // Retry on rate limits, but not for ClaudeAI Subscription users
   // Enterprise users can retry because they typically use PAYG instead of rate limits
   if (error.status === 429) {
+    // That rule is about the claude.ai subscription window: once it is spent,
+    // retrying inside it cannot succeed, so failing fast is kinder. It says
+    // nothing about anyone else's 429 — a third-party account has its own
+    // per-minute allowance that a short backoff does clear. isClaudeAISubscriber()
+    // reports on the stored Anthropic credentials whatever account is active,
+    // so without this a user who logged into claude.ai and then switched to
+    // another provider would get no retries at all on that provider.
+    if (getAPIProvider() !== 'firstParty') {
+      return true
+    }
     return !isClaudeAISubscriber() || isEnterpriseSubscriber()
   }
 

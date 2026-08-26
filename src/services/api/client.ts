@@ -44,7 +44,9 @@ import {
 import { createCodexFetch } from './codex-fetch-adapter.js'
 import { createDeepSeekFetch } from './deepseek-fetch-adapter.js'
 import { createCountTokensShim } from './count-tokens-shim.js'
-import { KIMI_BASE_URL } from 'src/config/kimi.js'
+import { limitRequestConcurrency } from './requestLimiter.js'
+import { KIMI_BASE_URL, KIMI_PROVIDER_ID } from 'src/config/kimi.js'
+import { getMaxConcurrentRequests } from 'src/config/providerModels.js'
 
 /**
  * Environment variables for different client types:
@@ -376,6 +378,14 @@ export async function getAnthropicClient({
   if (isKimiSubscriber()) {
     const kimi = getKimiAuth()
     if (kimi?.apiKey) {
+      const kimiConcurrency = getMaxConcurrentRequests(KIMI_PROVIDER_ID)
+      const kimiFetch = kimiConcurrency
+        ? limitRequestConcurrency(
+            KIMI_PROVIDER_ID,
+            kimiConcurrency,
+            resolvedFetch,
+          )
+        : resolvedFetch
       // `authToken`, not `apiKey`: ANTHROPIC_AUTH_TOKEN — the Bearer header —
       // is what Moonshot documents for this endpoint. Probing the live API
       // shows it also accepts `x-api-key` (what the SDK's `apiKey` emits), and
@@ -396,8 +406,11 @@ export async function getAnthropicClient({
         // the request from scratch and never copy this header across.
         defaultHeaders: withoutAuthorization(defaultHeaders),
         // Moonshot's shim implements messages, not count_tokens; answer that
-        // one path locally exactly as the Ollama daemon requires.
-        fetch: createCountTokensShim(resolvedFetch) as unknown as typeof globalThis.fetch,
+        // one path locally exactly as the Ollama daemon requires. The
+        // concurrency limit sits underneath it so a locally-answered
+        // count_tokens never waits for — or occupies — one of the few slots
+        // Moonshot gives us.
+        fetch: createCountTokensShim(kimiFetch) as unknown as typeof globalThis.fetch,
         ...(isDebugToStdErr() && { logger: createStderrLogger() }),
       }
       return new Anthropic(clientConfig)

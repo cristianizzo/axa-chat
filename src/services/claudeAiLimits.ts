@@ -7,6 +7,7 @@ import { getModelBetas } from '../utils/betas.js'
 import { getGlobalConfig, saveGlobalConfig } from '../utils/config.js'
 import { logError } from '../utils/log.js'
 import { getSmallFastModel } from '../utils/model/model.js'
+import { getAPIProvider } from '../utils/model/providers.js'
 import { isEssentialTrafficOnly } from '../utils/privacyLevel.js'
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from './analytics/index.js'
 import { logEvent } from './analytics/index.js'
@@ -220,6 +221,16 @@ async function makeTestQuery() {
 export async function checkQuotaStatus(): Promise<void> {
   // Skip network requests if nonessential traffic is disabled
   if (isEssentialTrafficOnly()) {
+    return
+  }
+
+  // The probe exists to read Anthropic's rate-limit response headers, which
+  // only Anthropic sends. Against any other backend it is a request that
+  // reports nothing — and on a provider metered by the minute, one the user
+  // then waits behind. isClaudeAISubscriber() answers for the stored Anthropic
+  // credentials no matter which account is active, so it cannot rule this out
+  // on its own.
+  if (getAPIProvider() !== 'firstParty') {
     return
   }
 
