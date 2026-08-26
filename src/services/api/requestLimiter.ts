@@ -36,6 +36,12 @@ class ConcurrencyLimiter {
     // to be caught up front. Otherwise the request joins the queue nobody will
     // ever wake it out of, and when its turn does come it takes a slot only to
     // reject on the first read — with a live request waiting behind it.
+    //
+    // `reason` is passed through unwrapped, string reasons included — the CLI
+    // aborts with 'interrupt' and 'user-cancel' — because that is what fetch
+    // itself rejects with. Wrapping it in an Error here would mean the same
+    // Esc keypress surfaced as a string on every provider and as an Error on
+    // the limited one.
     if (signal?.aborted) {
       throw signal.reason ?? new Error('Request aborted before it was sent')
     }
