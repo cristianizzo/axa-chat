@@ -28,20 +28,22 @@ export const KIMI_BASE_URL = 'https://api.moonshot.ai/anthropic'
 /**
  * Models available through Moonshot's API.
  *
- * `kimi-k2.5` and the `moonshot-v1` series are deliberately absent: both retire
- * on 2026-08-31, so listing them would offer a model that stops answering.
+ * This is the full set: `GET /v1/models` returns exactly these four IDs. The
+ * `kimi-k2.5` and `moonshot-v1` series it used to serve are already gone ahead
+ * of their 2026-08-31 retirement, so there is nothing else to list.
  *
  * Adding an entry here surfaces it in the `/model` picker for Kimi accounts.
  */
 export const KIMI_MODELS = [
   {
-    // The `[1m]` is part of the ID Moonshot documents for the Anthropic
-    // endpoint, not something this code appends — bare `kimi-k3` is the form
-    // the OpenAI-compatible endpoint takes. It is also the marker
-    // has1mContext() keys on, so it adds `context-1m-2025-08-07` to the beta
-    // header. That is the request Moonshot's own Claude Code guide produces, so
-    // it is a request they serve.
-    id: 'kimi-k3[1m]',
+    // Plain `kimi-k3`, verified against GET /v1/models — that endpoint lists
+    // exactly the four IDs below and nothing else. Moonshot's Claude Code guide
+    // shows ANTHROPIC_MODEL="kimi-k3[1m]", but the Anthropic endpoint 404s on
+    // it ("Not found the model kimi-k3[1m] or Permission denied"), so the
+    // suffix is documentation-only and must not reach the wire. Keeping it out
+    // also keeps has1mContext() from adding `context-1m-2025-08-07`, an
+    // Anthropic beta header this endpoint has no use for.
+    id: 'kimi-k3',
     label: 'Kimi K3',
     description:
       'Flagship 2.8T mixture-of-experts model, 1M context. Thinking is always on.',
@@ -66,7 +68,7 @@ export const KIMI_MODELS = [
 export type KimiModelId = (typeof KIMI_MODELS)[number]['id']
 
 /** The model used when an account is first set up or no preference is stored. */
-export const DEFAULT_KIMI_MODEL: KimiModelId = 'kimi-k3[1m]'
+export const DEFAULT_KIMI_MODEL: KimiModelId = 'kimi-k3'
 
 /**
  * What Kimi serves in place of Haiku for background work.
