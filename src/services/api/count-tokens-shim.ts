@@ -1,11 +1,14 @@
 /**
- * Ollama fetch adapter.
+ * A local `count_tokens` for backends that speak Anthropic natively.
  *
- * Ollama v0.14+ serves a native Anthropic `/v1/messages` endpoint, so unlike
- * Codex it needs no request/response translation — pointing the SDK's baseURL at
- * the daemon is enough. The one endpoint it does NOT implement is
- * `/v1/messages/count_tokens`, and probing it can stall a session. This wrapper
+ * Ollama v0.14+ and Moonshot both serve a native Anthropic `/v1/messages`, so
+ * unlike Codex they need no request/response translation — pointing the SDK's
+ * baseURL at them is enough. Neither documents `/v1/messages/count_tokens`, and
+ * probing an endpoint that may not be there can stall a session. This wrapper
  * answers that one path locally and delegates everything else untouched.
+ *
+ * Nothing in it is specific to either backend — it keys off the request path
+ * alone — so a third native-Anthropic provider can reuse it unchanged.
  */
 
 import { logError } from '../../utils/log.js'
@@ -15,9 +18,9 @@ type FetchFn = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respons
 /**
  * Builds an Anthropic-shaped `count_tokens` response from a local estimate.
  *
- * Mirrors the Codex adapter: Ollama's compat layer has no working
- * count_tokens endpoint, so estimate from the serialised prompt instead of
- * letting the SDK hang on it.
+ * Mirrors the Codex adapter: these compat layers have no working count_tokens
+ * endpoint, so estimate from the serialised prompt instead of letting the SDK
+ * hang on it.
  *
  * `roughTokenCountEstimation` is imported dynamically because
  * `tokenEstimation.ts` imports `client.ts`, which imports this module — a static
@@ -59,7 +62,9 @@ async function estimateTokenCountResponse(
  * @param inner - The fetch to delegate non-count_tokens requests to
  * @returns A fetch suitable for the Anthropic SDK's `fetch` option
  */
-export function createOllamaFetch(inner: FetchFn = globalThis.fetch): FetchFn {
+export function createCountTokensShim(
+  inner: FetchFn = globalThis.fetch,
+): FetchFn {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : String(input)
 

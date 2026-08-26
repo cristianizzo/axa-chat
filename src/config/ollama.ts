@@ -9,7 +9,7 @@
  * Ollama v0.14+ exposes a native Anthropic `/v1/messages` endpoint, so requests
  * do not need translating the way Codex does — pointing the Anthropic SDK's
  * baseURL at the daemon is enough. The one endpoint it does NOT implement is
- * `/v1/messages/count_tokens`; the fetch wrapper in ollama-fetch-adapter.ts
+ * `/v1/messages/count_tokens`; the fetch wrapper in count-tokens-shim.ts
  * answers that locally so a token-count probe cannot stall a session.
  */
 

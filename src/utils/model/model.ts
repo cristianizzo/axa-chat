@@ -42,7 +42,7 @@ import { getModelStrings, resolveOverriddenModel } from './modelStrings.js'
 import { formatModelPricing, getOpus46CostTier } from '../modelCost.js'
 import { getSettings_DEPRECATED } from '../settings/settings.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
-import { getAPIProvider } from './providers.js'
+import { getAPIProvider, isActiveAccountServingRequests } from './providers.js'
 import { LIGHTNING_BOLT } from '../../constants/figures.js'
 import { isModelAllowed } from './modelAllowlist.js'
 import { type ModelAlias, isModelAlias } from './aliases.js'
@@ -52,8 +52,44 @@ export type ModelShortName = string
 export type ModelName = string
 export type ModelSetting = ModelName | ModelAlias | null
 
+/**
+ * The model for background work: session titles, away summaries, WebFetch page
+ * extraction, token estimation, prompt hooks.
+ *
+ * Haiku is only the right answer on Anthropic. Every other provider 404s on a
+ * `claude-*` ID, so this has to resolve against the active account — and the
+ * Anthropic default has to stay last, because reaching it means no provider
+ * claimed the request and Anthropic is what this CLI is.
+ *
+ * @returns A model ID the active provider will actually serve
+ */
 export function getSmallFastModel(): ModelName {
-  return process.env.ANTHROPIC_SMALL_FAST_MODEL || getDefaultHaikuModel()
+  // First: an explicit override outranks anything inferred. It is also how a
+  // Bedrock or Vertex deployment names its Haiku, which is not the ID below.
+  if (process.env.ANTHROPIC_SMALL_FAST_MODEL) {
+    return process.env.ANTHROPIC_SMALL_FAST_MODEL
+  }
+  // Everything below reads the logged-in account, which is only the right
+  // source when that account is what serves the request. CLAUDE_CODE_USE_*
+  // routing wins in getAnthropicClient() before the per-account branches are
+  // reached, so an operator running Bedrock with, say, a Kimi account still
+  // configured would otherwise get a Kimi ID sent to Bedrock. Haiku is correct
+  // for the cloud backends: they are Anthropic-model endpoints, and the config
+  // table maps the ID onto each one's naming.
+  if (!isActiveAccountServingRequests()) {
+    return getDefaultHaikuModel()
+  }
+  // Ollama accounts serve exactly the one model they recorded. There is no
+  // cheaper tier to drop to, so the choice is that model or a guaranteed 404.
+  if (isOllamaSubscriber()) {
+    const ollamaModel = getOllamaAuth()?.model
+    if (ollamaModel) return ollamaModel
+  }
+  const catalog = getProviderModelCatalog(getActiveAuthProvider())
+  if (catalog) {
+    return catalog.smallFastModel
+  }
+  return getDefaultHaikuModel()
 }
 
 export function isNonCustomOpusModel(model: ModelName): boolean {

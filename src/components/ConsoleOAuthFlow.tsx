@@ -11,7 +11,7 @@ import { getSSLErrorHint } from '../services/api/errorUtils.js';
 import { sendNotification } from '../services/notifier.js';
 import { runCodexOAuthFlow } from '../services/oauth/codex-client.js';
 import { OAuthService } from '../services/oauth/index.js';
-import { getOauthAccountInfo, saveCodexOAuthTokens, saveDeepSeekAuth, saveOllamaAuth, validateForceLoginOrg } from '../utils/auth.js';
+import { getOauthAccountInfo, saveCodexOAuthTokens, saveDeepSeekAuth, saveKimiAuth, saveOllamaAuth, validateForceLoginOrg } from '../utils/auth.js';
 import { getOllamaAuthToken, getOllamaBaseUrl } from '../config/ollama.js';
 import { logError } from '../utils/log.js';
 import { getSettings_DEPRECATED } from '../utils/settings/settings.js';
@@ -38,6 +38,9 @@ type OAuthStatus = {
 | {
   state: 'deepseek_api_key';
 } // DeepSeek chosen: enter API key
+| {
+  state: 'kimi_api_key';
+} // Kimi chosen: enter API key
 | {
   state: 'ready_to_start';
 } // Flow started, waiting for browser to open
@@ -406,7 +409,7 @@ function OAuthStatusMessage(t0) {
   switch (oauthStatus.state) {
     case "idle":
       {
-        const t1 = startingMessage ? startingMessage : "Sign in with a Claude subscription or Anthropic Console account, an OpenAI Codex account, a local/self-hosted Ollama model, or a DeepSeek API key.";
+        const t1 = startingMessage ? startingMessage : "Sign in with a Claude subscription or Anthropic Console account, an OpenAI Codex account, a local/self-hosted Ollama model, or a DeepSeek or Kimi API key.";
         let t2;
         if ($[0] !== t1) {
           t2 = <Text bold={true}>{t1}</Text>;
@@ -456,6 +459,9 @@ function OAuthStatusMessage(t0) {
           }, {
             label: <Text>DeepSeek ·{" "}<Text dimColor={true}>R1 / V3 via API key (pay-per-token)</Text>{"\n"}</Text>,
             value: "deepseek"
+          }, {
+            label: <Text>Kimi ·{" "}<Text dimColor={true}>Moonshot K3 / K2.7 via API key (pay-per-token)</Text>{"\n"}</Text>,
+            value: "kimi"
           }];
           $[5] = t6;
         } else {
@@ -488,6 +494,11 @@ function OAuthStatusMessage(t0) {
                 setLoginWithCodex(false);
                 setLoginWithClaudeAi(false);
                 setOAuthStatus({ state: "deepseek_api_key" });
+              } else if (value_0 === "kimi") {
+                logEvent("tengu_oauth_kimi_selected", {});
+                setLoginWithCodex(false);
+                setLoginWithClaudeAi(false);
+                setOAuthStatus({ state: "kimi_api_key" });
               } else {
                 setLoginWithCodex(false);
                 setOAuthStatus({
@@ -706,6 +717,34 @@ function OAuthStatusMessage(t0) {
         }
         return t3;
       }
+    case "kimi_api_key":
+      return <Box flexDirection="column" gap={1}>
+          <Text bold={true}>Enter your Moonshot API key:</Text>
+          <Text dimColor={true}>Get one at platform.kimi.ai → API keys (the account needs a top-up before a key works)</Text>
+          <TextInput value={pastedCode} onChange={setPastedCode} onSubmit={value => {
+            const trimmed = value.trim();
+            if (!trimmed) return;
+            // Basic format guard: Moonshot keys are printable ASCII, 8–512 chars
+            if (!/^[\x21-\x7E]{8,512}$/.test(trimmed)) {
+              setOAuthStatus({
+                state: "error",
+                message: "That doesn't look like a valid Moonshot API key. Check the value and try again.",
+                toRetry: {
+                  state: "kimi_api_key"
+                }
+              });
+              return;
+            }
+            saveKimiAuth({
+              apiKey: trimmed
+            });
+            setPastedCode('');
+            logEvent("tengu_oauth_kimi_success", {});
+            setOAuthStatus({
+              state: "success"
+            });
+          }} cursorOffset={cursorOffset} onChangeCursorOffset={setCursorOffset} columns={textInputColumns} mask="*" />
+        </Box>;
     case "deepseek_api_key":
       return <Box flexDirection="column" gap={1}>
           <Text bold={true}>Enter your DeepSeek API key:</Text>

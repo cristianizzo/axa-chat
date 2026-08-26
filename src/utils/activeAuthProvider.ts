@@ -14,6 +14,7 @@ import {
 } from '../config/authProviders.js'
 import { CODEX_PROVIDER_ID } from '../config/codex.js'
 import { DEEPSEEK_PROVIDER_ID } from '../config/deepseek.js'
+import { KIMI_PROVIDER_ID } from '../config/kimi.js'
 import { OLLAMA_PROVIDER_ID } from '../config/ollama.js'
 import { getGlobalConfig, saveGlobalConfig } from './config.js'
 
@@ -40,6 +41,8 @@ export function hasCredentialsForAuthProvider(id: AuthProviderId): boolean {
         return !!config.ollamaAuth?.baseUrl && !!config.ollamaAuth?.model
       case DEEPSEEK_PROVIDER_ID:
         return !!config.deepseekAuth?.apiKey
+      case KIMI_PROVIDER_ID:
+        return !!config.kimiAuth?.apiKey
       default:
         // Anthropic tokens live in the keychain, not the config file, and
         // reading them is async and comparatively expensive. oauthAccount is
@@ -79,6 +82,9 @@ export function getActiveAuthProvider(): AuthProviderId {
     }
     if (config.deepseekAuth?.apiKey) {
       return DEEPSEEK_PROVIDER_ID
+    }
+    if (config.kimiAuth?.apiKey) {
+      return KIMI_PROVIDER_ID
     }
     return DEFAULT_AUTH_PROVIDER
   } catch {

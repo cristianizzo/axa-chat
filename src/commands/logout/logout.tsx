@@ -8,9 +8,10 @@ import { clearPolicyLimitsCache } from '../../services/policyLimits/index.js';
 import { clearRemoteManagedSettingsCache } from '../../services/remoteManagedSettings/index.js';
 import { CODEX_PROVIDER_ID } from '../../config/codex.js';
 import { DEEPSEEK_PROVIDER_ID } from '../../config/deepseek.js';
+import { KIMI_PROVIDER_ID } from '../../config/kimi.js';
 import { OLLAMA_PROVIDER_ID } from '../../config/ollama.js';
 import { clearActiveAuthProvider, getActiveAuthProvider } from '../../utils/activeAuthProvider.js';
-import { clearCodexOAuthTokens, clearDeepSeekAuth, clearOllamaAuth, getClaudeAIOAuthTokens, removeApiKey } from '../../utils/auth.js';
+import { clearCodexOAuthTokens, clearDeepSeekAuth, clearKimiAuth, clearOllamaAuth, getClaudeAIOAuthTokens, removeApiKey } from '../../utils/auth.js';
 import { clearBetasCaches } from '../../utils/betas.js';
 import { saveGlobalConfig } from '../../utils/config.js';
 import { gracefulShutdownSync } from '../../utils/gracefulShutdown.js';
@@ -111,6 +112,15 @@ export async function call(): Promise<React.ReactNode> {
       gracefulShutdownSync(0, 'logout');
     }, 200);
     return <Text>Successfully logged out from your DeepSeek account.</Text>;
+  }
+  if (activeProvider === KIMI_PROVIDER_ID) {
+    clearKimiAuth();
+    clearActiveAuthProvider();
+    await clearAuthRelatedCaches();
+    setTimeout(() => {
+      gracefulShutdownSync(0, 'logout');
+    }, 200);
+    return <Text>Successfully logged out from your Kimi account.</Text>;
   }
   await performLogout({
     clearOnboarding: true

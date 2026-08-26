@@ -29,6 +29,8 @@ import {
   countToolDefinitionTokens,
   TOOL_TOKEN_COUNT_OVERHEAD,
 } from './analyzeContext.js'
+import { getProviderModelCatalog } from '../config/providerModels.js'
+import { getActiveAuthProvider } from './activeAuthProvider.js'
 import { count } from './array.js'
 import { getMergedBetas } from './betas.js'
 import { getContextWindowForModel } from './context.js'
@@ -36,6 +38,7 @@ import { logForDebugging } from './debug.js'
 import { isEnvDefinedFalsy, isEnvTruthy } from './envUtils.js'
 import {
   getAPIProvider,
+  isActiveAccountServingRequests,
   isFirstPartyAnthropicBaseUrl,
 } from './model/providers.js'
 import { jsonStringify } from './slowOperations.js'
@@ -296,6 +299,31 @@ export function isToolSearchEnabledOptimistic(): boolean {
   // means the user is explicitly configuring tool search and asserts their
   // setup supports it. The falsy check (rather than === undefined) aligns
   // with getToolSearchMode(), which also treats "" as unset.
+  // A provider that declares it cannot take tool_reference blocks is a harder
+  // no than the base-URL heuristic below: that one guesses at a proxy from its
+  // hostname, this one is the provider stating it. Checked first, and without
+  // the ENABLE_TOOL_SEARCH escape hatch, because that flag exists for the case
+  // where the user knows their proxy better than the heuristic does — there is
+  // nothing to know better here.
+  // Only when that account is the endpoint being talked to: CLAUDE_CODE_USE_*
+  // routing sends requests to Bedrock/Vertex/Foundry regardless of which
+  // account is configured, and those do accept tool_reference blocks. Reading
+  // the account's catalog then would answer a question about the wrong
+  // endpoint and disable tool search on a backend that supports it.
+  const activeProvider = getActiveAuthProvider()
+  const catalog = isActiveAccountServingRequests()
+    ? getProviderModelCatalog(activeProvider)
+    : undefined
+  if (catalog && !catalog.supportsToolSearch) {
+    if (!loggedOptimistic) {
+      loggedOptimistic = true
+      logForDebugging(
+        `[ToolSearch:optimistic] disabled: the ${activeProvider} endpoint does not accept tool_reference blocks.`,
+      )
+    }
+    return false
+  }
+
   if (
     !process.env.ENABLE_TOOL_SEARCH &&
     getAPIProvider() === 'firstParty' &&

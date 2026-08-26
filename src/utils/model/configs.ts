@@ -5,10 +5,16 @@ import {
 import type { ModelName } from './model.js'
 import type { APIProvider } from './providers.js'
 
-// Ollama and DeepSeek have no column in the builtin config table — they don't
-// use the Anthropic model ID rewriting scheme. getBuiltinModelStrings falls
-// back to firstParty for Ollama; DeepSeek uses its own catalog entirely.
-export type ModelConfig = Record<Exclude<APIProvider, 'ollama' | 'deepseek'>, ModelName>
+// Ollama, DeepSeek and Kimi have no column in the builtin config table — they
+// don't use the Anthropic model ID rewriting scheme. getBuiltinModelStrings
+// falls back to firstParty for Ollama; DeepSeek and Kimi use their own catalogs
+// entirely. Note this is not about the request shape: Kimi speaks Anthropic and
+// still belongs here, because the table maps one Claude model across backends
+// and there is no Kimi model that is Claude Sonnet 4.5 under another name.
+export type ModelConfig = Record<
+  Exclude<APIProvider, 'ollama' | 'deepseek' | 'kimi'>,
+  ModelName
+>
 
 // @[MODEL LAUNCH]: Add a new CLAUDE_*_CONFIG constant here. Double check the correct model strings
 // here since the pattern may change.
