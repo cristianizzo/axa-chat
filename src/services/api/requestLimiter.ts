@@ -38,10 +38,12 @@ class ConcurrencyLimiter {
     // reject on the first read — with a live request waiting behind it.
     //
     // `reason` is passed through unwrapped, string reasons included — the CLI
-    // aborts with 'interrupt' and 'user-cancel' — because that is what fetch
-    // itself rejects with. Wrapping it in an Error here would mean the same
-    // Esc keypress surfaced as a string on every provider and as an Error on
-    // the limited one.
+    // aborts with 'interrupt' and 'user-cancel', which is what fetch itself
+    // rejects with too. No handler ever sees the bare string: the SDK feeds a
+    // rejected fetch through castToError and, finding the signal aborted,
+    // reports APIUserAbortError, which isAbortError() matches by instanceof.
+    // Wrapping it here would buy nothing and would make this the only fetch in
+    // the CLI that reports an abort reason the caller never passed.
     if (signal?.aborted) {
       throw signal.reason ?? new Error('Request aborted before it was sent')
     }
