@@ -32,6 +32,13 @@ class ConcurrencyLimiter {
   constructor(private readonly maxConcurrent: number) {}
 
   async acquire(signal?: AbortSignal | null): Promise<void> {
+    // An abort that has already happened will never fire a listener, so it has
+    // to be caught up front. Otherwise the request joins the queue nobody will
+    // ever wake it out of, and when its turn does come it takes a slot only to
+    // reject on the first read — with a live request waiting behind it.
+    if (signal?.aborted) {
+      throw signal.reason ?? new Error('Request aborted before it was sent')
+    }
     if (this.inFlight < this.maxConcurrent) {
       this.inFlight++
       return
