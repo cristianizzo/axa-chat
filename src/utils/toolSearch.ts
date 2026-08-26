@@ -304,12 +304,13 @@ export function isToolSearchEnabledOptimistic(): boolean {
   // the ENABLE_TOOL_SEARCH escape hatch, because that flag exists for the case
   // where the user knows their proxy better than the heuristic does — there is
   // nothing to know better here.
-  const catalog = getProviderModelCatalog(getActiveAuthProvider())
+  const activeProvider = getActiveAuthProvider()
+  const catalog = getProviderModelCatalog(activeProvider)
   if (catalog && !catalog.supportsToolSearch) {
     if (!loggedOptimistic) {
       loggedOptimistic = true
       logForDebugging(
-        `[ToolSearch:optimistic] disabled: the ${getActiveAuthProvider()} endpoint does not accept tool_reference blocks.`,
+        `[ToolSearch:optimistic] disabled: the ${activeProvider} endpoint does not accept tool_reference blocks.`,
       )
     }
     return false
