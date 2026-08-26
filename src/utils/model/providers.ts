@@ -29,6 +29,25 @@ export function getAPIProvider(): APIProvider {
   return getAuthProviderInfo(getActiveAuthProvider()).apiProvider
 }
 
+/**
+ * Whether the logged-in account is the thing actually serving requests.
+ *
+ * False when CLAUDE_CODE_USE_BEDROCK/_VERTEX/_FOUNDRY is set, because those
+ * win in getAPIProvider() above and in getAnthropicClient(), which returns a
+ * cloud client before it ever reaches the per-account branches. The account
+ * still exists and still names a model, so anything reading a provider catalog
+ * to answer "what model can I send" or "what does this endpoint accept" has to
+ * check this first — the catalog describes the account, not the backend that
+ * would receive the request.
+ *
+ * @returns Whether account-derived capabilities apply to outgoing requests
+ */
+export function isActiveAccountServingRequests(): boolean {
+  return (
+    getAPIProvider() === getAuthProviderInfo(getActiveAuthProvider()).apiProvider
+  )
+}
+
 export function getAPIProviderForStatsig(): AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS {
   return getAPIProvider() as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
 }

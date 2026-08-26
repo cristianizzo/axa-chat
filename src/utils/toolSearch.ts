@@ -38,6 +38,7 @@ import { logForDebugging } from './debug.js'
 import { isEnvDefinedFalsy, isEnvTruthy } from './envUtils.js'
 import {
   getAPIProvider,
+  isActiveAccountServingRequests,
   isFirstPartyAnthropicBaseUrl,
 } from './model/providers.js'
 import { jsonStringify } from './slowOperations.js'
@@ -304,8 +305,15 @@ export function isToolSearchEnabledOptimistic(): boolean {
   // the ENABLE_TOOL_SEARCH escape hatch, because that flag exists for the case
   // where the user knows their proxy better than the heuristic does — there is
   // nothing to know better here.
+  // Only when that account is the endpoint being talked to: CLAUDE_CODE_USE_*
+  // routing sends requests to Bedrock/Vertex/Foundry regardless of which
+  // account is configured, and those do accept tool_reference blocks. Reading
+  // the account's catalog then would answer a question about the wrong
+  // endpoint and disable tool search on a backend that supports it.
   const activeProvider = getActiveAuthProvider()
-  const catalog = getProviderModelCatalog(activeProvider)
+  const catalog = isActiveAccountServingRequests()
+    ? getProviderModelCatalog(activeProvider)
+    : undefined
   if (catalog && !catalog.supportsToolSearch) {
     if (!loggedOptimistic) {
       loggedOptimistic = true

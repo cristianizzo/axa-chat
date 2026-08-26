@@ -42,7 +42,7 @@ import { getModelStrings, resolveOverriddenModel } from './modelStrings.js'
 import { formatModelPricing, getOpus46CostTier } from '../modelCost.js'
 import { getSettings_DEPRECATED } from '../settings/settings.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
-import { getAPIProvider } from './providers.js'
+import { getAPIProvider, isActiveAccountServingRequests } from './providers.js'
 import { LIGHTNING_BOLT } from '../../constants/figures.js'
 import { isModelAllowed } from './modelAllowlist.js'
 import { type ModelAlias, isModelAlias } from './aliases.js'
@@ -68,6 +68,16 @@ export function getSmallFastModel(): ModelName {
   // Bedrock or Vertex deployment names its Haiku, which is not the ID below.
   if (process.env.ANTHROPIC_SMALL_FAST_MODEL) {
     return process.env.ANTHROPIC_SMALL_FAST_MODEL
+  }
+  // Everything below reads the logged-in account, which is only the right
+  // source when that account is what serves the request. CLAUDE_CODE_USE_*
+  // routing wins in getAnthropicClient() before the per-account branches are
+  // reached, so an operator running Bedrock with, say, a Kimi account still
+  // configured would otherwise get a Kimi ID sent to Bedrock. Haiku is correct
+  // for the cloud backends: they are Anthropic-model endpoints, and the config
+  // table maps the ID onto each one's naming.
+  if (!isActiveAccountServingRequests()) {
+    return getDefaultHaikuModel()
   }
   // Ollama accounts serve exactly the one model they recorded. There is no
   // cheaper tier to drop to, so the choice is that model or a guaranteed 404.
