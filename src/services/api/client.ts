@@ -376,10 +376,12 @@ export async function getAnthropicClient({
   if (isKimiSubscriber()) {
     const kimi = getKimiAuth()
     if (kimi?.apiKey) {
-      // `authToken`, not `apiKey`: Moonshot authenticates the Bearer header and
-      // documents ANTHROPIC_AUTH_TOKEN for this endpoint. `x-api-key`, which is
-      // what the SDK's `apiKey` emits, is the wrong header here and their FAQ
-      // specifically calls out having both as a source of 401s.
+      // `authToken`, not `apiKey`: ANTHROPIC_AUTH_TOKEN — the Bearer header —
+      // is what Moonshot documents for this endpoint. Probing the live API
+      // shows it also accepts `x-api-key` (what the SDK's `apiKey` emits), and
+      // accepts both at once, so this follows the documented contract rather
+      // than working around something that fails today. `apiKey: null` then
+      // stops the SDK adding the undocumented header alongside it.
       const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
         apiKey: null,
         authToken: kimi.apiKey,
