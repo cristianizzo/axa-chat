@@ -19,6 +19,7 @@ import {
   truncateToWidth,
   truncateToWidthNoEllipsis,
 } from './format.js'
+import { isActiveAccountServingRequests } from './model/providers.js'
 import {
   getRecentReleaseNotes,
   getStoredChangelogFromMemory,
@@ -265,13 +266,21 @@ export function formatReleaseNoteForDisplay(
  * silent fallback to Anthropic's.
  */
 function getBillingTypeLabel(): string {
+  // CLAUDE_CODE_USE_BEDROCK/_VERTEX/_FOUNDRY beat the account in getAPIProvider()
+  // and again in getAnthropicClient(), so the account is not who gets billed and
+  // its label would be a lie — "Local Model" on a session billing every token to
+  // Bedrock, say. All three are metered cloud backends, which is the one thing
+  // they have in common and the only thing this line claims.
+  if (!isActiveAccountServingRequests()) {
+    return 'API Usage Billing'
+  }
+
   const provider: AuthProviderId = getActiveAuthProvider()
   switch (provider) {
     case ANTHROPIC_PROVIDER_ID:
       // Still a predicate here, because "Anthropic account" covers both a
       // claude.ai subscription and a metered API key, and only the token
-      // scopes distinguish them. Bedrock/Vertex/Foundry land here too and are
-      // correctly metered: isClaudeAISubscriber() is false for them.
+      // scopes distinguish them.
       return isClaudeAISubscriber() ? getSubscriptionName() : 'API Usage Billing'
     case CODEX_PROVIDER_ID:
       return 'ChatGPT Subscription'

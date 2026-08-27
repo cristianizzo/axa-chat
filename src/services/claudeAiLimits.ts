@@ -237,10 +237,15 @@ async function makeTestQuery() {
  * `status: 'rejected'` on *any* 429, so a Moonshot throttle reports the
  * claude.ai allowance as spent.
  *
- * `shouldProcessRateLimits` keeps `/mock-limits` working regardless.
+ * Only the subscription half sits under `shouldProcessRateLimits`, so that
+ * `/mock-limits` can stand in for a subscription the developer does not have
+ * without also standing in for the backend. Overriding the routing half would
+ * put `checkQuotaStatus`'s probe on the wire from a session pointed at Kimi or
+ * Ollama and let those responses cache limit state — both failures above,
+ * reachable in mock mode.
  */
 function shouldTrackClaudeAiLimits(): boolean {
-  return shouldProcessRateLimits(isClaudeAISubscriber() && isServedByAnthropic())
+  return isServedByAnthropic() && shouldProcessRateLimits(isClaudeAISubscriber())
 }
 
 export async function checkQuotaStatus(): Promise<void> {
