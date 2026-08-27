@@ -4,7 +4,6 @@ import {
   mkdirSync,
   readdirSync,
   rmSync,
-  rmdirSync,
   statSync,
   writeFileSync,
 } from 'fs'
@@ -259,6 +258,12 @@ const staleBefore = Date.now() - 60 * 60 * 1000
  * staged self-update runs `bun run update:staged` against `cli-dev.next` in
  * the repo it is updating, which is the same tree a developer builds
  * `cli-dev` from (see src/utils/sourceUpdate.ts).
+ *
+ * The directory itself is never removed, only the markers inside it. Deleting
+ * it would race every other build: one that had just run `mkdirSync` would
+ * fail its `writeFileSync`, and one about to scan would fail its `readdirSync`
+ * — turning a build that had already succeeded into a crash. An empty hidden
+ * directory is the cheaper price.
  */
 const ACTIVE_BUILDS_DIR = '.bun-build-active'
 const activeMarker = `${ACTIVE_BUILDS_DIR}/${process.pid}`
@@ -312,13 +317,6 @@ for (const name of listTempArtifacts()) {
       `\x1b[33m[warn]\x1b[0m Could not remove build artifact ${name}: ${error}`,
     )
   }
-}
-try {
-  // Fails with ENOTEMPTY if a build started while we were sweeping, which is
-  // the correct outcome: their marker has to survive.
-  rmdirSync(ACTIVE_BUILDS_DIR)
-} catch {
-  // Another build still holds it.
 }
 
 if (proc.exitCode !== 0) {
