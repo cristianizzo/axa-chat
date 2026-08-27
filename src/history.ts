@@ -313,15 +313,36 @@ async function immediateFlushHistory(): Promise<void> {
       },
     })
 
-    const jsonLines = pendingEntries.map(entry => jsonStringify(entry) + '\n')
+    // The buffer is emptied before the write, not after: addToPromptHistory can
+    // push a new entry while appendFile is suspended, and clearing afterwards
+    // would discard it. The batch is held here so a failed write can put it
+    // back — ahead of anything that arrived meanwhile, so order survives —
+    // instead of dropping the user's prompts on the floor. Without this the
+    // retry loop in flushPromptHistory can never run: it is gated on a
+    // non-empty buffer.
+    const flushing = pendingEntries
+    const jsonLines = flushing.map(entry => jsonStringify(entry) + '\n')
     pendingEntries = []
 
-    await appendFile(historyPath, jsonLines.join(''), { mode: 0o600 })
+    try {
+      await appendFile(historyPath, jsonLines.join(''), { mode: 0o600 })
+    } catch (error) {
+      pendingEntries = flushing.concat(pendingEntries)
+      throw error
+    }
   } catch (error) {
     logForDebugging(`Failed to write prompt history: ${error}`)
   } finally {
     if (release) {
-      await release()
+      // Releasing sits outside the catch above, so a rejection here would
+      // escape immediateFlushHistory, pass through flushPromptHistory's
+      // catch-less try/finally, and surface as an unhandled rejection from a
+      // history write.
+      try {
+        await release()
+      } catch (error) {
+        logForDebugging(`Failed to release prompt history lock: ${error}`)
+      }
     }
   }
 }
