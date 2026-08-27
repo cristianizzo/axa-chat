@@ -28,7 +28,7 @@ import {
 import {
   getProviderModelCatalog,
   getProviderModelCatalogForModel,
-} from 'src/config/providerModels.js'
+} from 'src/config/providers/index.js'
 import { getModelDescriptor } from './registry.js'
 import {
   has1mContext,

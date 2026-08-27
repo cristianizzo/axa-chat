@@ -1366,16 +1366,6 @@ export function getCodexOAuthTokens(): CodexTokens | null {
   }
 }
 
-/**
- * Removes Codex OAuth tokens from GlobalConfig (e.g., on logout).
- */
-export function clearCodexOAuthTokens(): void {
-  saveGlobalConfig((cfg) => {
-    const { codexOAuth: _removed, ...rest } = cfg
-    return rest as typeof cfg
-  })
-}
-
 // ── Ollama account storage ───────────────────────────────────────────────────
 // Ollama credentials live in the GlobalConfig JSON alongside Codex, never in the
 // keychain. Requests go to the daemon's native Anthropic Messages API and are
@@ -1422,16 +1412,6 @@ export function getOllamaAuth(): OllamaAuth | null {
   }
 }
 
-/**
- * Removes the Ollama account from GlobalConfig (e.g., on logout).
- */
-export function clearOllamaAuth(): void {
-  saveGlobalConfig((cfg) => {
-    const { ollamaAuth: _removed, ...rest } = cfg
-    return rest as typeof cfg
-  })
-}
-
 // ── DeepSeek API key storage ─────────────────────────────────────────────────
 // DeepSeek credentials live in GlobalConfig alongside Codex and Ollama, never
 // in the keychain. The API key is sent as a Bearer token to api.deepseek.com
@@ -1464,16 +1444,6 @@ export function getDeepSeekAuth(): DeepSeekAuth | null {
   const stored = getGlobalConfig().deepseekAuth
   if (!stored?.apiKey) return null
   return { apiKey: stored.apiKey }
-}
-
-/**
- * Removes the DeepSeek API key from GlobalConfig (e.g., on logout).
- */
-export function clearDeepSeekAuth(): void {
-  saveGlobalConfig((cfg) => {
-    const { deepseekAuth: _removed, ...rest } = cfg
-    return rest as typeof cfg
-  })
 }
 
 /**
@@ -1525,16 +1495,6 @@ export function getKimiAuth(): KimiAuth | null {
   const stored = getGlobalConfig().kimiAuth
   if (!stored?.apiKey) return null
   return { apiKey: stored.apiKey }
-}
-
-/**
- * Removes the Kimi API key from GlobalConfig (e.g., on logout).
- */
-export function clearKimiAuth(): void {
-  saveGlobalConfig((cfg) => {
-    const { kimiAuth: _removed, ...rest } = cfg
-    return rest as typeof cfg
-  })
 }
 
 /**

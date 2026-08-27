@@ -46,7 +46,7 @@ import { createDeepSeekFetch } from './deepseek-fetch-adapter.js'
 import { createCountTokensShim } from './count-tokens-shim.js'
 import { limitRequestConcurrency } from './requestLimiter.js'
 import { KIMI_BASE_URL, KIMI_PROVIDER_ID } from 'src/config/kimi.js'
-import { getMaxConcurrentRequests } from 'src/config/providerModels.js'
+import { getMaxConcurrentRequests } from 'src/config/providers/index.js'
 
 /**
  * Environment variables for different client types:

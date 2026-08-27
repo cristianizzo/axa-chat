@@ -5,17 +5,19 @@
  * needs this, and auth.ts already imports getAPIProvider. Keeping the resolution
  * here means providers.ts does not have to reach into auth.ts and pull the
  * keychain, OAuth refresh and analytics machinery along with it.
+ *
+ * Every provider-specific answer below comes from the descriptor registry
+ * (config/providers), so this file has no per-provider branch left to forget to
+ * extend.
  */
 
 import {
   type AuthProviderId,
   DEFAULT_AUTH_PROVIDER,
+  getProvider,
+  inferProviderFromCredentials,
   isAuthProviderId,
-} from '../config/authProviders.js'
-import { CODEX_PROVIDER_ID } from '../config/codex.js'
-import { DEEPSEEK_PROVIDER_ID } from '../config/deepseek.js'
-import { KIMI_PROVIDER_ID } from '../config/kimi.js'
-import { OLLAMA_PROVIDER_ID } from '../config/ollama.js'
+} from '../config/providers/index.js'
 import { getGlobalConfig, saveGlobalConfig } from './config.js'
 
 /**
@@ -30,25 +32,7 @@ import { getGlobalConfig, saveGlobalConfig } from './config.js'
  */
 export function hasCredentialsForAuthProvider(id: AuthProviderId): boolean {
   try {
-    const config = getGlobalConfig()
-    switch (id) {
-      case CODEX_PROVIDER_ID:
-        return !!config.codexOAuth?.accessToken
-      case OLLAMA_PROVIDER_ID:
-        // A local daemon ignores the token, so its presence proves nothing. A
-        // completed Ollama login writes both the base URL and the chosen model;
-        // require both so a half-written record isn't offered as an account.
-        return !!config.ollamaAuth?.baseUrl && !!config.ollamaAuth?.model
-      case DEEPSEEK_PROVIDER_ID:
-        return !!config.deepseekAuth?.apiKey
-      case KIMI_PROVIDER_ID:
-        return !!config.kimiAuth?.apiKey
-      default:
-        // Anthropic tokens live in the keychain, not the config file, and
-        // reading them is async and comparatively expensive. oauthAccount is
-        // written by the same login that stores them, so it stands in for them.
-        return !!config.oauthAccount || !!config.primaryApiKey
-    }
+    return getProvider(id).hasCredentials(getGlobalConfig())
   } catch {
     return false
   }
@@ -71,22 +55,8 @@ export function getActiveAuthProvider(): AuthProviderId {
       return config.activeAuthProvider
     }
     // Nothing recorded: infer from what is stored, so a config written before
-    // this field existed keeps working without a migration. Codex tokens or an
-    // Ollama base URL can only be there because the user chose that provider at
-    // the login prompt.
-    if (config.codexOAuth?.accessToken) {
-      return CODEX_PROVIDER_ID
-    }
-    if (config.ollamaAuth?.baseUrl && config.ollamaAuth?.model) {
-      return OLLAMA_PROVIDER_ID
-    }
-    if (config.deepseekAuth?.apiKey) {
-      return DEEPSEEK_PROVIDER_ID
-    }
-    if (config.kimiAuth?.apiKey) {
-      return KIMI_PROVIDER_ID
-    }
-    return DEFAULT_AUTH_PROVIDER
+    // this field existed keeps working without a migration.
+    return inferProviderFromCredentials(config) ?? DEFAULT_AUTH_PROVIDER
   } catch {
     return DEFAULT_AUTH_PROVIDER
   }
@@ -112,10 +82,10 @@ export function clearActiveAuthProvider(): void {
 /**
  * The model this account last used, or undefined if it has none recorded.
  *
- * Ollama's model is authoritative in `ollamaAuth.model` (a login always writes
- * it), so it is read from there; every other provider stores its choice in the
- * `modelByAuthProvider` map. Returning undefined lets callers fall back to the
- * provider's default rather than leaking another account's model.
+ * A provider whose descriptor declares `ownedModel` keeps the choice in its own
+ * credential record and is read from there; everything else stores it in the
+ * shared `modelByAuthProvider` map. Returning undefined lets callers fall back
+ * to the provider's default rather than leaking another account's model.
  *
  * @param id - The provider whose stored model to read
  * @returns The stored model id, or undefined
@@ -125,10 +95,8 @@ export function getStoredModelForProvider(
 ): string | undefined {
   try {
     const config = getGlobalConfig()
-    if (id === OLLAMA_PROVIDER_ID) {
-      return config.ollamaAuth?.model || undefined
-    }
-    return config.modelByAuthProvider?.[id] || undefined
+    const owned = getProvider(id).ownedModel
+    return owned ? owned(config) : config.modelByAuthProvider?.[id] || undefined
   } catch {
     return undefined
   }
@@ -139,9 +107,10 @@ export function getStoredModelForProvider(
  * later restores that model instead of whatever the previous account left in
  * the session.
  *
- * Ollama's model is owned by `ollamaAuth.model` and is not touched here — it is
- * set at login time and changing it means re-logging in — so this only writes
- * the map for the other providers. Passing null clears the entry.
+ * A provider that owns its model is skipped: the value is set at login time and
+ * changing it means logging in again, so writing the map would only create a
+ * second answer that {@link getStoredModelForProvider} never reads. Passing
+ * null clears the entry.
  *
  * @param id - The provider to record against
  * @param model - The model id to store, or null to forget it
@@ -150,7 +119,7 @@ export function setStoredModelForProvider(
   id: AuthProviderId,
   model: string | null,
 ): void {
-  if (id === OLLAMA_PROVIDER_ID) {
+  if (getProvider(id).ownedModel) {
     return
   }
   saveGlobalConfig(config => {

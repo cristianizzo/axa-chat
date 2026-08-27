@@ -1,5 +1,5 @@
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from '../../services/analytics/index.js'
-import { getAuthProviderInfo } from '../../config/authProviders.js'
+import { getProvider } from '../../config/providers/index.js'
 import { getActiveAuthProvider } from '../activeAuthProvider.js'
 import { isEnvTruthy } from '../envUtils.js'
 
@@ -26,7 +26,7 @@ export function getAPIProvider(): APIProvider {
   if (isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY)) {
     return 'foundry'
   }
-  return getAuthProviderInfo(getActiveAuthProvider()).apiProvider
+  return getProvider(getActiveAuthProvider()).apiProvider
 }
 
 /**
@@ -44,7 +44,7 @@ export function getAPIProvider(): APIProvider {
  */
 export function isActiveAccountServingRequests(): boolean {
   return (
-    getAPIProvider() === getAuthProviderInfo(getActiveAuthProvider()).apiProvider
+    getAPIProvider() === getProvider(getActiveAuthProvider()).apiProvider
   )
 }
 

@@ -1,14 +1,11 @@
 import * as React from 'react'
 import { Select } from '../../components/CustomSelect/select.js'
 import {
-  ANTHROPIC_PROVIDER_ID,
-  AUTH_PROVIDERS,
+  ALL_PROVIDERS,
   type AuthProviderId,
-} from '../../config/authProviders.js'
-import { CODEX_PROVIDER_ID } from '../../config/codex.js'
-import { DEEPSEEK_PROVIDER_ID } from '../../config/deepseek.js'
-import { KIMI_PROVIDER_ID } from '../../config/kimi.js'
-import { OLLAMA_PROVIDER_ID } from '../../config/ollama.js'
+  getProvider,
+  resolveProviderAlias,
+} from '../../config/providers/index.js'
 import { Box, Text } from '../../ink.js'
 import type {
   LocalJSXCommandContext,
@@ -29,37 +26,17 @@ import {
 } from '../../utils/model/model.js'
 import { clearAuthRelatedCaches } from '../logout/logout.js'
 
-/** Short names accepted as an argument, so `/switch-account codex` works. */
-const PROVIDER_ALIASES: Record<string, AuthProviderId> = {
-  anthropic: ANTHROPIC_PROVIDER_ID,
-  claude: ANTHROPIC_PROVIDER_ID,
-  codex: CODEX_PROVIDER_ID,
-  openai: CODEX_PROVIDER_ID,
-  ollama: OLLAMA_PROVIDER_ID,
-  deepseek: DEEPSEEK_PROVIDER_ID,
-  kimi: KIMI_PROVIDER_ID,
-  moonshot: KIMI_PROVIDER_ID,
-}
-
 /**
  * The account label for a provider, with an identifying detail when we have one.
  *
- * Anthropic logins store an email; Ollama records the single model it serves,
- * which is what distinguishes it. The Codex flow gives us only an opaque account
- * ID, so its entry is identified by provider alone.
+ * Which detail is the provider's own business — an Anthropic login stores an
+ * email, Ollama records the single model it serves — so the descriptor answers
+ * it and a provider that has nothing to add simply says so by omission.
  */
 function describeAccount(id: AuthProviderId): string {
-  const info = AUTH_PROVIDERS.find(provider => provider.id === id)
-  const label = info?.label ?? id
-  if (id === OLLAMA_PROVIDER_ID) {
-    const model = getGlobalConfig().ollamaAuth?.model
-    return model ? `${label} (${model})` : label
-  }
-  if (id !== ANTHROPIC_PROVIDER_ID) {
-    return label
-  }
-  const email = getGlobalConfig().oauthAccount?.emailAddress
-  return email ? `${label} (${email})` : label
+  const provider = getProvider(id)
+  const detail = provider.accountDetail?.(getGlobalConfig())
+  return detail ? `${provider.label} (${detail})` : provider.label
 }
 
 /**
@@ -122,7 +99,7 @@ function SwitchAccount({
   context: LocalJSXCommandContext
 }): React.ReactNode {
   const active = getActiveAuthProvider()
-  const available = AUTH_PROVIDERS.filter(provider =>
+  const available = ALL_PROVIDERS.filter(provider =>
     hasCredentialsForAuthProvider(provider.id),
   )
 
@@ -160,7 +137,7 @@ export async function call(
   context: LocalJSXCommandContext,
   args?: string,
 ): Promise<React.ReactNode> {
-  const requested = PROVIDER_ALIASES[args?.trim().toLowerCase() ?? '']
+  const requested = resolveProviderAlias(args ?? '')
   if (requested) {
     if (!hasCredentialsForAuthProvider(requested)) {
       onDone(
@@ -173,7 +150,7 @@ export async function call(
     return null
   }
 
-  const signedIn = AUTH_PROVIDERS.filter(provider =>
+  const signedIn = ALL_PROVIDERS.filter(provider =>
     hasCredentialsForAuthProvider(provider.id),
   )
   if (signedIn.length < 2) {

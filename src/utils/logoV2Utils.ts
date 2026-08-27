@@ -2,7 +2,7 @@ import { getDirectConnectServerUrl, getSessionId } from '../bootstrap/state.js'
 import {
   ANTHROPIC_PROVIDER_ID,
   type AuthProviderId,
-} from '../config/authProviders.js'
+} from '../config/providers/index.js'
 import { CODEX_PROVIDER_ID } from '../config/codex.js'
 import { DEEPSEEK_PROVIDER_ID } from '../config/deepseek.js'
 import { KIMI_PROVIDER_ID } from '../config/kimi.js'
@@ -262,7 +262,7 @@ export function formatReleaseNoteForDisplay(
  * Codex and left every provider added afterwards broken.
  *
  * The switch is deliberately exhaustive with no `default`, so adding a provider
- * to AUTH_PROVIDERS without giving it a label is a compile error rather than a
+ * to the registry without giving it a label is a compile error rather than a
  * silent fallback to Anthropic's.
  */
 function getBillingTypeLabel(): string {
