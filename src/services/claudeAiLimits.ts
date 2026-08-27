@@ -7,7 +7,7 @@ import { getModelBetas } from '../utils/betas.js'
 import { getGlobalConfig, saveGlobalConfig } from '../utils/config.js'
 import { logError } from '../utils/log.js'
 import { getSmallFastModel } from '../utils/model/model.js'
-import { getAPIProvider } from '../utils/model/providers.js'
+import { isServedByAnthropic } from '../utils/model/providers.js'
 import { isEssentialTrafficOnly } from '../utils/privacyLevel.js'
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from './analytics/index.js'
 import { logEvent } from './analytics/index.js'
@@ -218,6 +218,36 @@ async function makeTestQuery() {
     .asResponse()
 }
 
+/**
+ * The single gate for every entry point in this module.
+ *
+ * Both halves are needed and neither implies the other. `isClaudeAISubscriber()`
+ * inspects the stored Anthropic credentials, which survive a `/switch-account`
+ * and so keep answering true while Moonshot or Ollama is serving requests;
+ * `isServedByAnthropic()` says who will actually receive this one, but says
+ * nothing about whether that account is metered.
+ *
+ * Without the second half, `anthropic-ratelimit-unified-*` headers are read off
+ * responses that never carried them. Two things then go wrong, and both outlive
+ * the session: a missing overage-disabled-reason header is indistinguishable
+ * from one explicitly saying "enabled", so a single turn on a third-party
+ * provider persists `cachedExtraUsageDisabledReason: null` and `check1mAccess`
+ * reads that back as extra usage being available — `/model` then offers
+ * `opus[1m]` and the request 429s. And `extractQuotaStatusFromError` forces
+ * `status: 'rejected'` on *any* 429, so a Moonshot throttle reports the
+ * claude.ai allowance as spent.
+ *
+ * Only the subscription half sits under `shouldProcessRateLimits`, so that
+ * `/mock-limits` can stand in for a subscription the developer does not have
+ * without also standing in for the backend. Overriding the routing half would
+ * put `checkQuotaStatus`'s probe on the wire from a session pointed at Kimi or
+ * Ollama and let those responses cache limit state — both failures above,
+ * reachable in mock mode.
+ */
+function shouldTrackClaudeAiLimits(): boolean {
+  return isServedByAnthropic() && shouldProcessRateLimits(isClaudeAISubscriber())
+}
+
 export async function checkQuotaStatus(): Promise<void> {
   // Skip network requests if nonessential traffic is disabled
   if (isEssentialTrafficOnly()) {
@@ -227,15 +257,8 @@ export async function checkQuotaStatus(): Promise<void> {
   // The probe exists to read Anthropic's rate-limit response headers, which
   // only Anthropic sends. Against any other backend it is a request that
   // reports nothing — and on a provider metered by the minute, one the user
-  // then waits behind. isClaudeAISubscriber() answers for the stored Anthropic
-  // credentials no matter which account is active, so it cannot rule this out
-  // on its own.
-  if (getAPIProvider() !== 'firstParty') {
-    return
-  }
-
-  // Check if we should process rate limits (real subscriber or mock testing)
-  if (!shouldProcessRateLimits(isClaudeAISubscriber())) {
+  // then waits behind.
+  if (!shouldTrackClaudeAiLimits()) {
     return
   }
 
@@ -466,9 +489,7 @@ export function extractQuotaStatusFromHeaders(
   headers: globalThis.Headers,
 ): void {
   // Check if we need to process rate limits
-  const isSubscriber = isClaudeAISubscriber()
-
-  if (!shouldProcessRateLimits(isSubscriber)) {
+  if (!shouldTrackClaudeAiLimits()) {
     // If we have any rate limit state, clear it
     rawUtilization = {}
     if (currentLimits.status !== 'allowed' || currentLimits.resetsAt) {
@@ -496,10 +517,7 @@ export function extractQuotaStatusFromHeaders(
 }
 
 export function extractQuotaStatusFromError(error: APIError): void {
-  if (
-    !shouldProcessRateLimits(isClaudeAISubscriber()) ||
-    error.status !== 429
-  ) {
+  if (!shouldTrackClaudeAiLimits() || error.status !== 429) {
     return
   }
 

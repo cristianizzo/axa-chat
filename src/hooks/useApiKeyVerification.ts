@@ -6,8 +6,8 @@ import {
   getApiKeyFromApiKeyHelper,
   isAnthropicAuthEnabled,
   isClaudeAISubscriber,
-  isCodexSubscriber,
 } from '../utils/auth.js'
+import { isServedByAnthropic } from '../utils/model/providers.js'
 
 export type VerificationStatus =
   | 'loading'
@@ -22,9 +22,27 @@ export type ApiKeyVerificationResult = {
   error: Error | null
 }
 
+/**
+ * Whether this session needs an Anthropic API key at all.
+ *
+ * Everything here verifies one specific credential: an Anthropic API key. A
+ * session that will not send one has nothing to verify, and reporting 'missing'
+ * for it puts a permanent red "Not logged in · Run /login" in the footer
+ * (Notifications.tsx) of a session that is working perfectly well.
+ *
+ * `isServedByAnthropic()` is what makes this exhaustive. The list it replaces
+ * named claude.ai and Codex one by one, so every provider added afterwards —
+ * Ollama, DeepSeek, Kimi — inherited the false warning, and the next one would
+ * have too. Asking where the request is going covers them all, including the
+ * cloud backends, without an entry per provider.
+ */
+function requiresAnthropicApiKey(): boolean {
+  return isAnthropicAuthEnabled() && isServedByAnthropic() && !isClaudeAISubscriber()
+}
+
 export function useApiKeyVerification(): ApiKeyVerificationResult {
   const [status, setStatus] = useState<VerificationStatus>(() => {
-    if (!isAnthropicAuthEnabled() || isClaudeAISubscriber() || isCodexSubscriber()) {
+    if (!requiresAnthropicApiKey()) {
       return 'valid'
     }
     // Use skipRetrievingKeyFromApiKeyHelper to avoid executing apiKeyHelper
@@ -42,8 +60,14 @@ export function useApiKeyVerification(): ApiKeyVerificationResult {
   const [error, setError] = useState<Error | null>(null)
 
   const verify = useCallback(async (): Promise<void> => {
-    if (!isAnthropicAuthEnabled() || isClaudeAISubscriber() || isCodexSubscriber()) {
+    if (!requiresAnthropicApiKey()) {
+      // Clear the error too. `verify` is re-run on every credential change
+      // (`/switch-account`, `/login`, `/upgrade` all call onChangeAPIKey), so a
+      // session that failed verification under an Anthropic key and then
+      // switched to Ollama would otherwise keep the dead key's error alongside
+      // a 'valid' status.
       setStatus('valid')
+      setError(null)
       return
     }
     // Warm the apiKeyHelper cache (no-op if not configured), then read from

@@ -48,6 +48,33 @@ export function isActiveAccountServingRequests(): boolean {
   )
 }
 
+/**
+ * Whether Anthropic is the backend that will serve — or just served — this
+ * request, and therefore whether `anthropic-ratelimit-unified-*` response
+ * headers can be believed to describe the claude.ai account.
+ *
+ * This is the half `isClaudeAISubscriber()` cannot answer. That predicate
+ * inspects the *stored* Anthropic credentials, which stay on disk and stay
+ * valid while some other account is active, so it keeps returning true after a
+ * `/switch-account` to Moonshot or Ollama. Its siblings `isCodexSubscriber()`
+ * and `isOllamaSubscriber()` each check `getAPIProvider()` for exactly this
+ * reason; `isClaudeAISubscriber()` has ~60 call sites that legitimately mean
+ * "does this user have a claude.ai subscription", so the provider check belongs
+ * here rather than folded into it.
+ *
+ * Bedrock/Vertex/Foundry are excluded too: they serve Anthropic models but do
+ * not meter a claude.ai subscription and send none of those headers.
+ *
+ * Deliberately does not consult `isFirstPartyAnthropicBaseUrl()` —
+ * `isAnthropicAuthEnabled()` supports OAuth through a proxy or gateway on
+ * purpose (see the comment there), and those sessions do relay the headers.
+ *
+ * @returns Whether Anthropic rate-limit accounting applies to this request
+ */
+export function isServedByAnthropic(): boolean {
+  return getAPIProvider() === 'firstParty'
+}
+
 export function getAPIProviderForStatsig(): AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS {
   return getAPIProvider() as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
 }

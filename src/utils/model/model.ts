@@ -14,7 +14,6 @@ import {
   getOllamaAuth,
   getSubscriptionType,
   isClaudeAISubscriber,
-  isCodexSubscriber,
   isMaxSubscriber,
   isOllamaSubscriber,
   isProSubscriber,
@@ -22,7 +21,6 @@ import {
 } from '../auth.js'
 import { getAntModelOverrideConfig, resolveAntModel } from './antModels.js'
 import {
-  describeDefaultCodexModel,
   findCodexModelId,
   getCodexModelLabel,
   isCodexModelId,
@@ -493,12 +491,41 @@ export function getCanonicalName(fullModelName: ModelName): ModelShortName {
 }
 
 // @[MODEL LAUNCH]: Update the default model description strings shown to users.
+/**
+ * Describes the model this session gets when the user has picked no model.
+ *
+ * Resolved against the active account, in the same order as
+ * getDefaultMainLoopModelSetting — the two must agree, or the UI names one
+ * model and the request sends another. The Anthropic tier checks stay last,
+ * because reaching them means no other provider claimed the session.
+ *
+ * The Codex special case this replaces was the only non-Anthropic branch, so
+ * Ollama, DeepSeek and Kimi sessions all fell through to the tier checks below.
+ * Those read the *stored* claude.ai subscription, which a `/switch-account`
+ * does not clear, so `/model` and `/status` announced "Opus 5 · Most capable
+ * for complex work" while Moonshot served every request.
+ */
 export function getClaudeAiUserDefaultModelDescription(
   fastMode = false,
 ): string {
-  if (isCodexSubscriber()) {
-    return describeDefaultCodexModel()
+  // Ollama serves exactly the one model its account recorded, and it is
+  // discovered at login rather than listed in a catalog, so there is no label
+  // or blurb to show beyond the ID itself.
+  if (isOllamaSubscriber()) {
+    const model = getOllamaAuth()?.model
+    if (model) {
+      return model
+    }
   }
+
+  const catalog = getProviderModelCatalog(getActiveAuthProvider())
+  if (catalog) {
+    const entry = catalog.models.find(model => model.id === catalog.defaultModel)
+    return entry
+      ? `${entry.label} · ${entry.description}`
+      : catalog.defaultModel
+  }
+
   if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
     const contextNote = isOpus1mMergeEnabled() ? ' (1M context)' : ''
     return `Opus 5${contextNote} · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
