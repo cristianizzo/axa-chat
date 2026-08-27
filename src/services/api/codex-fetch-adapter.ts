@@ -17,6 +17,7 @@
 
 import { getCodexOAuthTokens, saveCodexOAuthTokens } from '../../utils/auth.js'
 import { logForDebugging } from '../../utils/debug.js'
+import { getProxyFetchOptions } from '../../utils/proxy.js'
 import {
   CLAUDE_FAMILY_TO_CODEX_MODEL,
   CODEX_BASE_URL,
@@ -1467,10 +1468,16 @@ async function* iterateSSE(
 /**
  * Creates a fetch function that intercepts Anthropic API calls and routes them to Codex.
  * @param accessToken - The Codex access token for authentication
+ * @param inner - The fetch to send the translated request with, and to pass
+ *   untranslated requests through to. Taking it as an argument is what lets the
+ *   caller wrap Codex traffic the same way it wraps every other provider's:
+ *   the concurrency limiter and the request logging live in that fetch. Proxy
+ *   options do not — see the outbound call below.
  * @returns A fetch function that translates Anthropic requests to Codex format
  */
 export function createCodexFetch(
   accessToken: string,
+  inner: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> = globalThis.fetch,
 ): (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> {
   const accountId = extractAccountId(accessToken)
 
@@ -1485,12 +1492,12 @@ export function createCodexFetch(
       pathname = new URL(url).pathname
     } catch {
       // Not an absolute URL, so not something we route to Codex.
-      return globalThis.fetch(input, init)
+      return inner(input, init)
     }
     const isCountTokens = pathname.endsWith('/v1/messages/count_tokens')
     const isMessages = pathname.endsWith('/v1/messages')
     if (!isMessages && !isCountTokens) {
-      return globalThis.fetch(input, init)
+      return inner(input, init)
     }
 
     // Parse the Anthropic request body
@@ -1523,7 +1530,7 @@ export function createCodexFetch(
     const { codexBody, codexModel } = translateToCodexBody(anthropicBody)
 
     // Call Codex API
-    const codexResponse = await globalThis.fetch(CODEX_BASE_URL, {
+    const codexResponse = await inner(CODEX_BASE_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1538,6 +1545,13 @@ export function createCodexFetch(
       // upstream request — otherwise the non-streaming path, which blocks
       // until the stream ends, cannot be interrupted.
       ...(init?.signal && { signal: init.signal }),
+      // The SDK's own proxy options never reach here: they are set on the
+      // client, which applies them to the request it hands this adapter, not to
+      // the request the adapter builds. Without this a session behind a
+      // corporate proxy reaches Anthropic and fails on Codex. `false` because
+      // chatgpt.com is not the Anthropic API, so ANTHROPIC_* proxy overrides
+      // must not apply.
+      ...getProxyFetchOptions({ forAnthropicAPI: false }),
     })
 
     if (!codexResponse.ok) {

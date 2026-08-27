@@ -869,10 +869,16 @@ function describeDeepSeekError(body: string): string {
  * to DeepSeek's OpenAI-compatible Chat Completions API.
  *
  * @param apiKey - The DeepSeek API key for Bearer authentication
+ * @param inner - The fetch to send the translated request with, and to pass
+ *   untranslated requests through to. Taking it as an argument is what lets the
+ *   caller wrap DeepSeek traffic the same way it wraps every other provider's:
+ *   the concurrency limiter and the request logging live in that fetch. Proxy
+ *   options do not — the outbound call below sets its own.
  * @returns A fetch suitable for the Anthropic SDK's `fetch` option
  */
 export function createDeepSeekFetch(
   apiKey: string,
+  inner: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> = globalThis.fetch,
 ): (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : String(input)
@@ -881,14 +887,14 @@ export function createDeepSeekFetch(
     try {
       pathname = new URL(url).pathname
     } catch {
-      return globalThis.fetch(input, init)
+      return inner(input, init)
     }
 
     const isCountTokens = pathname.endsWith('/v1/messages/count_tokens')
     const isMessages = pathname.endsWith('/v1/messages')
 
     if (!isMessages && !isCountTokens) {
-      return globalThis.fetch(input, init)
+      return inner(input, init)
     }
 
     let anthropicBody: Record<string, unknown>
@@ -914,7 +920,7 @@ export function createDeepSeekFetch(
     const model = resolveModel(anthropicBody.model as string | undefined)
     const openAIBody = translateToOpenAIBody(anthropicBody)
 
-    const deepSeekResponse = await globalThis.fetch(`${DEEPSEEK_BASE_URL}${DEEPSEEK_MESSAGES_PATH}`, {
+    const deepSeekResponse = await inner(`${DEEPSEEK_BASE_URL}${DEEPSEEK_MESSAGES_PATH}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

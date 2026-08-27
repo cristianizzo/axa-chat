@@ -11,10 +11,41 @@ import type { APIProvider } from './providers.js'
 // entirely. Note this is not about the request shape: Kimi speaks Anthropic and
 // still belongs here, because the table maps one Claude model across backends
 // and there is no Kimi model that is Claude Sonnet 4.5 under another name.
-export type ModelConfig = Record<
-  Exclude<APIProvider, 'ollama' | 'deepseek' | 'kimi'>,
-  ModelName
+//
+// Declared as a value, not just a type argument, because the fallback in
+// getBuiltinModelStrings has to make the same distinction at runtime and used
+// to do it with a second, hand-maintained copy of this list.
+const PROVIDERS_WITHOUT_MODEL_CONFIG = [
+  'ollama',
+  'deepseek',
+  'kimi',
+] as const satisfies readonly APIProvider[]
+
+/** A provider that is a column in {@link ModelConfig}. */
+export type ModelConfigProvider = Exclude<
+  APIProvider,
+  (typeof PROVIDERS_WITHOUT_MODEL_CONFIG)[number]
 >
+
+export type ModelConfig = Record<ModelConfigProvider, ModelName>
+
+/**
+ * Whether the config table has a column for this provider.
+ *
+ * A new {@link APIProvider} cannot slip past this: leaving it out of
+ * {@link PROVIDERS_WITHOUT_MODEL_CONFIG} makes it a required column, and every
+ * `satisfies ModelConfig` below fails to compile until it has one.
+ *
+ * @param provider - The provider to test
+ * @returns Whether {@link ModelConfig} can be indexed by it
+ */
+export function hasModelConfigColumn(
+  provider: APIProvider,
+): provider is ModelConfigProvider {
+  return !(PROVIDERS_WITHOUT_MODEL_CONFIG as readonly string[]).includes(
+    provider,
+  )
+}
 
 // @[MODEL LAUNCH]: Add a new CLAUDE_*_CONFIG constant here. Double check the correct model strings
 // here since the pattern may change.
