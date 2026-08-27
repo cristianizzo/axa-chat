@@ -97,20 +97,6 @@ export type CodexModelId = (typeof CODEX_MODELS)[number]['id']
 export const DEFAULT_CODEX_MODEL: CodexModelId = 'gpt-5.6-terra'
 
 /**
- * One-line "this is what you get by default" copy.
- *
- * Built from the registry rather than written out, because the hardcoded string
- * this replaced named a model the backend had already retired — it advertised
- * GPT-5.3 Codex while requests went somewhere else entirely.
- *
- * @returns The default model's label and description
- */
-export function describeDefaultCodexModel(): string {
-  const entry = CODEX_MODELS.find(model => model.id === DEFAULT_CODEX_MODEL)
-  return entry ? `${entry.label} · ${entry.description}` : DEFAULT_CODEX_MODEL
-}
-
-/**
  * Capability tiers, used to pick a Codex counterpart when the user is in Codex
  * mode with a Claude model still selected.
  *

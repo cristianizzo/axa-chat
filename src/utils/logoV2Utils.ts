@@ -1,9 +1,16 @@
 import { getDirectConnectServerUrl, getSessionId } from '../bootstrap/state.js'
-import { ANTHROPIC_PROVIDER_ID } from '../config/authProviders.js'
+import {
+  ANTHROPIC_PROVIDER_ID,
+  type AuthProviderId,
+} from '../config/authProviders.js'
+import { CODEX_PROVIDER_ID } from '../config/codex.js'
+import { DEEPSEEK_PROVIDER_ID } from '../config/deepseek.js'
+import { KIMI_PROVIDER_ID } from '../config/kimi.js'
+import { OLLAMA_PROVIDER_ID } from '../config/ollama.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import type { LogOption } from '../types/logs.js'
 import { getActiveAuthProvider } from './activeAuthProvider.js'
-import { getSubscriptionName, isClaudeAISubscriber, isCodexSubscriber } from './auth.js'
+import { getSubscriptionName, isClaudeAISubscriber } from './auth.js'
 import { getGlobalConfig } from './config.js'
 import { getCwd } from './cwd.js'
 import { getDisplayPath } from './file.js'
@@ -243,6 +250,43 @@ export function formatReleaseNoteForDisplay(
 }
 
 /**
+ * How the banner describes who is paying for this session.
+ *
+ * Keyed on the active account rather than on credential predicates. Those
+ * predicates each inspect one provider's stored credentials, which outlive a
+ * `/switch-account`, so asking them in order meant whichever provider was
+ * checked first won: a Kimi session still holding Anthropic tokens was labelled
+ * "Claude Max" while Moonshot served every request. Codex had already been
+ * special-cased to the front of that chain for exactly this reason, which fixed
+ * Codex and left every provider added afterwards broken.
+ *
+ * The switch is deliberately exhaustive with no `default`, so adding a provider
+ * to AUTH_PROVIDERS without giving it a label is a compile error rather than a
+ * silent fallback to Anthropic's.
+ */
+function getBillingTypeLabel(): string {
+  const provider: AuthProviderId = getActiveAuthProvider()
+  switch (provider) {
+    case ANTHROPIC_PROVIDER_ID:
+      // Still a predicate here, because "Anthropic account" covers both a
+      // claude.ai subscription and a metered API key, and only the token
+      // scopes distinguish them. Bedrock/Vertex/Foundry land here too and are
+      // correctly metered: isClaudeAISubscriber() is false for them.
+      return isClaudeAISubscriber() ? getSubscriptionName() : 'API Usage Billing'
+    case CODEX_PROVIDER_ID:
+      return 'ChatGPT Subscription'
+    case OLLAMA_PROVIDER_ID:
+      // Self-hosted: nothing is being billed, and saying "API Usage Billing"
+      // implies otherwise.
+      return 'Local Model'
+    case DEEPSEEK_PROVIDER_ID:
+      return 'DeepSeek API Usage'
+    case KIMI_PROVIDER_ID:
+      return 'Moonshot API Usage'
+  }
+}
+
+/**
  * Gets the common logo display data used by both LogoV2 and CondensedLogo
  */
 export function getLogoDisplayData(): {
@@ -259,15 +303,7 @@ export function getLogoDisplayData(): {
   const cwd = serverUrl
     ? `${displayPath} in ${serverUrl.replace(/^https?:\/\//, '')}`
     : displayPath
-  // Codex first: a user who signed in with Codex may still hold Anthropic
-  // tokens from a previous login, and isClaudeAISubscriber() only inspects those
-  // — so checking it first reported "Claude Max" for a session billed to a
-  // ChatGPT subscription.
-  const billingType = isCodexSubscriber()
-    ? 'ChatGPT Subscription'
-    : isClaudeAISubscriber()
-      ? getSubscriptionName()
-      : 'API Usage Billing'
+  const billingType = getBillingTypeLabel()
   const agentName = getInitialSettings().agent
 
   return {
