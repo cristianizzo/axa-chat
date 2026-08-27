@@ -33,7 +33,15 @@ export async function* all<A>(
   generators: AsyncGenerator<A, void>[],
   concurrencyCap = Infinity,
 ): AsyncGenerator<A, void> {
+  // Generators that have been started and not yet run to completion. Tracked
+  // because `all` drives them with bare `next()` calls: `yield*` would forward
+  // a `return()` to its delegate, but this does not, so abandoning `all` would
+  // otherwise leave every started generator suspended at a yield with its
+  // `finally` never run. Tool bookkeeping lives in one of those (see
+  // markToolUseAsComplete in toolOrchestration.ts).
+  const started = new Set<AsyncGenerator<A, void>>()
   const next = (generator: AsyncGenerator<A, void>) => {
+    started.add(generator)
     const promise: Promise<QueuedGenerator<A>> = generator
       .next()
       .then(({ done, value }) => ({
@@ -53,20 +61,34 @@ export async function* all<A>(
     promises.add(next(gen))
   }
 
-  while (promises.size > 0) {
-    const { done, value, generator, promise } = await Promise.race(promises)
-    promises.delete(promise)
+  try {
+    while (promises.size > 0) {
+      const { done, value, generator, promise } = await Promise.race(promises)
+      promises.delete(promise)
 
-    if (!done) {
-      promises.add(next(generator))
-      // TODO: Clean this up
-      if (value !== undefined) {
-        yield value
+      if (done) {
+        started.delete(generator)
+        if (waiting.length > 0) {
+          // Start a new generator when one finishes
+          promises.add(next(waiting.shift()!))
+        }
+      } else {
+        promises.add(next(generator))
+        // TODO: Clean this up
+        if (value !== undefined) {
+          yield value
+        }
       }
-    } else if (waiting.length > 0) {
-      // Start a new generator when one finishes
-      const nextGen = waiting.shift()!
-      promises.add(next(nextGen))
+    }
+  } finally {
+    // Generators still in `waiting` were never started, so they have no
+    // cleanup to run. A `return()` on one with a `next()` still in flight
+    // queues behind it and takes effect when that settles.
+    for (const generator of started) {
+      void generator.return().catch(() => {
+        // The generator's own cleanup failed. Nothing here can act on that,
+        // and letting it reject would surface as an unhandled rejection.
+      })
     }
   }
 }
