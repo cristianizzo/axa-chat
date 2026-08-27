@@ -401,7 +401,7 @@ export function formatProviderStatusLine(
  * changes the emphasis without changing a character.
  *
  * @param lights - The lights being rendered
- * @returns A string that differs whenever the rendering would
+ * @returns A string that differs whenever the rendered line would differ
  */
 export function providerStatusKey(
   lights: readonly ProviderStatusLight[],
