@@ -121,7 +121,9 @@ export const DEFAULT_AUTH_PROVIDER: AuthProviderId = ANTHROPIC_PROVIDER_ID
  * @returns Whether it names a provider in the registry
  */
 export function isAuthProviderId(value: unknown): value is AuthProviderId {
-  return typeof value === 'string' && value in PROVIDERS
+  // `in` would also accept 'toString' and the rest of Object.prototype, and
+  // getProvider would then hand back a prototype method as a descriptor.
+  return typeof value === 'string' && Object.hasOwn(PROVIDERS, value)
 }
 
 /**
