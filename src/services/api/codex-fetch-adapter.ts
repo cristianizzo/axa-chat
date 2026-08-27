@@ -18,6 +18,8 @@
 import { getCodexOAuthTokens, saveCodexOAuthTokens } from '../../utils/auth.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
+import { estimateTokenCountResponse } from './count-tokens-shim.js'
+import { createBackpressuredSseStream } from './sse-backpressure.js'
 import {
   CLAUDE_FAMILY_TO_CODEX_MODEL,
   CODEX_BASE_URL,
@@ -608,95 +610,12 @@ async function translateCodexStreamToAnthropic(
   const messageId = `msg_codex_${Date.now()}`
   const encoder = new TextEncoder()
 
-  // ── Backpressure plumbing ────────────────────────────────────────────
-  // The pump fills `pendingBuffer`; the stream's pull() drains it when the
-  // consumer is ready. A ReadableStream never calls pull() until start()
-  // settles, so start() launches the pump without awaiting it — otherwise
-  // pull() would not fire until the entire upstream response had been read
-  // and the buffer would grow unbounded.
-  const pendingBuffer: Uint8Array[] = []
-  let bufferHead = 0
-  let streamController: ReadableStreamDefaultController | null = null
-  let upstreamReader: ReadableStreamDefaultReader<Uint8Array> | null = null
-  let finished = false
-  // Resolved once the consumer has taken everything buffered so far.
-  let notifyDrained: (() => void) | null = null
-  // Resolves a pending pull() once the pump produces something to deliver.
-  let notifyProduced: (() => void) | null = null
-
-  function isBuffered(): boolean {
-    return bufferHead < pendingBuffer.length
-  }
-
-  function drainBuffer(): void {
-    const controller = streamController
-    if (!controller) return
-    while (isBuffered() && controller.desiredSize !== null && controller.desiredSize > 0) {
-      controller.enqueue(pendingBuffer[bufferHead]!)
-      bufferHead++
-    }
-    if (!isBuffered()) {
-      pendingBuffer.length = 0
-      bufferHead = 0
-      notifyDrained?.()
-      notifyDrained = null
-    }
-  }
-
-  function safeEnqueue(chunk: Uint8Array): void {
-    if (finished || streamController?.desiredSize === null) return // stream closed
-    pendingBuffer.push(chunk)
-    drainBuffer()
-    notifyProduced?.()
-    notifyProduced = null
-  }
-
-  /**
-   * Applies backpressure to the pump: resolves once the consumer has taken
-   * everything buffered so far, or immediately if the stream is finished.
-   * Awaiting this between upstream chunks is what stops a fast Codex response
-   * from accumulating in memory ahead of a slow reader.
-   */
-  async function waitForDrain(): Promise<void> {
-    if (finished || !isBuffered()) return
-    await new Promise<void>(resolve => {
-      notifyDrained = resolve
-    })
-  }
-
-  /** Wakes both waiters — used when the stream ends or is cancelled. */
-  function releaseWaiters(): void {
-    notifyDrained?.()
-    notifyDrained = null
-    notifyProduced?.()
-    notifyProduced = null
-  }
-
-  const readable = new ReadableStream({
-    start(controller) {
-      streamController = controller
-      void pump()
-    },
-    pull() {
-      drainBuffer()
-      if (isBuffered() || finished) return undefined
-      // Nothing left to hand over: keep this pull() pending until the pump
-      // produces more, otherwise the stream spins calling pull() on an empty
-      // buffer.
-      return new Promise<void>(resolve => {
-        notifyProduced = resolve
-      })
-    },
-    async cancel(reason) {
-      finished = true
-      releaseWaiters()
-      try {
-        await upstreamReader?.cancel(reason)
-      } catch {
-        // The reader may already be released or errored — nothing to undo.
-      }
-    },
-  })
+  // The pump below fills the sink; the sink hands bytes to the consumer as it
+  // asks for them. See sse-backpressure.ts for why the pump is started rather
+  // than awaited.
+  const { readable, sink } = createBackpressuredSseStream('Codex', () => pump())
+  const safeEnqueue = sink.enqueue
+  const waitForDrain = sink.waitForDrain
 
   async function pump(): Promise<void> {
       let contentBlockIndex = 0
@@ -780,7 +699,7 @@ async function translateCodexStreamToAnthropic(
         })
         return
       }
-      upstreamReader = reader
+      sink.setUpstreamReader(reader)
 
       try {
         const decoder = new TextDecoder()
@@ -790,7 +709,7 @@ async function translateCodexStreamToAnthropic(
           // Hold off on reading more from Codex until the consumer has taken
           // what we already translated.
           await waitForDrain()
-          if (finished) break
+          if (sink.done) break
 
           const { done, value } = await reader.read()
           if (done) break
@@ -1088,7 +1007,7 @@ async function translateCodexStreamToAnthropic(
         }
       } finally {
         reader.releaseLock()
-        upstreamReader = null
+        sink.setUpstreamReader(null)
       }
 
       // Close any remaining open blocks
@@ -1229,13 +1148,7 @@ async function translateCodexStreamToAnthropic(
       ),
     )
 
-    // Wait for the consumer to take the trailing events before closing;
-    // closing with chunks still buffered would truncate the response.
-    await waitForDrain()
-    if (finished) return // cancelled while draining
-    finished = true
-    releaseWaiters()
-    streamController?.close()
+    await sink.close()
   }
 
   return new Response(readable, {
@@ -1250,46 +1163,6 @@ async function translateCodexStreamToAnthropic(
 }
 
 // ── Non-streaming + token counting ──────────────────────────────────
-
-/**
- * Builds an Anthropic-shaped `count_tokens` response from a local estimate.
- *
- * Codex has no token-counting endpoint. Rather than issue a real generation
- * request (the previous behaviour, which also returned SSE where the SDK
- * expected JSON), estimate from the serialised prompt.
- *
- * `roughTokenCountEstimation` is imported dynamically because
- * `tokenEstimation.ts` imports `client.ts`, which imports this module — a
- * static import would close that cycle at module-evaluation time.
- *
- * @param anthropicBody - The parsed Anthropic count_tokens request body
- * @returns A Response containing `{ input_tokens }`
- */
-async function estimateTokenCountResponse(
-  anthropicBody: Record<string, unknown>,
-): Promise<Response> {
-  const { roughTokenCountEstimation } = await import('../tokenEstimation.js')
-  const countable = JSON.stringify(
-    [anthropicBody.system ?? '', anthropicBody.messages ?? [], anthropicBody.tools ?? []],
-    // Base64 image and document payloads are orders of magnitude larger than
-    // the tokens they represent; counting them verbatim would inflate the
-    // estimate enough to trigger spurious compaction. Keyed on the enclosing
-    // object being a base64 `source` (per the Anthropic content-block schema)
-    // rather than on the key name alone, so a tool input with its own `data`
-    // field is still counted. Needs `function` for `this`.
-    function (this: unknown, key, value) {
-      const parent = this as { type?: unknown } | undefined
-      if (key === 'data' && parent?.type === 'base64') return undefined
-      return value
-    },
-  )
-  const inputTokens = roughTokenCountEstimation(countable)
-
-  return new Response(JSON.stringify({ input_tokens: inputTokens }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  })
-}
 
 /**
  * Collapses an Anthropic SSE stream into a single Anthropic Message response.

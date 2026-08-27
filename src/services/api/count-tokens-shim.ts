@@ -18,9 +18,10 @@ type FetchFn = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respons
 /**
  * Builds an Anthropic-shaped `count_tokens` response from a local estimate.
  *
- * Mirrors the Codex adapter: these compat layers have no working count_tokens
- * endpoint, so estimate from the serialised prompt instead of letting the SDK
- * hang on it.
+ * Shared by every provider that lacks the endpoint — the Codex and DeepSeek
+ * adapters call it directly, and Ollama and Kimi reach it through the shim
+ * below. It lived here and in both adapters, three copies whose comments had
+ * already drifted apart.
  *
  * `roughTokenCountEstimation` is imported dynamically because
  * `tokenEstimation.ts` imports `client.ts`, which imports this module — a static
@@ -29,7 +30,7 @@ type FetchFn = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respons
  * @param anthropicBody - The parsed Anthropic count_tokens request body
  * @returns A Response containing `{ input_tokens }`
  */
-async function estimateTokenCountResponse(
+export async function estimateTokenCountResponse(
   anthropicBody: Record<string, unknown>,
 ): Promise<Response> {
   const { roughTokenCountEstimation } = await import('../tokenEstimation.js')
