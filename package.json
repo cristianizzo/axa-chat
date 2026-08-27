@@ -4,13 +4,13 @@
   "private": true,
   "description": "AXA Chat — multi-provider support",
   "type": "module",
-  "packageManager": "bun@1.3.11",
+  "packageManager": "bun@1.4.0",
   "bin": {
     "axa": "./cli",
     "claude": "./cli"
   },
   "engines": {
-    "bun": ">=1.3.11"
+    "bun": ">=1.4.0"
   },
   "scripts": {
     "build": "bun run ./scripts/build.ts",

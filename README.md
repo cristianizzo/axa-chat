@@ -175,7 +175,7 @@ between accounts you have already authenticated.
 
 ## Requirements
 
-- **Runtime**: [Bun](https://bun.sh) >= 1.3.11
+- **Runtime**: [Bun](https://bun.sh) >= 1.4.0
 - **OS**: macOS or Linux (Windows via WSL)
 - **Tools**: `curl`, plus `tar` when installing without git (see [Quick Install](#quick-install))
 - **Auth**: An API key or OAuth login for your chosen provider

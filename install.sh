@@ -16,7 +16,7 @@ REPO_SLUG="cristianizzo/axa-chat"
 REPO="https://github.com/${REPO_SLUG}.git"
 BRANCH="main"
 INSTALL_DIR="$HOME/axa-chat"
-BUN_MIN_VERSION="1.3.11"
+BUN_MIN_VERSION="1.4.0"
 # Set by check_git; git is preferred but optional (see fetch_source).
 HAS_GIT=0
 
