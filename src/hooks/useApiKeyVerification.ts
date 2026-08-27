@@ -61,7 +61,13 @@ export function useApiKeyVerification(): ApiKeyVerificationResult {
 
   const verify = useCallback(async (): Promise<void> => {
     if (!requiresAnthropicApiKey()) {
+      // Clear the error too. `verify` is re-run on every credential change
+      // (`/switch-account`, `/login`, `/upgrade` all call onChangeAPIKey), so a
+      // session that failed verification under an Anthropic key and then
+      // switched to Ollama would otherwise keep the dead key's error alongside
+      // a 'valid' status.
       setStatus('valid')
+      setError(null)
       return
     }
     // Warm the apiKeyHelper cache (no-op if not configured), then read from
