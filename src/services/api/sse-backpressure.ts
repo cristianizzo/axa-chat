@@ -65,6 +65,8 @@ export function createBackpressuredSseStream(
     null
   let upstreamReader: ReadableStreamDefaultReader<Uint8Array> | null = null
   let finished = false
+  /** The consumer's cancel reason, kept so a late reader gets the same one. */
+  let cancelReason: unknown = undefined
   /** Resolved once the consumer has taken everything buffered so far. */
   let notifyDrained: (() => void) | null = null
   /** Resolves a pending pull() once the pump produces something to deliver. */
@@ -138,12 +140,14 @@ export function createBackpressuredSseStream(
       // only gets one after the upstream fetch resolves. Cancelling here rather
       // than storing it means that ordering leaks nothing: without this the
       // stream's own cancel() saw `upstreamReader === null` and the upstream
-      // request stayed open until the process exited.
+      // request stayed open until the process exited. The reason is the
+      // consumer's own, so upstream sees the same one either way.
       if (finished && reader) {
-        void reader.cancel('consumer cancelled').catch((error: unknown) => {
-          logForDebugging(`${label} late upstream cancel error: ${String(error)}`, {
-            level: 'debug',
-          })
+        void reader.cancel(cancelReason).catch((error: unknown) => {
+          logForDebugging(
+            `${label} late upstream cancel error: ${String(error)}`,
+            { level: 'debug' },
+          )
         })
         return
       }
@@ -175,6 +179,11 @@ export function createBackpressuredSseStream(
     },
     async cancel(reason) {
       finished = true
+      cancelReason = reason
+      // Nothing will ever read these now, and a cancelled stream can be held
+      // alive by the pump's own frame until it notices.
+      pendingBuffer.length = 0
+      bufferHead = 0
       releaseWaiters()
       try {
         await upstreamReader?.cancel(reason)
