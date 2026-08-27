@@ -134,6 +134,19 @@ export function createBackpressuredSseStream(
       return finished
     },
     setUpstreamReader(reader) {
+      // A consumer can cancel before the pump has a reader to register — it
+      // only gets one after the upstream fetch resolves. Cancelling here rather
+      // than storing it means that ordering leaks nothing: without this the
+      // stream's own cancel() saw `upstreamReader === null` and the upstream
+      // request stayed open until the process exited.
+      if (finished && reader) {
+        void reader.cancel('consumer cancelled').catch((error: unknown) => {
+          logForDebugging(`${label} late upstream cancel error: ${String(error)}`, {
+            level: 'debug',
+          })
+        })
+        return
+      }
       upstreamReader = reader
     },
   }
