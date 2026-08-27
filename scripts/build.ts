@@ -4,7 +4,9 @@ import {
   mkdirSync,
   readdirSync,
   rmSync,
+  rmdirSync,
   statSync,
+  writeFileSync,
 } from 'fs'
 import { dirname } from 'path'
 import { emitProgress, findInstallRoot } from './source.js'
@@ -243,7 +245,41 @@ function listTempArtifacts(): string[] {
   )
 }
 
-const preexistingArtifacts = new Set(listTempArtifacts())
+/**
+ * Anything older than this was left by a build that died before it could clean
+ * up: a build takes seconds, so nothing this old can still be in flight.
+ */
+const staleBefore = Date.now() - 60 * 60 * 1000
+
+/**
+ * Concurrent builds have to announce themselves, because the sweep below
+ * cannot otherwise tell our intermediate from theirs — bun names it after a
+ * content hash, and every artifact carries the same fabricated `mtime`. Two
+ * builds in this directory at once is a real case, not a hypothetical one: a
+ * staged self-update runs `bun run update:staged` against `cli-dev.next` in
+ * the repo it is updating, which is the same tree a developer builds
+ * `cli-dev` from (see src/utils/sourceUpdate.ts).
+ */
+const ACTIVE_BUILDS_DIR = '.bun-build-active'
+const activeMarker = `${ACTIVE_BUILDS_DIR}/${process.pid}`
+
+/** Markers left by builds that were killed; they no longer protect anything. */
+function otherActiveBuilds(): number {
+  let active = 0
+  for (const name of readdirSync(ACTIVE_BUILDS_DIR)) {
+    const path = `${ACTIVE_BUILDS_DIR}/${name}`
+    try {
+      if (statSync(path).ctimeMs > staleBefore) active++
+      else rmSync(path, { force: true })
+    } catch {
+      // Raced with that build's own cleanup; either way it is not active.
+    }
+  }
+  return active
+}
+
+mkdirSync(ACTIVE_BUILDS_DIR, { recursive: true })
+writeFileSync(activeMarker, '')
 
 // `bun build` reports its own stages but not a percentage, so the build reads
 // as two points to a watching parent. It is the shortest of the three stages.
@@ -257,16 +293,17 @@ const proc = Bun.spawnSync({
 })
 
 // Runs before the exit check below so a failed build cleans up after itself
-// too. Anything this build created is unambiguously ours; anything older than
-// an hour is a leftover from an interrupted build, which the set difference
-// alone can never reach because that process died before reaching this line.
-// A build takes ~3 seconds, so the age cutoff cannot catch a concurrent one.
-// `mtime` and `birthtime` are useless here — bun clones a template binary, so
-// every artifact reports the same fabricated timestamp. `ctime` is real.
-const staleBefore = Date.now() - 60 * 60 * 1000
+// too. With no other build in flight nothing in here is being written, so all
+// of it can go; otherwise only the artifacts too old to belong to a live build
+// are safe to touch, and ours waits for a quieter build to reap it. `mtime`
+// and `birthtime` are useless for that age test — bun clones a template
+// binary, so every artifact reports the same fabricated timestamp. `ctime` is
+// real.
+rmSync(activeMarker, { force: true })
+const concurrentBuilds = otherActiveBuilds() > 0
 for (const name of listTempArtifacts()) {
   try {
-    if (preexistingArtifacts.has(name) && statSync(name).ctimeMs > staleBefore) {
+    if (concurrentBuilds && statSync(name).ctimeMs > staleBefore) {
       continue
     }
     rmSync(name, { force: true })
@@ -275,6 +312,13 @@ for (const name of listTempArtifacts()) {
       `\x1b[33m[warn]\x1b[0m Could not remove build artifact ${name}: ${error}`,
     )
   }
+}
+try {
+  // Fails with ENOTEMPTY if a build started while we were sweeping, which is
+  // the correct outcome: their marker has to survive.
+  rmdirSync(ACTIVE_BUILDS_DIR)
+} catch {
+  // Another build still holds it.
 }
 
 if (proc.exitCode !== 0) {
