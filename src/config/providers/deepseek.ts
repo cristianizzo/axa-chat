@@ -10,7 +10,9 @@ import type { ProviderDescriptor } from './types.js'
 export const DEEPSEEK_PROVIDER = {
   id: DEEPSEEK_PROVIDER_ID,
   label: 'DeepSeek',
-  description: 'DeepSeek R1 / V3 via API key (pay-per-token)',
+  // Both pickers render this as `<label> · <description>`, so it must not
+  // repeat the label.
+  description: 'R1 / V3 via API key (pay-per-token)',
   apiProvider: 'deepseek',
   aliases: [],
 
@@ -23,6 +25,14 @@ export const DEEPSEEK_PROVIDER = {
       const { deepseekAuth: _removed, ...rest } = config
       return rest
     },
+  },
+
+  apiKeyLogin: {
+    prompt: 'Enter your DeepSeek API key:',
+    hint: 'Get one at platform.deepseek.com → API keys',
+    invalidMessage:
+      "That doesn't look like a valid DeepSeek API key. Check the value and try again.",
+    storeCredentials: (config, apiKey) => ({ ...config, deepseekAuth: { apiKey } }),
   },
 
   catalog: {

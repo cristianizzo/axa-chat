@@ -45,6 +45,40 @@ export type ProviderLogout =
   | { kind: 'anthropicKeychain'; message: string }
 
 /**
+ * What `/login` needs in order to run an API-key prompt for a provider.
+ *
+ * Present only for providers whose whole login is "paste a key": the Anthropic
+ * and Codex flows are browser OAuth, and Ollama's is a model picker against a
+ * daemon that is already signed in. The prompt used to be copied per provider
+ * in ConsoleOAuthFlow — the DeepSeek and Kimi cases were identical but for four
+ * strings and one setter — so a third key-based provider meant a third copy.
+ *
+ * `storeCredentials` follows {@link ProviderLogout}'s `clearCredentials`: a pure
+ * edit of the config it is handed, so this module still imports nothing at
+ * runtime.
+ */
+export type ProviderApiKeyLogin = {
+  /** Bold heading above the input, e.g. 'Enter your DeepSeek API key:'. */
+  prompt: string
+
+  /** Dim line under it saying where to get a key. */
+  hint: string
+
+  /** Shown when the entered value fails {@link API_KEY_PATTERN}. */
+  invalidMessage: string
+
+  /** Writes the key into the config, leaving every other provider's alone. */
+  storeCredentials: (config: GlobalConfig, apiKey: string) => GlobalConfig
+}
+
+/**
+ * What both key-based providers accepted before this was shared: printable
+ * ASCII, 8–512 characters. Deliberately loose — it exists to catch a pasted URL
+ * or an empty clipboard, not to validate a key the server has yet to see.
+ */
+export const API_KEY_PATTERN = /^[\x21-\x7E]{8,512}$/
+
+/**
  * Generic in the ID so the registry can present the same descriptors two ways:
  * each file declares its own literal ID (which is what derives the
  * `AuthProviderId` union), while `ALL_PROVIDERS` and `PROVIDERS` re-type them as
@@ -104,6 +138,12 @@ export type ProviderDescriptor<Id extends string = string> = {
    * means the map holds it, read and write.
    */
   ownedModel?: (config: GlobalConfig) => string | undefined
+
+  /**
+   * The API-key prompt `/login` runs for this provider, when that is its whole
+   * login. Absent for the OAuth and daemon-backed flows.
+   */
+  apiKeyLogin?: ProviderApiKeyLogin
 
   /**
    * This provider's model catalog, when its full set of models is known

@@ -12,7 +12,7 @@ import type { ProviderDescriptor } from './types.js'
 export const KIMI_PROVIDER = {
   id: KIMI_PROVIDER_ID,
   label: 'Kimi',
-  description: 'Moonshot Kimi K3 / K2.7 via API key (pay-per-token)',
+  description: 'Moonshot K3 / K2.7 via API key (pay-per-token)',
   apiProvider: 'kimi',
   aliases: ['moonshot'],
 
@@ -25,6 +25,14 @@ export const KIMI_PROVIDER = {
       const { kimiAuth: _removed, ...rest } = config
       return rest
     },
+  },
+
+  apiKeyLogin: {
+    prompt: 'Enter your Moonshot API key:',
+    hint: 'Get one at platform.kimi.ai → API keys (the account needs a top-up before a key works)',
+    invalidMessage:
+      "That doesn't look like a valid Moonshot API key. Check the value and try again.",
+    storeCredentials: (config, apiKey) => ({ ...config, kimiAuth: { apiKey } }),
   },
 
   catalog: {

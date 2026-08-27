@@ -21,6 +21,10 @@
  */
 
 import type { GlobalConfig } from '../../utils/config.js'
+import { CODEX_PROVIDER_ID } from '../codex.js'
+import { DEEPSEEK_PROVIDER_ID } from '../deepseek.js'
+import { KIMI_PROVIDER_ID } from '../kimi.js'
+import { OLLAMA_PROVIDER_ID } from '../ollama.js'
 import { ANTHROPIC_PROVIDER, ANTHROPIC_PROVIDER_ID } from './anthropic.js'
 import type { ProviderModelCatalog } from './catalog.js'
 import { CODEX_PROVIDER } from './codex.js'
@@ -34,7 +38,12 @@ export type {
   ProviderModelCatalog,
   ProviderModelOption,
 } from './catalog.js'
-export type { ProviderDescriptor, ProviderLogout } from './types.js'
+export { API_KEY_PATTERN } from './types.js'
+export type {
+  ProviderApiKeyLogin,
+  ProviderDescriptor,
+  ProviderLogout,
+} from './types.js'
 
 /**
  * Every provider, in the order the `/login` and `/switch-account` pickers show
@@ -51,7 +60,28 @@ const PROVIDER_TUPLE = [
   KIMI_PROVIDER,
 ] as const satisfies readonly ProviderDescriptor[]
 
-export type AuthProviderId = (typeof PROVIDER_TUPLE)[number]['id']
+/**
+ * The IDs, read off the constants rather than off {@link PROVIDER_TUPLE}.
+ *
+ * Deriving them from the descriptors would be tidier but does not typecheck:
+ * `GlobalConfig.activeAuthProvider` is an `AuthProviderId`, and the descriptors
+ * take and return a `GlobalConfig`, so inferring their types in order to read
+ * `.id` is circular. The ID constants live in the dependency-free
+ * `config/*.ts` modules and reference nothing, which breaks the loop.
+ *
+ * Nothing is lost: {@link PROVIDERS} is a total `Record` over this union whose
+ * keys are the descriptors' own `.id`s, so a tuple and a list that disagree is
+ * still a compile error.
+ */
+const PROVIDER_IDS = [
+  ANTHROPIC_PROVIDER_ID,
+  CODEX_PROVIDER_ID,
+  OLLAMA_PROVIDER_ID,
+  DEEPSEEK_PROVIDER_ID,
+  KIMI_PROVIDER_ID,
+] as const
+
+export type AuthProviderId = (typeof PROVIDER_IDS)[number]
 
 /** {@link PROVIDER_TUPLE}, in the type callers iterate. */
 export const ALL_PROVIDERS: readonly ProviderDescriptor<AuthProviderId>[] =

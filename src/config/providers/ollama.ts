@@ -4,7 +4,7 @@ import type { ProviderDescriptor } from './types.js'
 export const OLLAMA_PROVIDER = {
   id: OLLAMA_PROVIDER_ID,
   label: 'Ollama',
-  description: 'Local or self-hosted models via Ollama',
+  description: 'Local or self-hosted models',
   apiProvider: 'ollama',
   aliases: [],
 

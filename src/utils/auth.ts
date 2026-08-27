@@ -5,8 +5,6 @@ import { mkdir, stat } from 'fs/promises'
 import memoize from 'lodash-es/memoize.js'
 import { join } from 'path'
 import { CODEX_PROVIDER_ID } from 'src/config/codex.js'
-import { DEEPSEEK_PROVIDER_ID } from 'src/config/deepseek.js'
-import { KIMI_PROVIDER_ID } from 'src/config/kimi.js'
 import { OLLAMA_PROVIDER_ID } from 'src/config/ollama.js'
 import { CLAUDE_AI_PROFILE_SCOPE } from 'src/constants/oauth.js'
 import {
@@ -1422,21 +1420,6 @@ export type DeepSeekAuth = {
 }
 
 /**
- * Saves the DeepSeek API key to GlobalConfig and makes DeepSeek the active
- * provider. Written atomically so the key and the active provider cannot
- * disagree. Mirrors {@link saveCodexOAuthTokens} and {@link saveOllamaAuth}.
- */
-export function saveDeepSeekAuth(auth: DeepSeekAuth): void {
-  saveGlobalConfig((cfg) => ({
-    ...cfg,
-    activeAuthProvider: DEEPSEEK_PROVIDER_ID,
-    deepseekAuth: {
-      apiKey: auth.apiKey,
-    },
-  }))
-}
-
-/**
  * Retrieves the stored DeepSeek API key from GlobalConfig.
  * Returns null if no key has been stored.
  */
@@ -1470,21 +1453,6 @@ export function isDeepSeekSubscriber(): boolean {
 
 export type KimiAuth = {
   apiKey: string
-}
-
-/**
- * Saves the Kimi API key to GlobalConfig and makes Kimi the active provider.
- * Written atomically so the key and the active provider cannot disagree.
- * Mirrors {@link saveDeepSeekAuth}.
- */
-export function saveKimiAuth(auth: KimiAuth): void {
-  saveGlobalConfig((cfg) => ({
-    ...cfg,
-    activeAuthProvider: KIMI_PROVIDER_ID,
-    kimiAuth: {
-      apiKey: auth.apiKey,
-    },
-  }))
 }
 
 /**
