@@ -1,14 +1,19 @@
 /**
- * A local `count_tokens` for backends that speak Anthropic natively.
+ * A local `count_tokens`, in two parts.
  *
- * Ollama v0.14+ and Moonshot both serve a native Anthropic `/v1/messages`, so
- * unlike Codex they need no request/response translation — pointing the SDK's
- * baseURL at them is enough. Neither documents `/v1/messages/count_tokens`, and
- * probing an endpoint that may not be there can stall a session. This wrapper
- * answers that one path locally and delegates everything else untouched.
+ * {@link estimateTokenCountResponse} is the estimate itself, and every provider
+ * that has no counting endpoint uses it: the Codex and DeepSeek adapters call
+ * it from their own interceptors, and Ollama and Kimi reach it through the
+ * wrapper below.
  *
- * Nothing in it is specific to either backend — it keys off the request path
- * alone — so a third native-Anthropic provider can reuse it unchanged.
+ * {@link createCountTokensShim} is that wrapper. Ollama v0.14+ and Moonshot
+ * both serve a native Anthropic `/v1/messages`, so unlike Codex they need no
+ * request/response translation — pointing the SDK's baseURL at them is enough.
+ * Neither documents `/v1/messages/count_tokens`, and probing an endpoint that
+ * may not be there can stall a session, so the wrapper answers that one path
+ * locally and delegates everything else untouched. Nothing in it is specific to
+ * either backend — it keys off the request path alone — so a third
+ * native-Anthropic provider can reuse it unchanged.
  */
 
 import { logError } from '../../utils/log.js'
