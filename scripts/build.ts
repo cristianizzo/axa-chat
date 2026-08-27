@@ -1,4 +1,12 @@
-import { chmodSync, existsSync, mkdirSync } from 'fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'fs'
 import { dirname } from 'path'
 import { emitProgress, findInstallRoot } from './source.js'
 
@@ -221,6 +229,63 @@ for (const [key, value] of Object.entries(defines)) {
   cmd.push('--define', `${key}=${value}`)
 }
 
+/**
+ * `bun build --compile` writes a ~61 MB intermediate named
+ * `.<hash>-00000000.bun-build` into the working directory and does not remove
+ * it, on success or on failure. Left alone it accumulates one per build: this
+ * repo had reached 147 files and 8.4 GB before anyone noticed, because
+ * `.gitignore` hides them from `git status`.
+ */
+const TEMP_ARTIFACT_SUFFIX = '.bun-build'
+
+function listTempArtifacts(): string[] {
+  return readdirSync(process.cwd()).filter(name =>
+    name.endsWith(TEMP_ARTIFACT_SUFFIX),
+  )
+}
+
+/**
+ * Anything older than this was left by a build that died before it could clean
+ * up: a build takes seconds, so nothing this old can still be in flight.
+ */
+const staleBefore = Date.now() - 60 * 60 * 1000
+
+/**
+ * Concurrent builds have to announce themselves, because the sweep below
+ * cannot otherwise tell our intermediate from theirs — bun names it after a
+ * content hash, and every artifact carries the same fabricated `mtime`. Two
+ * builds in this directory at once is a real case, not a hypothetical one: a
+ * staged self-update runs `bun run update:staged` against `cli-dev.next` in
+ * the repo it is updating, which is the same tree a developer builds
+ * `cli-dev` from (see src/utils/sourceUpdate.ts).
+ *
+ * The directory itself is never removed, only the markers inside it. Deleting
+ * it would race every other build: one that had just run `mkdirSync` would
+ * fail its `writeFileSync`, and one about to scan would fail its `readdirSync`
+ * — turning a build that had already succeeded into a crash. An empty hidden
+ * directory is the cheaper price.
+ */
+const ACTIVE_BUILDS_DIR = '.bun-build-active'
+const activeMarker = `${ACTIVE_BUILDS_DIR}/${process.pid}`
+
+/** Markers left by builds that were killed; they no longer protect anything. */
+function otherActiveBuilds(): number {
+  let active = 0
+  for (const name of readdirSync(ACTIVE_BUILDS_DIR)) {
+    const path = `${ACTIVE_BUILDS_DIR}/${name}`
+    try {
+      if (statSync(path).ctimeMs > staleBefore) active++
+      else rmSync(path, { force: true })
+    } catch {
+      // Raced with that build's own cleanup; either way it is not active.
+    }
+  }
+  return active
+}
+
+mkdirSync(ACTIVE_BUILDS_DIR, { recursive: true })
+writeFileSync(activeMarker, '')
+
 // `bun build` reports its own stages but not a percentage, so the build reads
 // as two points to a watching parent. It is the shortest of the three stages.
 emitProgress('build', 0)
@@ -231,6 +296,28 @@ const proc = Bun.spawnSync({
   stdout: 'inherit',
   stderr: 'inherit',
 })
+
+// Runs before the exit check below so a failed build cleans up after itself
+// too. With no other build in flight nothing in here is being written, so all
+// of it can go; otherwise only the artifacts too old to belong to a live build
+// are safe to touch, and ours waits for a quieter build to reap it. `mtime`
+// and `birthtime` are useless for that age test — bun clones a template
+// binary, so every artifact reports the same fabricated timestamp. `ctime` is
+// real.
+rmSync(activeMarker, { force: true })
+const concurrentBuilds = otherActiveBuilds() > 0
+for (const name of listTempArtifacts()) {
+  try {
+    if (concurrentBuilds && statSync(name).ctimeMs > staleBefore) {
+      continue
+    }
+    rmSync(name, { force: true })
+  } catch (error) {
+    console.warn(
+      `\x1b[33m[warn]\x1b[0m Could not remove build artifact ${name}: ${error}`,
+    )
+  }
+}
 
 if (proc.exitCode !== 0) {
   process.exit(proc.exitCode ?? 1)

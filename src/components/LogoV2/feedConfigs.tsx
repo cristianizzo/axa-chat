@@ -2,6 +2,7 @@ import figures from 'figures';
 import { homedir } from 'os';
 import * as React from 'react';
 import { Box, Text } from '../../ink.js';
+import { PRODUCT_NAME } from '../../constants/product.js';
 import type { Step } from '../../projectOnboardingState.js';
 import { formatCreditAmount, getCachedReferrerReward } from '../../services/api/referral.js';
 import type { LogOption } from '../../types/logs.js';
@@ -39,7 +40,7 @@ export function createWhatsNewFeed(releaseNotes: string[]): FeedConfig {
       text: note
     };
   });
-  const emptyMessage = "external" === 'ant' ? 'Unable to fetch latest claude-cli-internal commits' : 'Check the AXA Chat changelog for updates';
+  const emptyMessage = "external" === 'ant' ? 'Unable to fetch latest claude-cli-internal commits' : `Check the ${PRODUCT_NAME} changelog for updates`;
   return {
     title: "external" === 'ant' ? "What's new [ANT-ONLY: Latest CC commits]" : "What's new",
     lines,
@@ -73,7 +74,7 @@ export function createProjectOnboardingFeed(steps: Step[]): FeedConfig {
 }
 export function createGuestPassesFeed(): FeedConfig {
   const reward = getCachedReferrerReward();
-  const subtitle = reward ? `Share AXA Chat and earn ${formatCreditAmount(reward)} of extra usage` : 'Share AXA Chat with friends';
+  const subtitle = reward ? `Share ${PRODUCT_NAME} and earn ${formatCreditAmount(reward)} of extra usage` : `Share ${PRODUCT_NAME} with friends`;
   return {
     title: '3 guest passes',
     lines: [],

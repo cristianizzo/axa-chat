@@ -8,6 +8,7 @@ openclaw/
 docs/
 CLAUDE.md
 *.bun-build
+.bun-build-active/
 .idea/
 conversation-backup.jsonl
 .claude/
