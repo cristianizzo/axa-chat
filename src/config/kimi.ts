@@ -81,26 +81,6 @@ export const DEFAULT_KIMI_MODEL: KimiModelId = 'kimi-k3'
  */
 export const KIMI_SMALL_FAST_MODEL: KimiModelId = 'kimi-k2.7-code-highspeed'
 
-/**
- * The display label for a listed Kimi model.
- *
- * @param model - A model ID
- * @returns The label, or undefined for an unknown model
- */
-export function getKimiModelLabel(model: string): string | undefined {
-  return KIMI_MODELS.find(entry => entry.id === model)?.label
-}
-
-/**
- * True for any model that will be routed to the Kimi backend.
- *
- * @param model - A model ID
- * @returns Whether the model runs on Kimi
- */
-export function isKimiModelId(model: string): boolean {
-  return KIMI_MODELS.some(entry => entry.id === model)
-}
-
 // ── Limits ──────────────────────────────────────────────────────────
 
 /**

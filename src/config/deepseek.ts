@@ -47,26 +47,6 @@ export type DeepSeekModelId = (typeof DEEPSEEK_MODELS)[number]['id']
 export const DEFAULT_DEEPSEEK_MODEL: DeepSeekModelId = 'deepseek-chat'
 
 /**
- * The display label for a listed DeepSeek model.
- *
- * @param model - A model ID
- * @returns The label, or undefined for an unknown model
- */
-export function getDeepSeekModelLabel(model: string): string | undefined {
-  return DEEPSEEK_MODELS.find(entry => entry.id === model)?.label
-}
-
-/**
- * True for any model that will be routed to the DeepSeek backend.
- *
- * @param model - A model ID
- * @returns Whether the model runs on DeepSeek
- */
-export function isDeepSeekModelId(model: string): boolean {
-  return DEEPSEEK_MODELS.some(entry => entry.id === model)
-}
-
-/**
  * Context window for DeepSeek models (input tokens).
  * Both R1 and V3 support 64k input tokens.
  */

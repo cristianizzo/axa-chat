@@ -20,11 +20,7 @@ import {
   isTeamPremiumSubscriber,
 } from '../auth.js'
 import { getAntModelOverrideConfig, resolveAntModel } from './antModels.js'
-import {
-  findCodexModelId,
-  getCodexModelLabel,
-  isCodexModelId,
-} from 'src/config/codex.js'
+import { findCodexModelId } from 'src/config/codex.js'
 import {
   getProviderModelCatalog,
   getProviderModelCatalogForModel,
