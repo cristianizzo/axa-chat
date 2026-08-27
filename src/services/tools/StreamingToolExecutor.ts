@@ -62,12 +62,35 @@ export class StreamingToolExecutor {
   }
 
   /**
-   * Discards all pending and in-progress tools. Called when streaming fallback
-   * occurs and results from the failed attempt should be abandoned.
-   * Queued tools won't start, and in-progress tools will receive synthetic errors.
+   * Abandons this executor's work. Queued tools never start, and running ones
+   * are killed rather than left to finish.
+   *
+   * The kill is the point. Callers discard because the attempt that produced
+   * these tool calls is being retried — a streaming fallback, a model
+   * fallback, or a refusal — and the retry re-issues the same calls. The
+   * `discarded` flag alone is only read where a tool's generator yields, which
+   * a subprocess in the middle of a command never reaches, so without the
+   * abort a `git push` from the abandoned attempt runs to completion and then
+   * runs a second time on the retry — the first invisible, because its
+   * messages were tombstoned.
+   *
+   * Order matters: the per-tool abort listener in executeTool checks
+   * `discarded` to decide whether to re-raise the abort onto the query
+   * controller, and re-raising here would end the turn the retry needs.
+   * Aborting siblingAbortController on its own cannot end the turn, since
+   * createChildAbortController propagates parent to child only.
+   *
+   * The reason must not be 'interrupt': ShellCommand deliberately skips the
+   * kill for that one so a user-interrupted command can be backgrounded with
+   * its output intact.
+   *
+   * Only reaches tools that honour their signal. Bash is killed outright and
+   * WebFetch stops, but FileWriteTool and FileEditTool never read the signal,
+   * so a write already in progress still lands.
    */
   discard(): void {
     this.discarded = true
+    this.siblingAbortController.abort('discarded')
   }
 
   /**
