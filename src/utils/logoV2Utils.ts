@@ -1,5 +1,6 @@
 import { getDirectConnectServerUrl, getSessionId } from '../bootstrap/state.js'
 import {
+  ALL_PROVIDERS,
   ANTHROPIC_PROVIDER_ID,
   type AuthProviderId,
 } from '../config/providers/index.js'
@@ -9,7 +10,10 @@ import { KIMI_PROVIDER_ID } from '../config/kimi.js'
 import { OLLAMA_PROVIDER_ID } from '../config/ollama.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import type { LogOption } from '../types/logs.js'
-import { getActiveAuthProvider } from './activeAuthProvider.js'
+import {
+  getActiveAuthProvider,
+  hasCredentialsForAuthProvider,
+} from './activeAuthProvider.js'
 import { getSubscriptionName, isClaudeAISubscriber } from './auth.js'
 import { getGlobalConfig } from './config.js'
 import { getCwd } from './cwd.js'
@@ -90,16 +94,14 @@ export function calculateLayoutDimensions(
 
 /**
  * Calculates optimal left panel width based on content
+ *
+ * @param lines - The rendered lines of the left panel, in any order. Variadic
+ *   because the panel's line count is not fixed: the provider lights line is
+ *   only there when there is more than one account to distinguish.
  */
-export function calculateOptimalLeftWidth(
-  welcomeMessage: string,
-  truncatedCwd: string,
-  modelLine: string,
-): number {
+export function calculateOptimalLeftWidth(...lines: string[]): number {
   const contentWidth = Math.max(
-    stringWidth(welcomeMessage),
-    stringWidth(truncatedCwd),
-    stringWidth(modelLine),
+    ...lines.map(stringWidth),
     20, // Minimum for clawd art
   )
   return Math.min(contentWidth + 4, MAX_LEFT_WIDTH) // +4 for padding
@@ -293,6 +295,120 @@ function getBillingTypeLabel(): string {
     case KIMI_PROVIDER_ID:
       return 'Moonshot API Usage'
   }
+}
+
+/** The glyph beside a provider that has stored credentials, and one that has not. */
+export const PROVIDER_CONNECTED_GLYPH = '●'
+export const PROVIDER_DISCONNECTED_GLYPH = '○'
+
+/** One provider's entry in the banner's connected-accounts line. */
+export type ProviderStatusLight = {
+  id: AuthProviderId
+  label: string
+  /** Stored credentials exist for it. */
+  connected: boolean
+  /** It is the account serving this session's requests. */
+  active: boolean
+}
+
+/**
+ * The connected-accounts line for the banner, or an empty list when there is
+ * nothing to show.
+ *
+ * Credentials-only by design: `connected` means "a credential record is on this
+ * machine", not "that credential still works". Probing each provider would mean
+ * a network round trip per account on every startup, and the banner renders
+ * before the first request — so an expired key or a stopped Ollama daemon still
+ * shows green. The first request reports the real failure, which is where a
+ * user can act on it.
+ *
+ * Empty below two connected accounts: a single-provider install would otherwise
+ * get a row of dim glyphs for providers it has never heard of, which reads as a
+ * setup checklist rather than as status. With one account there is nothing to
+ * disambiguate — the model and billing line underneath already names it.
+ *
+ * Also empty when even the connected accounts alone do not fit. The line must
+ * be one row — it shares the banner with the activity feed — and it is a single
+ * unit, so truncating it mid-list would be a claim about accounts rather than a
+ * shortened one.
+ *
+ * @param availableWidth - Columns the line may occupy
+ * @returns One entry per registered provider, minus any unconfigured ones that
+ *   did not fit, or `[]` when there is nothing worth showing
+ */
+export function getProviderStatusLights(
+  availableWidth: number,
+): ProviderStatusLight[] {
+  // Same guard the billing line opens with. CLAUDE_CODE_USE_BEDROCK/_VERTEX/
+  // _FOUNDRY beat the account in getAPIProvider(), so no account is serving
+  // this session and there is no `active` to emphasise. Showing the list with
+  // every entry unemphasised would read as "none of your logins is working"
+  // rather than "a cloud backend is configured", which is what the billing
+  // line already says.
+  if (!isActiveAccountServingRequests()) {
+    return []
+  }
+
+  const active = getActiveAuthProvider()
+  const lights = ALL_PROVIDERS.map(provider => ({
+    id: provider.id,
+    label: provider.shortLabel ?? provider.label,
+    connected: hasCredentialsForAuthProvider(provider.id),
+    active: provider.id === active,
+  }))
+  if (lights.filter(light => light.connected).length < 2) {
+    return []
+  }
+
+  // Unconfigured providers are the discoverable part of the line, not the
+  // informative part, so they are what gives way when the panel is narrow —
+  // from the right, so the ones a user sees are stable as the terminal grows.
+  const trimmed = [...lights]
+  const fits = () =>
+    stringWidth(formatProviderStatusLine(trimmed)) <= availableWidth
+  for (let i = trimmed.length - 1; i >= 0 && !fits(); i--) {
+    if (!trimmed[i]!.connected) {
+      trimmed.splice(i, 1)
+    }
+  }
+  return fits() ? trimmed : []
+}
+
+/**
+ * The plain-text form of {@link getProviderStatusLights}, for width measurement.
+ *
+ * The rendered version splits this across nested `Text` nodes so the active
+ * account can be emphasised, but its printed width is identical.
+ *
+ * @param lights - The lights to measure
+ * @returns The line as it will appear, e.g. `Anthropic ● Codex ● Kimi ○`
+ */
+export function formatProviderStatusLine(
+  lights: readonly ProviderStatusLight[],
+): string {
+  return lights
+    .map(
+      light =>
+        `${light.label} ${light.connected ? PROVIDER_CONNECTED_GLYPH : PROVIDER_DISCONNECTED_GLYPH}`,
+    )
+    .join(' ')
+}
+
+/**
+ * A memo key for a rendered lights line.
+ *
+ * {@link formatProviderStatusLine} is not usable as one: which entry is active
+ * changes the emphasis without changing a character.
+ *
+ * @param lights - The lights being rendered
+ * @returns A string that differs whenever the rendered line would differ
+ */
+export function providerStatusKey(
+  lights: readonly ProviderStatusLight[],
+): string {
+  return lights
+    .map(light => `${light.id}:${light.connected}:${light.active}`)
+    .join(',')
 }
 
 /**

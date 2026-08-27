@@ -12,6 +12,9 @@ import type { ProviderDescriptor } from './types.js'
 export const CODEX_PROVIDER = {
   id: CODEX_PROVIDER_ID,
   label: 'OpenAI Codex',
+  // The only label long enough to push the banner's five-provider line past the
+  // panel it has to fit in.
+  shortLabel: 'Codex',
   description: 'ChatGPT Plus/Pro subscription',
   apiProvider: 'openai',
   // 'codex' is not implied by the ID: it is `openai-codex`, and matching is
