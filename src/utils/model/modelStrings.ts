@@ -10,6 +10,8 @@ import {
   ALL_MODEL_CONFIGS,
   CANONICAL_ID_TO_KEY,
   type CanonicalModelId,
+  hasModelConfigColumn,
+  type ModelConfigProvider,
   type ModelKey,
 } from './configs.js'
 import { type APIProvider, getAPIProvider } from './providers.js'
@@ -23,13 +25,12 @@ export type ModelStrings = Record<ModelKey, string>
 const MODEL_KEYS = Object.keys(ALL_MODEL_CONFIGS) as ModelKey[]
 
 function getBuiltinModelStrings(provider: APIProvider): ModelStrings {
-  // Ollama, DeepSeek and Kimi aren't columns in the config table. Ollama serves
-  // native Anthropic IDs; the other two have their own catalogs. All three fall
-  // back to firstParty strings to avoid an all-undefined map.
-  const column =
-    provider === 'ollama' || provider === 'deepseek' || provider === 'kimi'
-      ? 'firstParty'
-      : provider
+  // Providers without a column fall back to firstParty strings, which avoids an
+  // all-undefined map. Ollama serves native Anthropic IDs; DeepSeek and Kimi
+  // have their own catalogs and never reach the table for a real lookup.
+  const column: ModelConfigProvider = hasModelConfigColumn(provider)
+    ? provider
+    : 'firstParty'
   const out = {} as ModelStrings
   for (const key of MODEL_KEYS) {
     out[key] = ALL_MODEL_CONFIGS[key][column]

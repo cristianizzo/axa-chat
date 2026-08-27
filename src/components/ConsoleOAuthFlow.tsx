@@ -11,8 +11,11 @@ import { getSSLErrorHint } from '../services/api/errorUtils.js';
 import { sendNotification } from '../services/notifier.js';
 import { runCodexOAuthFlow } from '../services/oauth/codex-client.js';
 import { OAuthService } from '../services/oauth/index.js';
-import { getOauthAccountInfo, saveCodexOAuthTokens, saveDeepSeekAuth, saveKimiAuth, saveOllamaAuth, validateForceLoginOrg } from '../utils/auth.js';
-import { getOllamaAuthToken, getOllamaBaseUrl } from '../config/ollama.js';
+import { getOauthAccountInfo, saveCodexOAuthTokens, saveOllamaAuth, validateForceLoginOrg } from '../utils/auth.js';
+import { getOllamaAuthToken, getOllamaBaseUrl, OLLAMA_PROVIDER_ID } from '../config/ollama.js';
+import { CODEX_PROVIDER_ID } from '../config/codex.js';
+import { ALL_PROVIDERS, ANTHROPIC_PROVIDER_ID, API_KEY_PATTERN, type AuthProviderId, getProvider, isAuthProviderId } from '../config/providers/index.js';
+import { saveGlobalConfig } from '../utils/config.js';
 import { logError } from '../utils/log.js';
 import { getSettings_DEPRECATED } from '../utils/settings/settings.js';
 import { Select } from './CustomSelect/select.js';
@@ -36,11 +39,9 @@ type OAuthStatus = {
   state: 'ollama_model_select';
 } // Ollama chosen: pick which installed model to use
 | {
-  state: 'deepseek_api_key';
-} // DeepSeek chosen: enter API key
-| {
-  state: 'kimi_api_key';
-} // Kimi chosen: enter API key
+  state: 'api_key';
+  provider: AuthProviderId;
+} // A key-based provider chosen: enter its API key
 | {
   state: 'ready_to_start';
 } // Flow started, waiting for browser to open
@@ -447,22 +448,17 @@ function OAuthStatusMessage(t0) {
         }
         let t6;
         if ($[5] === Symbol.for("react.memo_cache_sentinel")) {
+          // The third-party accounts come straight from the registry, so their
+          // names here cannot drift from the ones /switch-account shows — they
+          // already had. Anthropic is excluded because its two entries above
+          // split the one descriptor into subscription and Console billing.
           t6 = [t4, t5, {
             label: <Text>3rd-party platform ·{" "}<Text dimColor={true}>Amazon Bedrock, Microsoft Foundry, or Vertex AI</Text>{"\n"}</Text>,
             value: "platform"
-          }, {
-            label: <Text>OpenAI Codex account ·{" "}<Text dimColor={true}>ChatGPT Plus/Pro subscription</Text>{"\n"}</Text>,
-            value: "codex"
-          }, {
-            label: <Text>Ollama ·{" "}<Text dimColor={true}>Local or self-hosted model</Text>{"\n"}</Text>,
-            value: "ollama"
-          }, {
-            label: <Text>DeepSeek ·{" "}<Text dimColor={true}>R1 / V3 via API key (pay-per-token)</Text>{"\n"}</Text>,
-            value: "deepseek"
-          }, {
-            label: <Text>Kimi ·{" "}<Text dimColor={true}>Moonshot K3 / K2.7 via API key (pay-per-token)</Text>{"\n"}</Text>,
-            value: "kimi"
-          }];
+          }, ...ALL_PROVIDERS.filter(provider => provider.id !== ANTHROPIC_PROVIDER_ID).map(provider => ({
+            label: <Text>{provider.label} ·{" "}<Text dimColor={true}>{provider.description}</Text>{"\n"}</Text>,
+            value: provider.id
+          }))];
           $[5] = t6;
         } else {
           t6 = $[5];
@@ -475,12 +471,12 @@ function OAuthStatusMessage(t0) {
                 setOAuthStatus({
                   state: "platform_setup"
                 });
-              } else if (value_0 === "codex") {
+              } else if (value_0 === CODEX_PROVIDER_ID) {
                 logEvent("tengu_oauth_codex_selected", {});
                 setLoginWithCodex(true);
                 setLoginWithClaudeAi(false);
                 setOAuthStatus({ state: "ready_to_start" });
-              } else if (value_0 === "ollama") {
+              } else if (value_0 === OLLAMA_PROVIDER_ID) {
                 logEvent("tengu_oauth_ollama_selected", {});
                 setLoginWithCodex(false);
                 setLoginWithClaudeAi(false);
@@ -489,16 +485,16 @@ function OAuthStatusMessage(t0) {
                 // thing to record. Let the user pick it from the installed
                 // models rather than driving the OAuth state machine.
                 setOAuthStatus({ state: "ollama_model_select" });
-              } else if (value_0 === "deepseek") {
-                logEvent("tengu_oauth_deepseek_selected", {});
+              } else if (isAuthProviderId(value_0) && getProvider(value_0).apiKeyLogin) {
+                // Every provider whose whole login is "paste a key" lands here,
+                // so a new one needs no branch of its own. The event name is
+                // built from the ID because logEvent's metadata takes no
+                // strings; for the two providers that reach here it spells the
+                // same names the hardcoded branches emitted.
+                logEvent(`tengu_oauth_${value_0}_selected`, {});
                 setLoginWithCodex(false);
                 setLoginWithClaudeAi(false);
-                setOAuthStatus({ state: "deepseek_api_key" });
-              } else if (value_0 === "kimi") {
-                logEvent("tengu_oauth_kimi_selected", {});
-                setLoginWithCodex(false);
-                setLoginWithClaudeAi(false);
-                setOAuthStatus({ state: "kimi_api_key" });
+                setOAuthStatus({ state: "api_key", provider: value_0 });
               } else {
                 setLoginWithCodex(false);
                 setOAuthStatus({
@@ -717,62 +713,51 @@ function OAuthStatusMessage(t0) {
         }
         return t3;
       }
-    case "kimi_api_key":
-      return <Box flexDirection="column" gap={1}>
-          <Text bold={true}>Enter your Moonshot API key:</Text>
-          <Text dimColor={true}>Get one at platform.kimi.ai → API keys (the account needs a top-up before a key works)</Text>
+    case "api_key":
+      {
+        // One prompt for every key-based provider: the strings, the validation
+        // and the place the key is written all come from the descriptor, so the
+        // DeepSeek and Kimi copies of this block — identical but for four
+        // strings and one setter — are gone, and a third such provider adds no
+        // code here.
+        const provider = oauthStatus.provider;
+        const login = getProvider(provider).apiKeyLogin;
+        if (!login) {
+          return null;
+        }
+        return <Box flexDirection="column" gap={1}>
+          <Text bold={true}>{login.prompt}</Text>
+          <Text dimColor={true}>{login.hint}</Text>
           <TextInput value={pastedCode} onChange={setPastedCode} onSubmit={value => {
             const trimmed = value.trim();
             if (!trimmed) return;
-            // Basic format guard: Moonshot keys are printable ASCII, 8–512 chars
-            if (!/^[\x21-\x7E]{8,512}$/.test(trimmed)) {
+            if (!API_KEY_PATTERN.test(trimmed)) {
               setOAuthStatus({
                 state: "error",
-                message: "That doesn't look like a valid Moonshot API key. Check the value and try again.",
+                message: login.invalidMessage,
                 toRetry: {
-                  state: "kimi_api_key"
+                  state: "api_key",
+                  provider
                 }
               });
               return;
             }
-            saveKimiAuth({
-              apiKey: trimmed
-            });
+            // One write, so the key and the active provider cannot disagree —
+            // the guarantee the per-provider save helpers used to give. The
+            // descriptor writes only its own credential; which account that
+            // makes active is the picker's business, not the descriptor's.
+            saveGlobalConfig(config => ({
+              ...login.storeCredentials(config, trimmed),
+              activeAuthProvider: provider
+            }));
             setPastedCode('');
-            logEvent("tengu_oauth_kimi_success", {});
+            logEvent(`tengu_oauth_${provider}_success`, {});
             setOAuthStatus({
               state: "success"
             });
           }} cursorOffset={cursorOffset} onChangeCursorOffset={setCursorOffset} columns={textInputColumns} mask="*" />
         </Box>;
-    case "deepseek_api_key":
-      return <Box flexDirection="column" gap={1}>
-          <Text bold={true}>Enter your DeepSeek API key:</Text>
-          <Text dimColor={true}>Get one at platform.deepseek.com → API keys</Text>
-          <TextInput value={pastedCode} onChange={setPastedCode} onSubmit={value => {
-            const trimmed = value.trim();
-            if (!trimmed) return;
-            // Basic format guard: DeepSeek keys are printable ASCII, 8–512 chars
-            if (!/^[\x21-\x7E]{8,512}$/.test(trimmed)) {
-              setOAuthStatus({
-                state: "error",
-                message: "That doesn't look like a valid DeepSeek API key. Check the value and try again.",
-                toRetry: {
-                  state: "deepseek_api_key"
-                }
-              });
-              return;
-            }
-            saveDeepSeekAuth({
-              apiKey: trimmed
-            });
-            setPastedCode('');
-            logEvent("tengu_oauth_deepseek_success", {});
-            setOAuthStatus({
-              state: "success"
-            });
-          }} cursorOffset={cursorOffset} onChangeCursorOffset={setCursorOffset} columns={textInputColumns} mask="*" />
-        </Box>;
+      }
     default:
       {
         return null;

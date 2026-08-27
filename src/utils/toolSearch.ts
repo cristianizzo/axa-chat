@@ -29,7 +29,7 @@ import {
   countToolDefinitionTokens,
   TOOL_TOKEN_COUNT_OVERHEAD,
 } from './analyzeContext.js'
-import { getProviderModelCatalog } from '../config/providerModels.js'
+import { getProviderModelCatalog } from '../config/providers/index.js'
 import { getActiveAuthProvider } from './activeAuthProvider.js'
 import { count } from './array.js'
 import { getMergedBetas } from './betas.js'

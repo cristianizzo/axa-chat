@@ -11,18 +11,11 @@ import {
   getAnthropicApiKey,
   getApiKeyFromApiKeyHelper,
   getClaudeAIOAuthTokens,
-  getCodexOAuthTokens,
-  getDeepSeekAuth,
-  getKimiAuth,
-  getOllamaAuth,
   isClaudeAISubscriber,
-  isCodexSubscriber,
-  isDeepSeekSubscriber,
-  isKimiSubscriber,
-  isOllamaSubscriber,
   refreshAndGetAwsCredentials,
   refreshGcpCredentialsIfNeeded,
 } from 'src/utils/auth.js'
+import { getActiveAuthProvider } from 'src/utils/activeAuthProvider.js'
 import { getUserAgent } from 'src/utils/http.js'
 import { getSmallFastModel } from 'src/utils/model/model.js'
 import {
@@ -41,12 +34,7 @@ import {
   getVertexRegionForModel,
   isEnvTruthy,
 } from '../../utils/envUtils.js'
-import { createCodexFetch } from './codex-fetch-adapter.js'
-import { createDeepSeekFetch } from './deepseek-fetch-adapter.js'
-import { createCountTokensShim } from './count-tokens-shim.js'
-import { limitRequestConcurrency } from './requestLimiter.js'
-import { KIMI_BASE_URL, KIMI_PROVIDER_ID } from 'src/config/kimi.js'
-import { getMaxConcurrentRequests } from 'src/config/providerModels.js'
+import { buildProviderClientConfig } from './providerClients.js'
 
 /**
  * Environment variables for different client types:
@@ -316,109 +304,34 @@ export async function getAnthropicClient({
     return new AnthropicVertex(vertexArgs) as unknown as Anthropic
   }
 
-  // ── Codex (OpenAI) provider via fetch adapter ─────────────────────
-  if (isCodexSubscriber()) {
-    const codexTokens = getCodexOAuthTokens()
-    if (codexTokens?.accessToken) {
-      const codexFetch = createCodexFetch(codexTokens.accessToken)
-      const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
-        apiKey: 'codex-placeholder', // SDK requires a key but the fetch adapter handles auth
-        ...ARGS,
-        fetch: codexFetch as unknown as typeof globalThis.fetch,
-        ...(isDebugToStdErr() && { logger: createStderrLogger() }),
-      }
-      return new Anthropic(clientConfig)
-    }
-  }
-
-  // ── Ollama provider (native Anthropic endpoint) ───────────────────
-  if (isOllamaSubscriber()) {
-    const ollama = getOllamaAuth()
-    if (ollama?.baseUrl) {
-      // A local daemon ignores the token, so any non-empty placeholder works;
-      // Ollama Cloud expects a real one. It is sent as `Authorization: Bearer`,
-      // which is what the Anthropic SDK's `authToken` produces.
-      const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
-        apiKey: null,
-        authToken: ollama.authToken || 'ollama',
-        baseURL: ollama.baseUrl,
-        ...ARGS,
-        // See the Kimi branch below: configureApiKeyHeaders may have put an
-        // Anthropic credential in Authorization, and defaultHeaders outrank the
-        // authToken directly above. For a daemon on localhost that is only a
-        // broken request, but an Ollama Cloud base URL makes it a leak.
+  // ── Non-Anthropic account providers ───────────────────────────────
+  // Reached only when no cloud override is set, since the Bedrock, Vertex and
+  // Foundry branches above have already returned — so the logged-in account is
+  // what serves requests and its adapter is the right one to install.
+  const providerConfig = buildProviderClientConfig(
+    getActiveAuthProvider(),
+    resolvedFetch,
+  )
+  if (providerConfig) {
+    const providerClientConfig: ConstructorParameters<typeof Anthropic>[0] = {
+      apiKey: providerConfig.apiKey,
+      ...(providerConfig.authToken && { authToken: providerConfig.authToken }),
+      ...(providerConfig.baseURL && { baseURL: providerConfig.baseURL }),
+      ...ARGS,
+      // A provider that moves the SDK off Anthropic's host must not be sent the
+      // Anthropic credential configureApiKeyHeaders may have put in
+      // Authorization — see ProviderClientConfig.baseURL.
+      ...(providerConfig.baseURL && {
         defaultHeaders: withoutAuthorization(defaultHeaders),
-        // The daemon has no count_tokens endpoint; answer that one path locally.
-        fetch: createCountTokensShim(resolvedFetch) as unknown as typeof globalThis.fetch,
-        ...(isDebugToStdErr() && { logger: createStderrLogger() }),
-      }
-      return new Anthropic(clientConfig)
+      }),
+      fetch: providerConfig.fetch as unknown as typeof globalThis.fetch,
+      ...(isDebugToStdErr() && { logger: createStderrLogger() }),
     }
+    return new Anthropic(providerClientConfig)
   }
-
-  // ── DeepSeek provider via fetch adapter ───────────────────────────
-  if (isDeepSeekSubscriber()) {
-    const deepseek = getDeepSeekAuth()
-    if (deepseek?.apiKey) {
-      const deepseekFetch = createDeepSeekFetch(deepseek.apiKey)
-      const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
-        apiKey: 'deepseek-placeholder', // SDK requires a key; fetch adapter handles auth
-        ...ARGS,
-        fetch: deepseekFetch as unknown as typeof globalThis.fetch,
-        ...(isDebugToStdErr() && { logger: createStderrLogger() }),
-      }
-      return new Anthropic(clientConfig)
-    }
-    // TOCTOU: provider is deepseek but key vanished between the subscriber check and here.
-    // Fall through to the default client; it will surface an auth error to the user.
-    logForDebugging('DeepSeek provider active but API key is missing; falling through to default client', { level: 'warn' })
-  }
-
-  // ── Kimi provider (native Anthropic endpoint) ─────────────────────
-  if (isKimiSubscriber()) {
-    const kimi = getKimiAuth()
-    if (kimi?.apiKey) {
-      const kimiConcurrency = getMaxConcurrentRequests(KIMI_PROVIDER_ID)
-      const kimiFetch = kimiConcurrency
-        ? limitRequestConcurrency(
-            KIMI_PROVIDER_ID,
-            kimiConcurrency,
-            resolvedFetch,
-          )
-        : resolvedFetch
-      // `authToken`, not `apiKey`: ANTHROPIC_AUTH_TOKEN — the Bearer header —
-      // is what Moonshot documents for this endpoint. Probing the live API
-      // shows it also accepts `x-api-key` (what the SDK's `apiKey` emits), and
-      // accepts both at once, so this follows the documented contract rather
-      // than working around something that fails today. `apiKey: null` then
-      // stops the SDK adding the undocumented header alongside it.
-      const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
-        apiKey: null,
-        authToken: kimi.apiKey,
-        baseURL: KIMI_BASE_URL,
-        ...ARGS,
-        // Strip any Authorization put there by configureApiKeyHeaders. That
-        // header carries ANTHROPIC_AUTH_TOKEN or the apiKeyHelper's output —
-        // an Anthropic credential — and defaultHeaders outrank the SDK's own
-        // auth, so leaving it would both break the request and hand a third
-        // party a key meant for Anthropic. Only the native-Anthropic branches
-        // need this: Codex and DeepSeek go through fetch adapters that rebuild
-        // the request from scratch and never copy this header across.
-        defaultHeaders: withoutAuthorization(defaultHeaders),
-        // Moonshot's shim implements messages, not count_tokens; answer that
-        // one path locally exactly as the Ollama daemon requires. The
-        // concurrency limit sits underneath it so a locally-answered
-        // count_tokens never waits for — or occupies — one of the few slots
-        // Moonshot gives us.
-        fetch: createCountTokensShim(kimiFetch) as unknown as typeof globalThis.fetch,
-        ...(isDebugToStdErr() && { logger: createStderrLogger() }),
-      }
-      return new Anthropic(clientConfig)
-    }
-    // TOCTOU: provider is kimi but the key vanished between the subscriber
-    // check and here. Fall through; the default client surfaces an auth error.
-    logForDebugging('Kimi provider active but API key is missing; falling through to default client', { level: 'warn' })
-  }
+  // Otherwise the account is Anthropic, which needs no override, or its
+  // credential vanished between being written and now — a `/logout` in another
+  // terminal, say. Either way the default client below is right.
 
   // Determine authentication method based on available tokens
   const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {

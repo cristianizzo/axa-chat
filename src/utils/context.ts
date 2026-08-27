@@ -4,7 +4,7 @@ import { getGlobalConfig } from './config.js'
 import { isEnvTruthy } from './envUtils.js'
 import { getCanonicalName } from './model/model.js'
 import { getModelCapability } from './model/modelCapabilities.js'
-import { getProviderModelCatalogForModel } from 'src/config/providerModels.js'
+import { getProviderModelCatalogForModel } from 'src/config/providers/index.js'
 import { getModelDescriptor } from './model/registry.js'
 
 // Model context window size (200k tokens for all models right now)

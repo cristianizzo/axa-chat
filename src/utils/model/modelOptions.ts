@@ -1,7 +1,7 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { getInitialMainLoopModel } from '../../bootstrap/state.js'
 import { getActiveAuthProvider } from '../activeAuthProvider.js'
-import { getProviderModelCatalog } from 'src/config/providerModels.js'
+import { getProviderModelCatalog } from 'src/config/providers/index.js'
 import {
   getOllamaAuth,
   isClaudeAISubscriber,

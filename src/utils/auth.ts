@@ -5,8 +5,6 @@ import { mkdir, stat } from 'fs/promises'
 import memoize from 'lodash-es/memoize.js'
 import { join } from 'path'
 import { CODEX_PROVIDER_ID } from 'src/config/codex.js'
-import { DEEPSEEK_PROVIDER_ID } from 'src/config/deepseek.js'
-import { KIMI_PROVIDER_ID } from 'src/config/kimi.js'
 import { OLLAMA_PROVIDER_ID } from 'src/config/ollama.js'
 import { CLAUDE_AI_PROFILE_SCOPE } from 'src/constants/oauth.js'
 import {
@@ -1366,16 +1364,6 @@ export function getCodexOAuthTokens(): CodexTokens | null {
   }
 }
 
-/**
- * Removes Codex OAuth tokens from GlobalConfig (e.g., on logout).
- */
-export function clearCodexOAuthTokens(): void {
-  saveGlobalConfig((cfg) => {
-    const { codexOAuth: _removed, ...rest } = cfg
-    return rest as typeof cfg
-  })
-}
-
 // ── Ollama account storage ───────────────────────────────────────────────────
 // Ollama credentials live in the GlobalConfig JSON alongside Codex, never in the
 // keychain. Requests go to the daemon's native Anthropic Messages API and are
@@ -1422,16 +1410,6 @@ export function getOllamaAuth(): OllamaAuth | null {
   }
 }
 
-/**
- * Removes the Ollama account from GlobalConfig (e.g., on logout).
- */
-export function clearOllamaAuth(): void {
-  saveGlobalConfig((cfg) => {
-    const { ollamaAuth: _removed, ...rest } = cfg
-    return rest as typeof cfg
-  })
-}
-
 // ── DeepSeek API key storage ─────────────────────────────────────────────────
 // DeepSeek credentials live in GlobalConfig alongside Codex and Ollama, never
 // in the keychain. The API key is sent as a Bearer token to api.deepseek.com
@@ -1442,21 +1420,6 @@ export type DeepSeekAuth = {
 }
 
 /**
- * Saves the DeepSeek API key to GlobalConfig and makes DeepSeek the active
- * provider. Written atomically so the key and the active provider cannot
- * disagree. Mirrors {@link saveCodexOAuthTokens} and {@link saveOllamaAuth}.
- */
-export function saveDeepSeekAuth(auth: DeepSeekAuth): void {
-  saveGlobalConfig((cfg) => ({
-    ...cfg,
-    activeAuthProvider: DEEPSEEK_PROVIDER_ID,
-    deepseekAuth: {
-      apiKey: auth.apiKey,
-    },
-  }))
-}
-
-/**
  * Retrieves the stored DeepSeek API key from GlobalConfig.
  * Returns null if no key has been stored.
  */
@@ -1464,16 +1427,6 @@ export function getDeepSeekAuth(): DeepSeekAuth | null {
   const stored = getGlobalConfig().deepseekAuth
   if (!stored?.apiKey) return null
   return { apiKey: stored.apiKey }
-}
-
-/**
- * Removes the DeepSeek API key from GlobalConfig (e.g., on logout).
- */
-export function clearDeepSeekAuth(): void {
-  saveGlobalConfig((cfg) => {
-    const { deepseekAuth: _removed, ...rest } = cfg
-    return rest as typeof cfg
-  })
 }
 
 /**
@@ -1503,21 +1456,6 @@ export type KimiAuth = {
 }
 
 /**
- * Saves the Kimi API key to GlobalConfig and makes Kimi the active provider.
- * Written atomically so the key and the active provider cannot disagree.
- * Mirrors {@link saveDeepSeekAuth}.
- */
-export function saveKimiAuth(auth: KimiAuth): void {
-  saveGlobalConfig((cfg) => ({
-    ...cfg,
-    activeAuthProvider: KIMI_PROVIDER_ID,
-    kimiAuth: {
-      apiKey: auth.apiKey,
-    },
-  }))
-}
-
-/**
  * Retrieves the stored Kimi API key from GlobalConfig.
  * Returns null if no key has been stored.
  */
@@ -1525,16 +1463,6 @@ export function getKimiAuth(): KimiAuth | null {
   const stored = getGlobalConfig().kimiAuth
   if (!stored?.apiKey) return null
   return { apiKey: stored.apiKey }
-}
-
-/**
- * Removes the Kimi API key from GlobalConfig (e.g., on logout).
- */
-export function clearKimiAuth(): void {
-  saveGlobalConfig((cfg) => {
-    const { kimiAuth: _removed, ...rest } = cfg
-    return rest as typeof cfg
-  })
 }
 
 /**
