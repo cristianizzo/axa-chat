@@ -1,4 +1,11 @@
-import { chmodSync, existsSync, mkdirSync } from 'fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from 'fs'
 import { dirname } from 'path'
 import { emitProgress, findInstallRoot } from './source.js'
 
@@ -221,6 +228,23 @@ for (const [key, value] of Object.entries(defines)) {
   cmd.push('--define', `${key}=${value}`)
 }
 
+/**
+ * `bun build --compile` writes a ~61 MB intermediate named
+ * `.<hash>-00000000.bun-build` into the working directory and does not remove
+ * it, on success or on failure. Left alone it accumulates one per build: this
+ * repo had reached 147 files and 8.4 GB before anyone noticed, because
+ * `.gitignore` hides them from `git status`.
+ */
+const TEMP_ARTIFACT_SUFFIX = '.bun-build'
+
+function listTempArtifacts(): string[] {
+  return readdirSync(process.cwd()).filter(name =>
+    name.endsWith(TEMP_ARTIFACT_SUFFIX),
+  )
+}
+
+const preexistingArtifacts = new Set(listTempArtifacts())
+
 // `bun build` reports its own stages but not a percentage, so the build reads
 // as two points to a watching parent. It is the shortest of the three stages.
 emitProgress('build', 0)
@@ -231,6 +255,27 @@ const proc = Bun.spawnSync({
   stdout: 'inherit',
   stderr: 'inherit',
 })
+
+// Runs before the exit check below so a failed build cleans up after itself
+// too. Anything this build created is unambiguously ours; anything older than
+// an hour is a leftover from an interrupted build, which the set difference
+// alone can never reach because that process died before reaching this line.
+// A build takes ~3 seconds, so the age cutoff cannot catch a concurrent one.
+// `mtime` and `birthtime` are useless here — bun clones a template binary, so
+// every artifact reports the same fabricated timestamp. `ctime` is real.
+const staleBefore = Date.now() - 60 * 60 * 1000
+for (const name of listTempArtifacts()) {
+  try {
+    if (preexistingArtifacts.has(name) && statSync(name).ctimeMs > staleBefore) {
+      continue
+    }
+    rmSync(name, { force: true })
+  } catch (error) {
+    console.warn(
+      `\x1b[33m[warn]\x1b[0m Could not remove build artifact ${name}: ${error}`,
+    )
+  }
+}
 
 if (proc.exitCode !== 0) {
   process.exit(proc.exitCode ?? 1)
