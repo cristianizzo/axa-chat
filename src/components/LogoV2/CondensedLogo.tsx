@@ -5,6 +5,7 @@ import { useMainLoopModel } from '../../hooks/useMainLoopModel.js';
 import { useTerminalSize } from '../../hooks/useTerminalSize.js';
 import { stringWidth } from '../../ink/stringWidth.js';
 import { Box, Text } from '../../ink.js';
+import { PRODUCT_NAME } from '../../constants/product.js';
 import { useAppState } from '../../state/AppState.js';
 import { getEffortSuffix } from '../../utils/effort.js';
 import { truncate } from '../../utils/format.js';
@@ -88,7 +89,7 @@ export function CondensedLogo() {
   }
   let t5;
   if ($[8] === Symbol.for("react.memo_cache_sentinel")) {
-    t5 = <Text bold={true}>AXA Chat</Text>;
+    t5 = <Text bold={true}>{PRODUCT_NAME}</Text>;
     $[8] = t5;
   } else {
     t5 = $[8];

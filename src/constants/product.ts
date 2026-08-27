@@ -1,3 +1,31 @@
+/**
+ * What this tool calls itself in the terminal.
+ *
+ * Only for text the user reads. Everything with a contract attached keeps its
+ * upstream name: the `CLAUDE_CODE_*` environment variables, the `~/.claude`
+ * config directory, `CLAUDE.md`, model ids, and the prompts sent to the model
+ * — renaming those breaks compatibility or changes model behaviour. Statements
+ * about Anthropic ("Claude Max", claude.ai, the Claude desktop app) also stay
+ * as they are, since they are true and this fork does not replace them.
+ */
+export const PRODUCT_NAME = 'AXA Chat'
+
+/**
+ * The assistant's name in running prose — "Ask axa to …".
+ *
+ * Lowercase to match the binary. Note this is still Anthropic-shaped in one
+ * respect: strings like "Claude is thinking" are wrong for a second reason
+ * when the active provider is Codex, DeepSeek, Kimi or Ollama, and belong to
+ * the provider-blind label work rather than here.
+ */
+export const ASSISTANT_NAME = 'axa'
+
+/**
+ * The command users type. `claude` stays as a second bin in package.json for
+ * anything that already invokes it, but help text names this one.
+ */
+export const BINARY_NAME = 'axa'
+
 export const PRODUCT_URL = 'https://claude.com/claude-code'
 
 // Claude Code Remote session URLs
