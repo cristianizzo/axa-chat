@@ -92,6 +92,13 @@ export type ProviderDescriptor<Id extends string = string> = {
   /** Shown in the `/login` and `/switch-account` pickers. */
   label: string
 
+  /**
+   * {@link label} for places that cannot afford its full length — currently the
+   * banner's connected-accounts line, which must fit every provider on one row
+   * of a 50-column panel. Omit when the label is already short enough.
+   */
+  shortLabel?: string
+
   /** One-line explanation of what logging in with this account gets you. */
   description: string
 

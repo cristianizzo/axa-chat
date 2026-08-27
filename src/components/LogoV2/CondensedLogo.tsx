@@ -10,15 +10,16 @@ import { useAppState } from '../../state/AppState.js';
 import { getEffortSuffix } from '../../utils/effort.js';
 import { truncate } from '../../utils/format.js';
 import { isFullscreenEnvEnabled } from '../../utils/fullscreen.js';
-import { formatModelAndBilling, getLogoDisplayData, truncatePath } from '../../utils/logoV2Utils.js';
+import { formatModelAndBilling, getLogoDisplayData, getProviderStatusLights, providerStatusKey, truncatePath } from '../../utils/logoV2Utils.js';
 import { renderModelSetting } from '../../utils/model/model.js';
 import { OffscreenFreeze } from '../OffscreenFreeze.js';
 import { AnimatedClawd } from './AnimatedClawd.js';
 import { Clawd } from './Clawd.js';
+import { ProviderStatusLights } from './ProviderStatusLights.js';
 import { GuestPassesUpsell, incrementGuestPassesSeenCount, useShowGuestPassesUpsell } from './GuestPassesUpsell.js';
 import { incrementOverageCreditUpsellSeenCount, OverageCreditUpsell, useShowOverageCreditUpsell } from './OverageCreditUpsell.js';
 export function CondensedLogo() {
-  const $ = _c(29);
+  const $ = _c(32);
   const {
     columns
   } = useTerminalSize();
@@ -80,6 +81,7 @@ export function CondensedLogo() {
   } = formatModelAndBilling(modelDisplayName + effortSuffix, billingType, textWidth);
   const cwdAvailableWidth = agentName ? textWidth - 1 - stringWidth(agentName) - 3 : textWidth;
   const truncatedCwd = truncatePath(cwd, Math.max(cwdAvailableWidth, 10));
+  const providerLights = getProviderStatusLights(textWidth);
   let t4;
   if ($[7] === Symbol.for("react.memo_cache_sentinel")) {
     t4 = isFullscreenEnvEnabled() ? <AnimatedClawd /> : <Clawd />;
@@ -101,6 +103,15 @@ export function CondensedLogo() {
     $[10] = t6;
   } else {
     t6 = $[10];
+  }
+  const providerLightsKey = providerStatusKey(providerLights);
+  let t6b;
+  if ($[29] !== providerLightsKey) {
+    t6b = providerLights.length > 0 && <ProviderStatusLights lights={providerLights} />;
+    $[29] = providerLightsKey;
+    $[30] = t6b;
+  } else {
+    t6b = $[30];
   }
   let t7;
   if ($[11] !== shouldSplit || $[12] !== truncatedBilling || $[13] !== truncatedModel) {
@@ -140,13 +151,14 @@ export function CondensedLogo() {
     t11 = $[22];
   }
   let t12;
-  if ($[23] !== t10 || $[24] !== t11 || $[25] !== t6 || $[26] !== t7 || $[27] !== t9) {
-    t12 = <OffscreenFreeze><Box flexDirection="row" gap={2} alignItems="center">{t4}<Box flexDirection="column">{t6}{t7}{t9}{t10}{t11}</Box></Box></OffscreenFreeze>;
+  if ($[23] !== t10 || $[24] !== t11 || $[25] !== t6 || $[26] !== t7 || $[27] !== t9 || $[31] !== t6b) {
+    t12 = <OffscreenFreeze><Box flexDirection="row" gap={2} alignItems="center">{t4}<Box flexDirection="column">{t6}{t6b}{t7}{t9}{t10}{t11}</Box></Box></OffscreenFreeze>;
     $[23] = t10;
     $[24] = t11;
     $[25] = t6;
     $[26] = t7;
     $[27] = t9;
+    $[31] = t6b;
     $[28] = t12;
   } else {
     t12 = $[28];

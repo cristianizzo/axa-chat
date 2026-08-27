@@ -4,7 +4,7 @@ import * as React from 'react';
 import { Box, Text, color } from '../../ink.js';
 import { useTerminalSize } from '../../hooks/useTerminalSize.js';
 import { stringWidth } from '../../ink/stringWidth.js';
-import { getLayoutMode, calculateLayoutDimensions, calculateOptimalLeftWidth, formatWelcomeMessage, truncatePath, getRecentActivitySync, getRecentReleaseNotesSync, getLogoDisplayData, getBannerOrganizationName } from '../../utils/logoV2Utils.js';
+import { getLayoutMode, calculateLayoutDimensions, calculateOptimalLeftWidth, formatWelcomeMessage, truncatePath, getRecentActivitySync, getRecentReleaseNotesSync, getLogoDisplayData, getBannerOrganizationName, getProviderStatusLights, formatProviderStatusLine, providerStatusKey } from '../../utils/logoV2Utils.js';
 import { truncate } from '../../utils/format.js';
 import { PRODUCT_NAME } from '../../constants/product.js';
 import { getDisplayPath } from '../../utils/file.js';
@@ -18,6 +18,7 @@ import { isDebugMode, isDebugToStdErr, getDebugLogPath } from 'src/utils/debug.j
 import { useEffect, useState } from 'react';
 import { getSteps, shouldShowProjectOnboarding, incrementProjectOnboardingSeenCount } from '../../projectOnboardingState.js';
 import { CondensedLogo } from './CondensedLogo.js';
+import { ProviderStatusLights } from './ProviderStatusLights.js';
 import { OffscreenFreeze } from '../OffscreenFreeze.js';
 import { checkForReleaseNotesSync } from '../../utils/releaseNotes.js';
 import { getDumpPromptsPath } from 'src/services/api/dumpPrompts.js';
@@ -46,7 +47,7 @@ import { useMainLoopModel } from '../../hooks/useMainLoopModel.js';
 import { renderModelSetting } from '../../utils/model/model.js';
 const LEFT_PANEL_MAX_WIDTH = 50;
 export function LogoV2() {
-  const $ = _c(94);
+  const $ = _c(95);
   const activities = getRecentActivitySync();
   const username = getGlobalConfig().oauthAccount?.displayName ?? "";
   const {
@@ -334,10 +335,13 @@ export function LogoV2() {
   const welcomeMessage_0 = formatWelcomeMessage(username);
   const organizationName = getBannerOrganizationName();
   const modelLine = organizationName ? `${modelDisplayName} · ${billingType} · ${organizationName}` : `${modelDisplayName} · ${billingType}`;
+  const providerLights = getProviderStatusLights(LEFT_PANEL_MAX_WIDTH);
+  const providerStatusLine = formatProviderStatusLine(providerLights);
+  const providerLightsKey = providerStatusKey(providerLights);
   const cwdAvailableWidth_0 = agentName ? LEFT_PANEL_MAX_WIDTH - 1 - stringWidth(agentName) - 3 : LEFT_PANEL_MAX_WIDTH;
   const truncatedCwd_0 = truncatePath(cwd, Math.max(cwdAvailableWidth_0, 10));
   const cwdLine = agentName ? `@${agentName} · ${truncatedCwd_0}` : truncatedCwd_0;
-  const optimalLeftWidth = calculateOptimalLeftWidth(welcomeMessage_0, cwdLine, modelLine);
+  const optimalLeftWidth = calculateOptimalLeftWidth(welcomeMessage_0, cwdLine, modelLine, providerStatusLine);
   const {
     leftWidth,
     rightWidth
@@ -398,10 +402,11 @@ export function LogoV2() {
     t21 = $[52];
   }
   let t22;
-  if ($[53] !== t20 || $[54] !== t21) {
-    t22 = <Box flexDirection="column" alignItems="center">{t20}{t21}</Box>;
+  if ($[53] !== t20 || $[54] !== t21 || $[94] !== providerLightsKey) {
+    t22 = <Box flexDirection="column" alignItems="center">{providerLights.length > 0 && <ProviderStatusLights lights={providerLights} />}{t20}{t21}</Box>;
     $[53] = t20;
     $[54] = t21;
+    $[94] = providerLightsKey;
     $[55] = t22;
   } else {
     t22 = $[55];
