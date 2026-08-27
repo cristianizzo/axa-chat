@@ -9,6 +9,7 @@ import { findToolByName, type Tools, type ToolUseContext } from '../../Tool.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
 import { createChildAbortController } from '../../utils/abortController.js'
+import { logError } from '../../utils/log.js'
 import { runToolUse } from './toolExecution.js'
 
 type MessageUpdate = {
@@ -62,12 +63,50 @@ export class StreamingToolExecutor {
   }
 
   /**
-   * Discards all pending and in-progress tools. Called when streaming fallback
-   * occurs and results from the failed attempt should be abandoned.
-   * Queued tools won't start, and in-progress tools will receive synthetic errors.
+   * Abandons this executor's work. Queued tools never start, and running ones
+   * are killed rather than left to finish.
+   *
+   * The kill is the point. Callers discard because the attempt that produced
+   * these tool calls is being retried — a streaming fallback, a model
+   * fallback, or a refusal — and the retry re-issues the same calls. The
+   * `discarded` flag alone is only read where a tool's generator yields, which
+   * a subprocess in the middle of a command never reaches, so without the
+   * abort a `git push` from the abandoned attempt runs to completion and then
+   * runs a second time on the retry — the first invisible, because its
+   * messages were tombstoned.
+   *
+   * Order matters: the per-tool abort listener in executeTool checks
+   * `discarded` to decide whether to re-raise the abort onto the query
+   * controller, and re-raising here would end the turn the retry needs.
+   * Aborting siblingAbortController on its own cannot end the turn, since
+   * createChildAbortController propagates parent to child only.
+   *
+   * The reason must not be 'interrupt': ShellCommand deliberately skips the
+   * kill for that one so a user-interrupted command can be backgrounded with
+   * its output intact.
+   *
+   * Only reaches tools that honour their signal. Bash is killed outright and
+   * WebFetch stops, but FileWriteTool and FileEditTool never read the signal,
+   * so a write already in progress still lands.
    */
   discard(): void {
     this.discarded = true
+    this.siblingAbortController.abort('discarded')
+
+    // getCompletedResults is the only place an ID is released, and it now
+    // returns early for every tool here, so release them directly. Nothing
+    // else clears this set in a local session (REPL.tsx owns it and never
+    // resets it), and a stranded ID latches the OSC 9;4 progress bar on for
+    // the rest of the session. Covers queued tools too — deleting an ID that
+    // was never added is a no-op, and processQueue is about to stop starting
+    // them anyway.
+    this.toolUseContext.setInProgressToolUseIDs(prev => {
+      const next = new Set(prev)
+      for (const tool of this.tools) {
+        next.delete(tool.id)
+      }
+      return next
+    })
   }
 
   /**
@@ -138,6 +177,12 @@ export class StreamingToolExecutor {
    * Process the queue, starting tools when concurrency conditions allow
    */
   private async processQueue(): Promise<void> {
+    // Running tools finishing after a discard would otherwise free the
+    // concurrency slot and let executeTool start the queued ones, each of
+    // which re-adds its ID (:290) only to be short-circuited into a synthetic
+    // error nobody ever yields — re-stranding the IDs discard() just cleared.
+    if (this.discarded) return
+
     for (const tool of this.tools) {
       if (tool.status !== 'queued') continue
 
@@ -395,7 +440,49 @@ export class StreamingToolExecutor {
       }
     }
 
-    const promise = collectResults()
+    // collectResults must not reject. runToolUse contains tool errors itself,
+    // so reaching here means the executor's own bookkeeping threw — today only
+    // a context modifier (above). A rejection would escape twice: unhandled
+    // through the `void promise.finally` below, and again out of the
+    // Promise.race in getRemainingResults, ending the turn. It would also
+    // leave the tool 'executing' forever, so hasUnfinishedTools never settles
+    // and the tool's ID is never released. Close the tool out instead.
+    const promise = collectResults().catch((error: unknown) => {
+      logError(error)
+      // A throw after the results were assembled (the modifier loop) must not
+      // add a second tool_result for the same tool_use_id — the API rejects
+      // that. Only synthesize one when the tool produced none.
+      const hasResult = messages.some(
+        message =>
+          message.type === 'user' &&
+          Array.isArray(message.message.content) &&
+          message.message.content.some(
+            block =>
+              block.type === 'tool_result' && block.tool_use_id === tool.id,
+          ),
+      )
+      if (!hasResult) {
+        const detail = error instanceof Error ? error.message : String(error)
+        messages.push(
+          createUserMessage({
+            content: [
+              {
+                type: 'tool_result',
+                content: `<tool_use_error>Error: ${detail}</tool_use_error>`,
+                is_error: true,
+                tool_use_id: tool.id,
+              },
+            ],
+            toolUseResult: `Error: ${detail}`,
+            sourceToolAssistantUUID: tool.assistantMessage.uuid,
+          }),
+        )
+      }
+      tool.results = messages
+      tool.contextModifiers = contextModifiers
+      tool.status = 'completed'
+      this.updateInterruptibleState()
+    })
     tool.promise = promise
 
     // Process more queue when done
