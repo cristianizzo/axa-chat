@@ -197,20 +197,6 @@ export function isCodexModelId(model: string): boolean {
 }
 
 /**
- * The display label for a listed Codex model.
- *
- * Both the picker and every display-name path read this, so a model cannot be
- * offered under one name and rendered under another.
- *
- * @param model - A model ID
- * @returns The label, or undefined for an unlisted (passthrough) model
- */
-export function getCodexModelLabel(model: string): string | undefined {
-  const m = model.toLowerCase()
-  return CODEX_MODELS.find(entry => entry.id === m)?.label
-}
-
-/**
  * Longest ID first, so a prefix never shadows a more specific model. No current
  * pair collides, but a bare 'gpt-5.6' alongside 'gpt-5.6-sol' would, and the
  * retired 'gpt-5.4'/'gpt-5.4-mini' pair did — matching in list order resolved

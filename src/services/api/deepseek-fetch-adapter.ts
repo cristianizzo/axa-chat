@@ -18,6 +18,8 @@
 
 import { DEEPSEEK_BASE_URL, DEEPSEEK_MAX_OUTPUT_TOKENS, DEEPSEEK_MESSAGES_PATH, DEFAULT_DEEPSEEK_MODEL } from '../../config/deepseek.js'
 import { logForDebugging } from '../../utils/debug.js'
+import { estimateTokenCountResponse } from './count-tokens-shim.js'
+import { createBackpressuredSseStream } from './sse-backpressure.js'
 import { logError } from '../../utils/log.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
 
@@ -280,77 +282,14 @@ async function translateOpenAIStreamToAnthropic(
   const messageId = `msg_deepseek_${Date.now()}`
   const encoder = new TextEncoder()
 
-  const pendingBuffer: Uint8Array[] = []
-  let bufferHead = 0
-  let streamController: ReadableStreamDefaultController | null = null
-  let upstreamReader: ReadableStreamDefaultReader<Uint8Array> | null = null
-  let finished = false
-  let notifyDrained: (() => void) | null = null
-  let notifyProduced: (() => void) | null = null
-
-  function isBuffered(): boolean {
-    return bufferHead < pendingBuffer.length
-  }
-
-  function drainBuffer(): void {
-    const controller = streamController
-    if (!controller) return
-    while (isBuffered() && controller.desiredSize !== null && controller.desiredSize > 0) {
-      controller.enqueue(pendingBuffer[bufferHead]!)
-      bufferHead++
-    }
-    if (!isBuffered()) {
-      pendingBuffer.length = 0
-      bufferHead = 0
-      notifyDrained?.()
-      notifyDrained = null
-    }
-  }
-
-  function safeEnqueue(chunk: Uint8Array): void {
-    if (finished || streamController?.desiredSize === null) return
-    pendingBuffer.push(chunk)
-    drainBuffer()
-    notifyProduced?.()
-    notifyProduced = null
-  }
-
-  async function waitForDrain(): Promise<void> {
-    if (finished || !isBuffered()) return
-    await new Promise<void>(resolve => {
-      notifyDrained = resolve
-    })
-  }
-
-  function releaseWaiters(): void {
-    notifyDrained?.()
-    notifyDrained = null
-    notifyProduced?.()
-    notifyProduced = null
-  }
-
-  const readable = new ReadableStream({
-    start(controller) {
-      streamController = controller
-      void pump()
-    },
-    pull() {
-      drainBuffer()
-      if (isBuffered() || finished) return undefined
-      return new Promise<void>(resolve => {
-        notifyProduced = resolve
-      })
-    },
-    async cancel(reason) {
-      finished = true
-      releaseWaiters()
-      try {
-        await upstreamReader?.cancel(reason)
-      } catch (err) {
-        logForDebugging(`DeepSeek stream cancel error: ${String(err)}`, { level: 'debug' })
-      }
-    },
-  })
+  // The pump below fills the sink; the sink hands bytes to the consumer as it
+  // asks for them. See sse-backpressure.ts for why the pump is started rather
+  // than awaited.
+  const { readable, sink } = createBackpressuredSseStream('DeepSeek', () =>
+    pump(),
+  )
+  const safeEnqueue = sink.enqueue
+  const waitForDrain = sink.waitForDrain
 
   async function pump(): Promise<void> {
     let contentBlockIndex = 0
@@ -456,7 +395,7 @@ async function translateOpenAIStreamToAnthropic(
       await finishStream({ inputTokens, outputTokens, hadToolCalls, errored: true, lengthTruncated: false })
       return
     }
-    upstreamReader = reader
+    sink.setUpstreamReader(reader)
 
     try {
       const decoder = new TextDecoder()
@@ -464,7 +403,7 @@ async function translateOpenAIStreamToAnthropic(
 
       while (true) {
         await waitForDrain()
-        if (finished) break
+        if (sink.done) break
 
         const { done, value } = await reader.read()
         if (done) break
@@ -616,7 +555,7 @@ async function translateOpenAIStreamToAnthropic(
       }))))
     } finally {
       reader.releaseLock()
-      upstreamReader = null
+      sink.setUpstreamReader(null)
     }
 
     // If the stream ended without a finish_reason (truncated connection), warn the user
@@ -666,11 +605,7 @@ async function translateOpenAIStreamToAnthropic(
       usage: { input_tokens: opts.inputTokens, output_tokens: opts.outputTokens },
     }))))
 
-    await waitForDrain()
-    if (finished) return
-    finished = true
-    releaseWaiters()
-    streamController?.close()
+    await sink.close()
   }
 
   return new Response(readable, {
@@ -804,30 +739,6 @@ async function aggregateStreamToMessage(
 
   message.content = blocks.filter(Boolean)
   return new Response(JSON.stringify(message), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  })
-}
-
-// ── Token count estimation ────────────────────────────────────────────────────
-
-/**
- * DeepSeek has no token-counting endpoint. Estimate from the serialised prompt
- * so the SDK's compaction logic stays functional.
- */
-async function estimateTokenCountResponse(
-  anthropicBody: Record<string, unknown>,
-): Promise<Response> {
-  const { roughTokenCountEstimation } = await import('../tokenEstimation.js')
-  const countable = JSON.stringify(
-    [anthropicBody.system ?? '', anthropicBody.messages ?? [], anthropicBody.tools ?? []],
-    function (this: unknown, key, value) {
-      const parent = this as { type?: unknown } | undefined
-      if (key === 'data' && parent?.type === 'base64') return undefined
-      return value
-    },
-  )
-  return new Response(JSON.stringify({ input_tokens: roughTokenCountEstimation(countable) }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   })
