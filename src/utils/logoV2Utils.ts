@@ -339,6 +339,16 @@ export type ProviderStatusLight = {
 export function getProviderStatusLights(
   availableWidth: number,
 ): ProviderStatusLight[] {
+  // Same guard the billing line opens with. CLAUDE_CODE_USE_BEDROCK/_VERTEX/
+  // _FOUNDRY beat the account in getAPIProvider(), so no account is serving
+  // this session and there is no `active` to emphasise. Showing the list with
+  // every entry unemphasised would read as "none of your logins is working"
+  // rather than "a cloud backend is configured", which is what the billing
+  // line already says.
+  if (!isActiveAccountServingRequests()) {
+    return []
+  }
+
   const active = getActiveAuthProvider()
   const lights = ALL_PROVIDERS.map(provider => ({
     id: provider.id,
