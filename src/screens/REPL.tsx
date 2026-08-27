@@ -2999,6 +2999,32 @@ export function REPL({
         setAbortController(null);
       }
 
+      // Reconcile the turn-scoped tool bookkeeping. Both of these are only
+      // ever cleared by the code that set them, so a tool that never reached
+      // its own teardown leaves them set for the rest of the session: a
+      // stranded ID keeps its row out of static rendering (Messages.tsx
+      // shouldRenderStatically) so Ink redraws it every frame and latches the
+      // OSC 9;4 progress bar on, and a stale-true ref makes the next
+      // legitimate turn abort itself on submit (handlePromptSubmit.ts).
+      //
+      // Placed here rather than in resetLoadingState(): onCancel() calls that
+      // immediately, before the abort has propagated, whereas by this point
+      // onQueryImpl has settled and the query generator is drained or
+      // returned, so nothing under this turn is still running. It also has to
+      // sit outside the queryGuard.end() branch above — onCancel calls
+      // forceEnd(), which bumps the generation so end() returns false, and
+      // cancellation is precisely the case that strands these.
+      //
+      // !isActive is the cancel+resubmit guard (same condition as the
+      // auto-restore below): a newer turn owns this state and is tracking its
+      // own tools, so clearing would kill its spinner. Its own finally
+      // reconciles it. Racing late deletions from abandoned generators are
+      // harmless — every other writer only removes.
+      if (!queryGuard.isActive) {
+        setInProgressToolUseIDs(prev => (prev.size === 0 ? prev : new Set()));
+        hasInterruptibleToolInProgressRef.current = false;
+      }
+
       // Auto-restore: if the user interrupted before any meaningful response
       // arrived, rewind the conversation and restore their prompt — same as
       // opening the message selector and picking the last message.
