@@ -11,6 +11,7 @@ import {
   runClaudeCodeImport,
   type ImportPlan,
   type ImportResult,
+  type PendingAction,
 } from '../../services/import/claudeCodeImport.js'
 import type { LocalJSXCommandCall } from '../../types/command.js'
 import { logError } from '../../utils/log.js'
@@ -36,12 +37,24 @@ function formatBytes(bytes: number): string {
 /** One line per thing the import would do, so the user confirms specifics. */
 function planSummary(plan: ImportPlan): string[] {
   const lines: string[] = []
-  const repairs = plan.files.filter(file => file.timestampOnly).length
-  const copies = plan.files.length - repairs
+  // Typed, so a mistyped action is a compile error rather than a silent zero.
+  const count = (action: PendingAction): number =>
+    plan.files.filter(file => file.action === action).length
+  const copies = count('copy')
+  const appends = count('append')
+  const repairs = count('repair-date')
   if (copies > 0) {
     lines.push(
-      `${copies} conversation file${copies === 1 ? '' : 's'} across ${plan.projects} project${plan.projects === 1 ? '' : 's'} (${formatBytes(plan.bytes)})`,
+      `${copies} new conversation file${copies === 1 ? '' : 's'} across ${plan.projects} project${plan.projects === 1 ? '' : 's'}`,
     )
+  }
+  if (appends > 0) {
+    lines.push(
+      `${appends} conversation${appends === 1 ? '' : 's'} to extend with messages added in Claude Code since the last import`,
+    )
+  }
+  if (copies > 0 || appends > 0) {
+    lines.push(`${formatBytes(plan.bytes)} to transfer in total`)
   }
   if (repairs > 0) {
     lines.push(
@@ -143,6 +156,11 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
         )
       }
       const plan = stage.plan
+      const nothingToDo =
+        plan.files.length === 0 &&
+        !plan.settings &&
+        plan.configKeys.length === 0 &&
+        !plan.credentials
       return (
         <Pane>
           <Box marginBottom={1}>
@@ -156,6 +174,24 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
               <Text key={line}>• {line}</Text>
             ))}
           </Box>
+          {plan.conflicts.length > 0 ? (
+            <Box marginTop={1} flexDirection="column">
+              <Text color="warning">
+                {plan.conflicts.length} conversation
+                {plan.conflicts.length === 1 ? '' : 's'} changed in both places
+                since the last import and will be left as {PRODUCT_NAME} has
+                {plan.conflicts.length === 1 ? ' it' : ' them'}:
+              </Text>
+              {plan.conflicts.slice(0, 3).map(conflict => (
+                <Text key={conflict.path} dimColor>
+                  {conflict.path}
+                </Text>
+              ))}
+              {plan.conflicts.length > 3 ? (
+                <Text dimColor>…and {plan.conflicts.length - 3} more</Text>
+              ) : null}
+            </Box>
+          ) : null}
           {plan.unreadable.length > 0 ? (
             <Box marginTop={1} flexDirection="column">
               <Text color="warning">
@@ -180,16 +216,22 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
             </Text>
           </Box>
           <Box marginTop={1}>
-            <Select
-              options={[
-                { label: 'Import', value: 'import' },
-                { label: 'Cancel', value: 'cancel' },
-              ]}
-              onChange={value =>
-                value === 'import' ? startImport(plan) : onDone()
-              }
-              onCancel={onDone}
-            />
+            {nothingToDo ? (
+              // Everything is already here; the screen exists only to show what
+              // could not be brought across.
+              <Text dimColor>Nothing left to import. (press esc to close)</Text>
+            ) : (
+              <Select
+                options={[
+                  { label: 'Import', value: 'import' },
+                  { label: 'Cancel', value: 'cancel' },
+                ]}
+                onChange={value =>
+                  value === 'import' ? startImport(plan) : onDone()
+                }
+                onCancel={onDone}
+              />
+            )}
           </Box>
         </Pane>
       )
@@ -214,9 +256,18 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
           {result.filesCopied > 0 ? (
             <Text>
               {result.filesCopied} file
-              {result.filesCopied === 1 ? '' : 's'} copied (
-              {formatBytes(result.bytesCopied)})
+              {result.filesCopied === 1 ? '' : 's'} copied
             </Text>
+          ) : null}
+          {result.filesAppended > 0 ? (
+            <Text>
+              {result.filesAppended} conversation
+              {result.filesAppended === 1 ? '' : 's'} extended with newer
+              messages
+            </Text>
+          ) : null}
+          {result.bytesCopied > 0 ? (
+            <Text>{formatBytes(result.bytesCopied)} transferred</Text>
           ) : null}
           {result.filesRepaired > 0 ? (
             <Text>
@@ -225,8 +276,19 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
                 : `${result.filesRepaired} files restored to their original dates`}
             </Text>
           ) : null}
-          {result.filesCopied === 0 && result.filesRepaired === 0 ? (
+          {result.filesCopied === 0 &&
+          result.filesAppended === 0 &&
+          result.filesRepaired === 0 &&
+          result.conflicts.length === 0 &&
+          result.failures.length === 0 ? (
             <Text>No conversation files needed copying.</Text>
+          ) : null}
+          {result.conflicts.length > 0 ? (
+            <Text color="warning">
+              {result.conflicts.length} conversation
+              {result.conflicts.length === 1 ? '' : 's'} left untouched — changed
+              in both places since the last import
+            </Text>
           ) : null}
           {result.settingsImported ? <Text>settings.json imported</Text> : null}
           {result.configKeysImported.length > 0 ? (
