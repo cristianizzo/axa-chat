@@ -12,6 +12,9 @@ import { gt } from './semver.js'
 
 const MAX_RELEASE_NOTES_SHOWN = 5
 
+/** How long to wait before re-checking a repo that published no changelog. */
+const CHANGELOG_RETRY_INTERVAL_MS = 24 * 60 * 60 * 1000
+
 /**
  * We fetch the changelog from GitHub instead of bundling it with the build.
  *
@@ -129,6 +132,18 @@ export async function fetchAndStoreChangelog(): Promise<void> {
     return
   }
 
+  // checkForReleaseNotes re-fetches whenever the cache is empty, so a repo
+  // with no CHANGELOG.md would hit the network on every single start, for
+  // ever. Back that case off to once a day. Only the empty case is throttled:
+  // a cache that exists is refreshed as eagerly as before, so a real changelog
+  // still updates the moment the version changes.
+  if (!(await getStoredChangelog())) {
+    const lastFetched = getGlobalConfig().changelogLastFetched ?? 0
+    if (Date.now() - lastFetched < CHANGELOG_RETRY_INTERVAL_MS) {
+      return
+    }
+  }
+
   // 404 is an expected answer, not a failure: the repo need not publish a
   // CHANGELOG.md, and letting axios throw would log an error on every start
   // for a file whose absence is a valid state. Anything else still throws and
@@ -136,6 +151,12 @@ export async function fetchAndStoreChangelog(): Promise<void> {
   const response = await axios.get(RAW_CHANGELOG_URL, {
     validateStatus: status => status === 200 || status === 404,
   })
+  if (response.status === 404) {
+    // Record the attempt so the throttle above can see it. Without this the
+    // back-off has nothing to measure from and never engages.
+    recordChangelogFetchAttempt()
+    return
+  }
   if (response.status === 200) {
     const changelogContent = response.data
 
@@ -154,13 +175,17 @@ export async function fetchAndStoreChangelog(): Promise<void> {
     await writeFile(cachePath, changelogContent, { encoding: 'utf-8' })
     changelogMemoryCache = changelogContent
 
-    // Update timestamp in config
-    const changelogLastFetched = Date.now()
-    saveGlobalConfig(current => ({
-      ...current,
-      changelogLastFetched,
-    }))
+    recordChangelogFetchAttempt()
   }
+}
+
+/** Stamp the last fetch attempt, which is what the retry back-off reads. */
+function recordChangelogFetchAttempt(): void {
+  const changelogLastFetched = Date.now()
+  saveGlobalConfig(current => ({
+    ...current,
+    changelogLastFetched,
+  }))
 }
 
 /**

@@ -8,6 +8,7 @@ import { useTimeout } from '../hooks/useTimeout.js'
 import { Box, Text } from '../ink.js'
 import { useKeybinding } from '../keybindings/useKeybinding.js'
 import { getSSLErrorHint } from '../services/api/errorUtils.js'
+import { getErrnoCode } from './errors.js'
 import { getUserAgent } from './http.js'
 import { logError } from './log.js'
 
@@ -46,7 +47,7 @@ async function checkEndpoints(): Promise<PreflightCheckResult> {
         const sslHint = getSSLErrorHint(error)
         return {
           success: false,
-          error: `Failed to connect to ${hostname}: ${error instanceof Error ? (error as ErrnoException).code || error.message : String(error)}`,
+          error: `Failed to connect to ${hostname}: ${error instanceof Error ? getErrnoCode(error) || error.message : String(error)}`,
           sslHint: sslHint ?? undefined,
         }
       }
@@ -73,7 +74,7 @@ async function checkEndpoints(): Promise<PreflightCheckResult> {
 
     return {
       success: false,
-      error: `Connectivity check error: ${error instanceof Error ? (error as ErrnoException).code || error.message : String(error)}`,
+      error: `Connectivity check error: ${error instanceof Error ? getErrnoCode(error) || error.message : String(error)}`,
     }
   }
 }
