@@ -1,4 +1,5 @@
 import { toJSONSchema } from 'zod/v4'
+import { BINARY_NAME, CONFIG_DIR_NAME } from '../../constants/product.js'
 import { SettingsSchema } from '../../utils/settings/types.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { registerBundledSkill } from '../bundledSkills.js'
@@ -18,7 +19,7 @@ Choose the appropriate file based on scope:
 
 | File | Scope | Git | Use For |
 |------|-------|-----|---------|
-| \`~/.claude/settings.json\` | Global | N/A | Personal preferences for all projects |
+| \`~/${CONFIG_DIR_NAME}/settings.json\` | Global | N/A | Personal preferences for all projects |
 | \`.claude/settings.json\` | Project | Commit | Team-wide hooks, permissions, plugins |
 | \`.claude/settings.local.json\` | Project | Gitignore | Personal overrides for this project |
 
@@ -235,7 +236,7 @@ Hooks can return JSON to control behavior:
       "matcher": "Bash",
       "hooks": [{
         "type": "command",
-        "command": "jq -r '.tool_input.command' >> ~/.claude/bash-log.txt"
+        "command": "jq -r '.tool_input.command' >> ~/${CONFIG_DIR_NAME}/bash-log.txt"
       }]
     }]
   }
@@ -434,12 +435,12 @@ User: "Set DEBUG=true"
 ## Troubleshooting Hooks
 
 If a hook isn't running:
-1. **Check the settings file** - Read ~/.claude/settings.json or .claude/settings.json
+1. **Check the settings file** - Read ~/${CONFIG_DIR_NAME}/settings.json or .claude/settings.json
 2. **Verify JSON syntax** - Invalid JSON silently fails
 3. **Check the matcher** - Does it match the tool name? (e.g., "Bash", "Write", "Edit")
 4. **Check hook type** - Is it "command", "prompt", or "agent"?
 5. **Test the command** - Run the hook command manually to see if it works
-6. **Use --debug** - Run \`claude --debug\` to see hook execution logs
+6. **Use --debug** - Run \`${BINARY_NAME} --debug\` to see hook execution logs
 `
 
 export function registerUpdateConfigSkill(): void {

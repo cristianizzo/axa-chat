@@ -35,6 +35,7 @@ import {
   logEvent,
 } from 'src/services/analytics/index.js'
 import { getMaxVersion, shouldSkipVersion } from '../autoUpdater.js'
+import { BINARY_NAME } from '../../constants/product.js'
 import { registerCleanup } from '../cleanupRegistry.js'
 import { getGlobalConfig, saveGlobalConfig } from '../config.js'
 import { logForDebugging } from '../debug.js'
@@ -44,7 +45,7 @@ import { envDynamic } from '../envDynamic.js'
 import { isEnvTruthy } from '../envUtils.js'
 import { errorMessage, getErrnoCode, isENOENT, toError } from '../errors.js'
 import { execFileNoThrowWithCwd } from '../execFileNoThrow.js'
-import { getShellType } from '../localInstaller.js'
+import { getLocalInstallDir, getShellType } from '../localInstaller.js'
 import * as lockfile from '../lockfile.js'
 import { logError } from '../log.js'
 import { gt, gte } from '../semver.js'
@@ -108,23 +109,40 @@ export function getPlatform(): string {
   return `${os}-${arch}`
 }
 
+/**
+ * Name of the binary *as published*. Part of the download URL layout
+ * (`${baseUrl}/${version}/${platform}/${binaryName}`), so it is a remote
+ * contract and stays upstream's — unlike the name we install it under.
+ */
 export function getBinaryName(platform: string): string {
   return platform.startsWith('win32') ? 'claude.exe' : 'claude'
 }
 
+/**
+ * Name of the binary *as installed on this machine*, plus the directories that
+ * hold its versions, staging and locks.
+ *
+ * Ours, not upstream's: installing as `~/.local/bin/claude` would overwrite a
+ * Claude Code native install and hand it our version manager, which is the
+ * same collision the config dir and keychain entry already avoid.
+ */
+function getInstalledBinaryName(platform: string): string {
+  return platform.startsWith('win32') ? `${BINARY_NAME}.exe` : BINARY_NAME
+}
+
 function getBaseDirectories() {
   const platform = getPlatform()
-  const executableName = getBinaryName(platform)
+  const executableName = getInstalledBinaryName(platform)
 
   return {
     // Data directories (permanent storage)
-    versions: join(getXDGDataHome(), 'claude', 'versions'),
+    versions: join(getXDGDataHome(), BINARY_NAME, 'versions'),
 
     // Cache directories (can be deleted)
-    staging: join(getXDGCacheHome(), 'claude', 'staging'),
+    staging: join(getXDGCacheHome(), BINARY_NAME, 'staging'),
 
     // State directories
-    locks: join(getXDGStateHome(), 'claude', 'locks'),
+    locks: join(getXDGStateHome(), BINARY_NAME, 'locks'),
 
     // User bin
     executable: join(getUserBinDir(), executableName),
@@ -1688,8 +1706,10 @@ export async function cleanupNpmInstallations(): Promise<{
     }
   }
 
-  // Check for local installation at ~/.claude/local
-  const localInstallDir = join(homedir(), '.claude', 'local')
+  // Our own local installation, under the config home dir. Must be derived
+  // rather than hardcoded to `~/.claude/local`: this path gets `rm -r`'d, and
+  // the literal would delete a directory belonging to a Claude Code install.
+  const localInstallDir = getLocalInstallDir()
 
   try {
     await rm(localInstallDir, { recursive: true })

@@ -1,5 +1,4 @@
 import memoize from 'lodash-es/memoize.js'
-import { homedir } from 'os'
 import { join } from 'path'
 import { fileSuffixForOauthConfig } from '../constants/oauth.js'
 import { isRunningWithBun } from './bundledMode.js'
@@ -21,8 +20,11 @@ export const getGlobalClaudeFile = memoize((): string => {
     return join(getClaudeConfigHomeDir(), '.config.json')
   }
 
-  const filename = `.claude${fileSuffixForOauthConfig()}.json`
-  return join(process.env.CLAUDE_CONFIG_DIR || homedir(), filename)
+  // Inside the config dir, not beside it. Upstream puts this at
+  // `~/.claude.json`; writing there would mutate a Claude Code install's own
+  // config, which axa must never touch.
+  const filename = `config${fileSuffixForOauthConfig()}.json`
+  return join(getClaudeConfigHomeDir(), filename)
 })
 
 const hasInternetAccess = memoize(async (): Promise<boolean> => {

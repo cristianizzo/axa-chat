@@ -8,6 +8,7 @@ import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
 } from './analytics/index.js'
+import { PRODUCT_NAME } from '../constants/product.js'
 
 export type NotificationOptions = {
   message: string
@@ -35,7 +36,7 @@ export async function sendNotification(
   })
 }
 
-const DEFAULT_TITLE = 'Claude Code'
+const DEFAULT_TITLE = PRODUCT_NAME
 
 async function sendToChannel(
   channel: string,

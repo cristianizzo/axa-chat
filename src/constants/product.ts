@@ -2,13 +2,44 @@
  * What this tool calls itself in the terminal.
  *
  * Only for text the user reads. Everything with a contract attached keeps its
- * upstream name: the `CLAUDE_CODE_*` environment variables, the `~/.claude`
- * config directory, `CLAUDE.md`, model ids, and the prompts sent to the model
- * — renaming those breaks compatibility or changes model behaviour. Statements
- * about Anthropic ("Claude Max", claude.ai, the Claude desktop app) also stay
- * as they are, since they are true and this fork does not replace them.
+ * upstream name: the `CLAUDE_CODE_*` environment variables, `CLAUDE.md`, model
+ * ids, and the prompts sent to the model — renaming those breaks compatibility
+ * or changes model behaviour. Statements about Anthropic ("Claude Max",
+ * claude.ai, the Claude desktop app) also stay as they are, since they are true
+ * and this fork does not replace them.
+ *
+ * The home config directory is the one exception: see CONFIG_DIR_NAME.
  */
 export const PRODUCT_NAME = 'AXA Chat'
+
+/**
+ * The per-user config directory, under `$HOME`.
+ *
+ * Deliberately *not* `.claude`. axa owns its storage outright: it starts empty
+ * on a fresh install and never reads or writes `~/.claude`, so an existing
+ * Claude Code install keeps working untouched alongside it. Existing history is
+ * pulled across only by an explicit, re-runnable `/import-conversations`.
+ *
+ * Note this is the *home* directory only. Project-local `.claude/` (CLAUDE.md,
+ * settings.local.json, agents, skills committed to a repo) keeps its upstream
+ * name — those files are shared with collaborators and read by other tools.
+ */
+export const CONFIG_DIR_NAME = '.axa'
+
+/**
+ * Base name of the macOS Keychain entry holding credentials.
+ *
+ * Must differ from Claude Code's `Claude Code` for the same reason
+ * CONFIG_DIR_NAME differs from `.claude`, and here the consequence is sharper:
+ * the service name only varies by config dir when CLAUDE_CONFIG_DIR is set
+ * (see getMacOsKeychainStorageServiceName), so keeping the upstream base would
+ * make both installs read and write one credential — and an OAuth refresh from
+ * one rotates the token out from under the other, logging it out.
+ *
+ * Credentials come across through `/import-conversations`, which copies rather
+ * than moves, leaving the Claude Code entry intact.
+ */
+export const KEYCHAIN_SERVICE_NAME = 'AXA Chat'
 
 /**
  * The assistant's name in running prose — "Ask axa to …".

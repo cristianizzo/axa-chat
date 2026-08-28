@@ -2,6 +2,7 @@ import { homedir } from 'os';
 import { basename, join, sep } from 'path';
 import React, { type ReactNode } from 'react';
 import { getOriginalCwd } from '../../../bootstrap/state.js';
+import { ASSISTANT_NAME, CONFIG_DIR_NAME } from '../../../constants/product.js';
 import { Text } from '../../../ink.js';
 import { getShortcutDisplay } from '../../../keybindings/shortcutFormat.js';
 import type { ToolPermissionContext } from '../../../Tool.js';
@@ -27,13 +28,17 @@ export function isInClaudeFolder(filePath: string): boolean {
 }
 
 /**
- * Check if a path is within the global ~/.claude/ folder.
- * This is used to determine whether to show the special ".claude folder" permission option
- * for files in the user's home directory.
+ * Check if a path is within our own home config folder.
+ * This is used to determine whether to show the special config-folder permission
+ * option for files in the user's home directory.
+ *
+ * Kept in step with GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN: this decides
+ * whether the option is offered, that constant is the rule it writes, so a
+ * mismatch would offer an option that grants nothing.
  */
 export function isInGlobalClaudeFolder(filePath: string): boolean {
   const absolutePath = expandPath(filePath);
-  const globalClaudeFolderPath = join(homedir(), '.claude');
+  const globalClaudeFolderPath = join(homedir(), CONFIG_DIR_NAME);
   const normalizedAbsolutePath = normalizeCaseForComparison(absolutePath);
   const normalizedGlobalClaudeFolderPath = normalizeCaseForComparison(globalClaudeFolderPath);
   return normalizedAbsolutePath.startsWith(normalizedGlobalClaudeFolderPath + sep.toLowerCase()) || normalizedAbsolutePath.startsWith(normalizedGlobalClaudeFolderPath + '/');
@@ -104,7 +109,7 @@ export function getFilePermissionOptions({
   // persisted permission rules.
   if ((inClaudeFolder || inGlobalClaudeFolder) && operationType !== 'read') {
     options.push({
-      label: 'Yes, and allow Claude to edit its own settings for this session',
+      label: `Yes, and allow ${ASSISTANT_NAME} to edit its own settings for this session`,
       value: 'yes-claude-folder',
       option: {
         type: 'accept-session',

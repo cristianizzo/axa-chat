@@ -176,6 +176,7 @@ import { isFirstPartyAnthropicBaseUrl } from './utils/model/providers.js'
 import env from './commands/env/index.js'
 import exit from './commands/exit/index.js'
 import exportCommand from './commands/export/index.js'
+import importConversations from './commands/import-conversations/index.js'
 import model from './commands/model/index.js'
 import tag from './commands/tag/index.js'
 import outputStyle from './commands/output-style/index.js'
@@ -338,6 +339,7 @@ const COMMANDS = memoize((): Command[] => [
   privacySettings,
   hooks,
   exportCommand,
+  importConversations,
   sandboxToggle,
   ...(!isUsing3PServices() ? [logout, login(), switchAccount] : []),
   passes,

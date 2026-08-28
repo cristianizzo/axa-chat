@@ -7,6 +7,7 @@ import { getGlobalConfig, saveGlobalConfig } from '../utils/config.js';
 import { env } from '../utils/env.js';
 import { getTerminalIdeType, type IDEExtensionInstallationStatus, isJetBrainsIde, toIDEDisplayName } from '../utils/ide.js';
 import { Dialog } from './design-system/Dialog.js';
+import { PRODUCT_NAME } from '../constants/product.js';
 interface Props {
   onDone: () => void;
   installationStatus: IDEExtensionInstallationStatus | null;
@@ -70,7 +71,7 @@ export function IdeOnboardingDialog(t0) {
   }
   let t6;
   if ($[8] !== ideName) {
-    t6 = <>{t5}<Text>Welcome to Claude Code for {ideName}</Text></>;
+    t6 = <>{t5}<Text>Welcome to {PRODUCT_NAME} for {ideName}</Text></>;
     $[8] = ideName;
     $[9] = t6;
   } else {
@@ -100,7 +101,7 @@ export function IdeOnboardingDialog(t0) {
   }
   let t11;
   if ($[13] === Symbol.for("react.memo_cache_sentinel")) {
-    t11 = <Text>• Review Claude Code's changes{" "}{t10}{" "}<Text color="diffRemovedWord">-22</Text> in the comfort of your IDE</Text>;
+    t11 = <Text>• Review {PRODUCT_NAME}'s changes{" "}{t10}{" "}<Text color="diffRemovedWord">-22</Text> in the comfort of your IDE</Text>;
     $[13] = t11;
   } else {
     t11 = $[13];

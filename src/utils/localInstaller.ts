@@ -3,7 +3,7 @@
  */
 
 import { access, chmod, writeFile } from 'fs/promises'
-import { join } from 'path'
+import { join, sep } from 'path'
 import { type ReleaseChannel, saveGlobalConfig } from './config.js'
 import { getClaudeConfigHomeDir } from './envUtils.js'
 import { getErrnoCode } from './errors.js'
@@ -16,7 +16,7 @@ import { jsonStringify } from './slowOperations.js'
 // Evaluating at module scope would capture the value before entrypoints like
 // hfi.tsx get a chance to set CLAUDE_CONFIG_DIR in main(), and would also
 // populate the memoize cache with that stale value for all 150+ other callers.
-function getLocalInstallDir(): string {
+export function getLocalInstallDir(): string {
   return join(getClaudeConfigHomeDir(), 'local')
 }
 export function getLocalClaudePath(): string {
@@ -28,7 +28,9 @@ export function getLocalClaudePath(): string {
  */
 export function isRunningFromLocalInstallation(): boolean {
   const execPath = process.argv[1] || ''
-  return execPath.includes('/.claude/local/node_modules/')
+  // `sep`, not a literal '/': both sides have to agree on the separator or this
+  // never matches on Windows, where join() produces backslashes.
+  return execPath.startsWith(join(getLocalInstallDir(), 'node_modules') + sep)
 }
 
 /**
