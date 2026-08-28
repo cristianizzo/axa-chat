@@ -59,7 +59,11 @@ function projectFlags(project: ProjectSummary): string[] {
 function ProjectRow({ project }: { project: ProjectSummary }): React.ReactNode {
   const flags = projectFlags(project)
   return (
-    <Box>
+    // Not a Box. Select renders an option's label as the children of a Text
+    // (select.tsx), and a Box there crashes Ink's reconciler with
+    // "<Box> can't be nested inside <Text>". Text fragments nest fine, so the
+    // row stays as Text all the way down.
+    <>
       <Text>{displayName(project)}</Text>
       <Text dimColor>
         {'  '}
@@ -74,7 +78,7 @@ function ProjectRow({ project }: { project: ProjectSummary }): React.ReactNode {
           {flags.join(', ')}
         </Text>
       ) : null}
-    </Box>
+    </>
   )
 }
 
