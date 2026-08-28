@@ -566,6 +566,19 @@ class Project {
   private activeDrain: Promise<void> | null = null
   private FLUSH_INTERVAL_MS = 100
   private readonly MAX_CHUNK_BYTES = 100 * 1024 * 1024
+  /**
+   * Transcript bytes appended to the session file since the last
+   * reAppendSessionMetadata(). Drives the mid-session re-append that keeps
+   * custom-title/tag inside readLiteMetadata's tail window.
+   */
+  private bytesSinceMetadataReAppend = 0
+  /**
+   * Re-append once half the tail window has been written. Half, not all:
+   * the check runs after a batch lands, and a single batch can carry a
+   * multi-hundred-KB tool result, so waiting for the full window would let
+   * one write straddle it.
+   */
+  private readonly METADATA_REAPPEND_INTERVAL_BYTES = LITE_READ_BUF_SIZE / 2
 
   constructor() {}
 
@@ -577,6 +590,7 @@ class Project {
     this.flushTimer = null
     this.activeDrain = null
     this.writeQueues = new Map()
+    this.bytesSinceMetadataReAppend = 0
   }
 
   private incrementPendingWrites(): void {
@@ -640,6 +654,12 @@ class Project {
       await mkdir(dirname(filePath), { recursive: true, mode: 0o700 })
       await fsAppendFile(filePath, data, { mode: 0o600 })
     }
+    if (filePath === this.sessionFile) {
+      // Bytes, not string length: a UTF-16 length under-counts multi-byte
+      // characters, which would push the re-append past the window it exists
+      // to stay inside.
+      this.bytesSinceMetadataReAppend += Buffer.byteLength(data)
+    }
   }
 
   private async drainWriteQueue(): Promise<void> {
@@ -683,6 +703,29 @@ class Project {
         this.writeQueues.delete(filePath)
       }
     }
+
+    // Keep the title/tag inside the tail window while the session runs, not
+    // just at compaction and exit. readLiteMetadata only scans the last
+    // LITE_READ_BUF_SIZE bytes, so once enough transcript is appended after a
+    // /rename the custom-title entry falls out of it — and then
+    // `--resume "<title>"` finds nothing and silently drops to the picker.
+    // Exit cleanup re-appends, which hid this behind clean shutdowns; a crash,
+    // a kill, or simply reading the file from another process mid-session
+    // leaves the title unfindable. Only titled/tagged sessions pay the sync
+    // tail read: an untitled session has nothing to keep alive.
+    if (
+      this.bytesSinceMetadataReAppend >= this.METADATA_REAPPEND_INTERVAL_BYTES &&
+      (this.currentSessionTitle || this.currentSessionTag)
+    ) {
+      try {
+        this.reAppendSessionMetadata()
+      } catch {
+        // Best-effort, same as the exit-cleanup call — a failed re-append
+        // must not take the transcript writer down with it. The counter was
+        // already reset on entry, so a failure costs one interval, not a
+        // retry on every drain.
+      }
+    }
   }
 
   resetSessionFile(): void {
@@ -719,6 +762,11 @@ class Project {
    * external-writer concern — their caches are authoritative.
    */
   reAppendSessionMetadata(skipTitleRefresh = false): void {
+    // Reset ahead of the guards, so a call that bails still re-arms the
+    // drain-side throttle. Leaving the counter above the threshold would
+    // make every subsequent drain retry a call that just bailed again.
+    this.bytesSinceMetadataReAppend = 0
+
     if (!this.sessionFile) return
     const sessionId = getSessionId() as UUID
     if (!sessionId) return
