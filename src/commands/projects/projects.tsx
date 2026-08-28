@@ -234,6 +234,7 @@ function ProjectsScreen({ onDone }: Props): React.ReactNode {
 
     case 'detail': {
       const { project, conversations } = view
+      const shownCount = Math.min(conversations.length, SHOWN_CONVERSATIONS)
       return (
         <Pane>
           <Box marginBottom={1}>
@@ -280,12 +281,14 @@ function ProjectsScreen({ onDone }: Props): React.ReactNode {
                 </Box>
               ))
             )}
-            {project.conversations > SHOWN_CONVERSATIONS ? (
-              // Counted from the project, not from what was loaded: the read is
-              // capped, so a project with 672 conversations would otherwise
-              // claim to have 100.
+            {conversations.length > 0 &&
+            project.conversations > shownCount ? (
+              // Counted from the project against what was actually rendered:
+              // the read is capped, so a project with 672 conversations would
+              // otherwise claim to have 100, and fewer rows than the cap are
+              // possible when some are unreadable.
               <Text dimColor>
-                …and {project.conversations - SHOWN_CONVERSATIONS} more
+                …and {project.conversations - shownCount} more
               </Text>
             ) : null}
           </Box>

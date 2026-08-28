@@ -259,8 +259,11 @@ async function exists(path: string): Promise<boolean> {
   try {
     await stat(path)
     return true
-  } catch {
-    return false
+  } catch (error) {
+    // Only ENOENT means gone. A folder we are merely not allowed to look at is
+    // still there, and labelling it "folder deleted" would be a lie the user
+    // might act on.
+    return getErrnoCode(error) !== 'ENOENT'
   }
 }
 
@@ -323,7 +326,11 @@ export async function listProjectConversations(
   dir: string,
 ): Promise<SessionInfo[]> {
   const candidates = await listCandidates(dir, true)
-  candidates.sort((a, b) => b.mtime - a.mtime)
+  // Session id breaks mtime ties, matching listSessionsImpl. Without it, two
+  // transcripts written in the same second can swap places between renders.
+  candidates.sort(
+    (a, b) => b.mtime - a.mtime || b.sessionId.localeCompare(a.sessionId),
+  )
 
   // readSessionLite holds a descriptor per file, so this is batched rather than
   // opening a hundred at once.
@@ -340,7 +347,10 @@ export async function listProjectConversations(
     },
   )
 
-  return sessions.sort((a, b) => b.lastModified - a.lastModified)
+  return sessions.sort(
+    (a, b) =>
+      b.lastModified - a.lastModified || b.sessionId.localeCompare(a.sessionId),
+  )
 }
 
 /**
