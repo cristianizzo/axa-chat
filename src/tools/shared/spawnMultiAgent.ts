@@ -18,7 +18,6 @@ import type { ToolUseContext } from '../../Tool.js'
 import type { InProcessTeammateTaskState } from '../../tasks/InProcessTeammateTask/types.js'
 import { formatAgentId } from '../../utils/agentId.js'
 import { quote } from '../../utils/bash/shellQuote.js'
-import { isInBundledMode } from '../../utils/bundledMode.js'
 import { getGlobalConfig } from '../../utils/config.js'
 import { getCwd } from '../../utils/cwd.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -40,9 +39,9 @@ import { isPaneBackend } from '../../utils/swarm/backends/types.js'
 import {
   SWARM_SESSION_NAME,
   TEAM_LEAD_NAME,
-  TEAMMATE_COMMAND_ENV_VAR,
   TMUX_COMMAND,
 } from '../../utils/swarm/constants.js'
+import { getTeammateCommand } from '../../utils/swarm/spawnUtils.js'
 import { It2SetupPrompt } from '../../utils/swarm/It2SetupPrompt.js'
 import { startInProcessTeammate } from '../../utils/swarm/inProcessRunner.js'
 import {
@@ -183,18 +182,6 @@ async function ensureSession(sessionName: string): Promise<void> {
       )
     }
   }
-}
-
-/**
- * Gets the command to spawn a teammate.
- * For native builds (compiled binaries), use process.execPath.
- * For non-native (node/bun running a script), use process.argv[1].
- */
-function getTeammateCommand(): string {
-  if (process.env[TEAMMATE_COMMAND_ENV_VAR]) {
-    return process.env[TEAMMATE_COMMAND_ENV_VAR]
-  }
-  return isInBundledMode() ? process.execPath : process.argv[1]!
 }
 
 /**
