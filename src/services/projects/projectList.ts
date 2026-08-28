@@ -65,6 +65,37 @@ export type ProjectSummary = {
   isCurrent: boolean
 }
 
+/**
+ * How many file operations to keep in flight.
+ *
+ * The scan is recursive and fans out at every directory, so an unbounded
+ * `Promise.all` would put the whole store — thousands of files here — in flight
+ * at once and can exhaust the process's file descriptors (EMFILE). Wide enough
+ * to keep the disk busy, narrow enough that it cannot.
+ */
+const SCAN_CONCURRENCY = 16
+
+/** Like `Promise.all(items.map(fn))`, but with at most `limit` running. */
+async function mapWithConcurrency<T>(
+  items: readonly T[],
+  fn: (item: T) => Promise<void>,
+  limit = SCAN_CONCURRENCY,
+): Promise<void> {
+  let next = 0
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      for (;;) {
+        const index = next++
+        const item = items[index]
+        if (item === undefined) return
+        await fn(item)
+      }
+    },
+  )
+  await Promise.all(workers)
+}
+
 type Walked = {
   bytes: number
   lastUsed: number
@@ -92,37 +123,35 @@ async function walkProject(dir: string): Promise<Walked> {
       return
     }
 
-    await Promise.all(
-      entries.map(async entry => {
-        const path = join(current, entry.name)
-        if (entry.isDirectory()) {
-          await visit(path, depth + 1)
-          return
-        }
-        if (!entry.isFile()) return
+    await mapWithConcurrency(entries, async entry => {
+      const path = join(current, entry.name)
+      if (entry.isDirectory()) {
+        await visit(path, depth + 1)
+        return
+      }
+      if (!entry.isFile()) return
 
-        let fileStat
-        try {
-          fileStat = await stat(path)
-        } catch {
-          return
-        }
-        walked.bytes += fileStat.size
-        const mtime = fileStat.mtime.getTime()
-        if (mtime > walked.lastUsed) walked.lastUsed = mtime
-        // Only `<uuid>.jsonl` at the top level is a conversation — the same
-        // test listCandidates applies. Counting every .jsonl would inflate the
-        // count with stray files and could hand readProjectPath a `cwd` taken
-        // from something that is not a transcript at all.
-        if (
-          depth === 0 &&
-          entry.name.endsWith('.jsonl') &&
-          validateUuid(entry.name.slice(0, -'.jsonl'.length))
-        ) {
-          walked.transcripts.push({ path, mtime })
-        }
-      }),
-    )
+      let fileStat
+      try {
+        fileStat = await stat(path)
+      } catch {
+        return
+      }
+      walked.bytes += fileStat.size
+      const mtime = fileStat.mtime.getTime()
+      if (mtime > walked.lastUsed) walked.lastUsed = mtime
+      // Only `<uuid>.jsonl` at the top level is a conversation — the same
+      // test listCandidates applies. Counting every .jsonl would inflate the
+      // count with stray files and could hand readProjectPath a `cwd` taken
+      // from something that is not a transcript at all.
+      if (
+        depth === 0 &&
+        entry.name.endsWith('.jsonl') &&
+        validateUuid(entry.name.slice(0, -'.jsonl'.length))
+      ) {
+        walked.transcripts.push({ path, mtime })
+      }
+    })
   }
 
   await visit(dir, 0)
@@ -214,10 +243,15 @@ export async function listProjects(): Promise<ProjectSummary[]> {
     return []
   }
 
-  const summaries = await Promise.all(
-    entries
-      .filter(entry => entry.isDirectory())
-      .map(entry => summarize(projectsDir, entry.name, currentDir)),
+  // Bounded here too: each project's own scan already fans out internally, so
+  // scanning every project at once would multiply the two.
+  const summaries: ProjectSummary[] = []
+  await mapWithConcurrency(
+    entries.filter(entry => entry.isDirectory()),
+    async entry => {
+      summaries.push(await summarize(projectsDir, entry.name, currentDir))
+    },
+    4,
   )
 
   return summaries
@@ -248,18 +282,22 @@ export async function listProjectConversations(
   const candidates = await listCandidates(dir, true)
   candidates.sort((a, b) => b.mtime - a.mtime)
 
-  const sessions = await Promise.all(
-    candidates.slice(0, MAX_CONVERSATIONS_READ).map(async candidate => {
+  // readSessionLite holds a descriptor per file, so this is batched rather than
+  // opening a hundred at once.
+  const sessions: SessionInfo[] = []
+  await mapWithConcurrency(
+    candidates.slice(0, MAX_CONVERSATIONS_READ),
+    async candidate => {
       const lite = await readSessionLite(candidate.filePath)
-      if (!lite) return null
+      if (!lite) return
       const info = parseSessionInfoFromLite(candidate.sessionId, lite)
-      if (!info) return null
+      if (!info) return
       info.lastModified = candidate.mtime
-      return info
-    }),
+      sessions.push(info)
+    },
   )
 
-  return sessions.filter((s): s is SessionInfo => s !== null)
+  return sessions.sort((a, b) => b.lastModified - a.lastModified)
 }
 
 /**

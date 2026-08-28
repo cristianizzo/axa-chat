@@ -16,17 +16,40 @@ import { getSessionId, switchSession } from '../../bootstrap/state.js'
 import { getProjectsDir, sanitizePath } from '../../utils/sessionStoragePortable.js'
 
 /**
- * Point the running session's transcripts at the named project.
+ * Names Windows refuses to use for a directory, whatever the extension.
  *
- * The name goes through the same sanitizer as a cwd, so it cannot contain a
- * path separator and cannot escape the projects directory. It also cannot
- * collide with a directory-derived project by accident: those are sanitized
- * absolute paths, so on unix they always begin with `-`.
+ * Checked on every platform, not just Windows: a `~/.axa` copied from a Mac to
+ * a Windows machine should not arrive holding a directory that cannot be
+ * opened there.
+ */
+const WINDOWS_RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
+
+/**
+ * Turn a user-supplied name into a directory name.
+ *
+ * sanitizePath does the security work — the result cannot contain a path
+ * separator, so it cannot escape the projects directory. It cannot collide
+ * with a directory-derived project either: those are sanitized absolute paths,
+ * so on unix they always begin with `-`.
+ *
+ * What it does not do is avoid the Windows device names, where `--project con`
+ * would produce a directory that cannot be created and every later write would
+ * fail. Those get a suffix.
+ */
+function toDirectoryName(name: string): string {
+  const sanitized = sanitizePath(name)
+  return WINDOWS_RESERVED_NAMES.test(sanitized)
+    ? `${sanitized}-project`
+    : sanitized
+}
+
+/**
+ * Point the running session's transcripts at the named project.
  *
  * Returns the directory chosen, for the caller to log.
  */
 export function pinSessionToProject(name: string): string {
-  const dir = join(getProjectsDir(), sanitizePath(name))
+  const dir = join(getProjectsDir(), toDirectoryName(name))
   // switchSession is the only way to set the project dir, by design — it keeps
   // the session id and the directory atomic so they cannot drift (CC-34).
   // Passing the current id changes only where the transcript is written.
