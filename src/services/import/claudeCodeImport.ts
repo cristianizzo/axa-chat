@@ -28,6 +28,7 @@ import { getUsername } from '../../utils/secureStorage/macOsKeychainHelpers.js'
 import {
   copyFile,
   mkdir,
+  open,
   readFile,
   readdir,
   stat,
@@ -88,23 +89,30 @@ const IMPORTED_CONFIG_KEYS = [
 type PendingFile = {
   source: string
   destination: string
+  /** How much will actually be transferred: the whole file, or just the tail. */
   bytes: number
   /** Carried over to the copy so the conversation keeps its real date. */
   atimeMs: number
   mtimeMs: number
+  action: PendingAction
   /**
-   * True when the bytes are already in place and only the timestamps are
-   * wrong — an import from before timestamps were preserved. Repairing those
-   * is a utimes() call, not a 1.5 GB re-copy.
-   *
-   * Requires the destination to be *newer* than the source, not merely the
-   * same size. That is the signature of a copy stamped at import time, and it
-   * is what rules out the dangerous case: a source rewritten to the same
-   * length after it was copied is newer than the destination, so it still
-   * gets copied rather than having its stale bytes silently blessed.
+   * For an append, the offset to resume from — which is the current size of
+   * axa's copy, already verified to be a prefix of the source.
    */
-  timestampOnly: boolean
+  appendFrom?: number
 }
+
+/**
+ * What will be done to a file. Note what is absent: there is no "overwrite".
+ * A file that already exists in axa is never replaced.
+ */
+type PendingAction =
+  /** Not in axa at all. */
+  | 'copy'
+  /** In axa, and the source has extra messages on the end. Adds only those. */
+  | 'append'
+  /** Byte-for-byte identical, but stamped with the date of an old import. */
+  | 'repair-date'
 
 /** Something the import could not do, and why. Always reported to the user. */
 export type ImportProblem = { path: string; error: string }
@@ -139,6 +147,8 @@ export type ImportPlan = {
 
 export type ImportResult = {
   filesCopied: number
+  /** Files that were already present and gained only the messages added since. */
+  filesAppended: number
   /** Files that were already present and only had their date restored. */
   filesRepaired: number
   bytesCopied: number
@@ -169,37 +179,42 @@ async function statOrNull(path: string) {
   }
 }
 
-/** What a re-import should do with one file. */
-type FileAction =
-  /** Not in axa yet, or the source holds messages axa does not. */
-  | 'copy'
-  /** Bytes already match; only the date is wrong. */
-  | 'repair-date'
-  /** Already faithful, or axa is ahead and must not be touched. */
-  | 'skip'
-  /** Both sides gained content since the last import. */
-  | 'conflict'
+/** The outcome of deciding one file, including the two that do no work. */
+type FileDecision =
+  | { action: PendingAction; appendFrom?: number }
+  /** Nothing to do, or nothing that can be done safely. */
+  | { action: 'skip' }
+  /** The two copies have diverged; neither contains the other. */
+  | { action: 'conflict' }
 
 /**
- * Decide what to do with one file, given that transcripts only ever grow.
+ * Decide what to do with one file.
  *
- * The rule that matters: the import must never make axa smaller. Resume an
+ * The invariant is that **a file already in axa is never replaced**. Resume an
  * imported conversation, say one thing, and axa's copy is longer than Claude
  * Code's — copying the source over it would silently delete every message added
- * since. Size alone cannot catch that, because it only says the two differ, not
- * which one is ahead, so direction is checked explicitly.
+ * since. Rather than choose a winner by comparing sizes or dates, the import
+ * only ever adds: a file it has never seen is copied, and a file it has seen
+ * can gain a tail, never lose one.
+ *
+ * Appending is only offered when axa's copy is a verified prefix of the source
+ * (see isPrefixOfSource) — which is the normal state of an append-only
+ * transcript that grew in Claude Code after being imported. Anything else is a
+ * conflict and is left alone.
  *
  * Dates matter as well as bytes. A transcript's mtime is when the conversation
  * was last touched, which is what `--resume` sorts by and what the project list
  * shows as "last used", so a copy stamped at import time collapses months of
- * history into one undifferentiated block. Comparing dates is also what lets a
+ * history into one undifferentiated block. Comparing dates is what lets a
  * re-run repair an import made before they were preserved.
  */
-function planFileAction(
+async function decideFile(
+  sourcePath: string,
+  destinationPath: string,
   source: { size: number; mtimeMs: number },
   destination: { size: number; mtimeMs: number } | null,
-): FileAction {
-  if (!destination) return 'copy'
+): Promise<FileDecision> {
+  if (!destination) return { action: 'copy' }
 
   // Whole seconds: filesystems disagree on sub-second precision, and a copy
   // differing only in the fraction is still faithful.
@@ -207,16 +222,110 @@ function planFileAction(
   const destinationTime = Math.floor(destination.mtimeMs / 1000)
 
   if (source.size === destination.size) {
-    return sourceTime === destinationTime ? 'skip' : 'repair-date'
+    return sourceTime === destinationTime
+      ? { action: 'skip' }
+      : { action: 'repair-date' }
   }
 
-  // axa holds more than the source: the conversation was continued here. Leave
-  // it alone — this is the case that used to truncate.
-  if (destination.size > source.size) return 'skip'
+  // axa holds more than the source: the conversation was continued here, or
+  // the source was truncated. Either way there is nothing to add.
+  if (destination.size > source.size) return { action: 'skip' }
 
-  // The source holds more. Safe to take, unless axa also moved on since the
-  // copy, in which case the two have diverged and neither is a superset.
-  return destinationTime > sourceTime ? 'conflict' : 'copy'
+  // The source holds more — but only take the extra if everything axa already
+  // has is unchanged underneath it. Otherwise the two have diverged.
+  return (await isPrefixOfSource(destinationPath, sourcePath, destination.size))
+    ? { action: 'append', appendFrom: destination.size }
+    : { action: 'conflict' }
+}
+
+/** Compared in 1 MB chunks; large transcripts are routinely hundreds of MB. */
+const PREFIX_COMPARE_CHUNK = 1024 * 1024
+
+/**
+ * Add the source's tail to axa's copy, starting at `from`.
+ *
+ * Opened in append mode so the existing bytes are never rewritten — the whole
+ * point of preferring this to a copy. `from` has already been verified as the
+ * length of a prefix, so the result is exactly the source's content.
+ */
+async function appendTail(
+  sourcePath: string,
+  destinationPath: string,
+  from: number,
+): Promise<void> {
+  const sourceHandle = await open(sourcePath, 'r')
+  try {
+    const destinationHandle = await open(destinationPath, 'a')
+    try {
+      const buffer = Buffer.allocUnsafe(PREFIX_COMPARE_CHUNK)
+      let offset = from
+      for (;;) {
+        const { bytesRead } = await sourceHandle.read(
+          buffer,
+          0,
+          PREFIX_COMPARE_CHUNK,
+          offset,
+        )
+        if (bytesRead === 0) break
+        await destinationHandle.write(buffer, 0, bytesRead)
+        offset += bytesRead
+      }
+    } finally {
+      await destinationHandle.close()
+    }
+  } finally {
+    await sourceHandle.close()
+  }
+}
+
+/**
+ * Is axa's copy exactly the first `length` bytes of the source?
+ *
+ * This is what makes appending safe rather than a guess. Comparing sizes and
+ * dates can only say the two files differ; it cannot tell a transcript that
+ * simply grew from one that was rewritten. Reading the bytes can.
+ *
+ * Costs a full read of the destination, so it runs only for the few files that
+ * actually grew since the last import — never on a first import, where nothing
+ * exists to compare against.
+ */
+async function isPrefixOfSource(
+  destinationPath: string,
+  sourcePath: string,
+  length: number,
+): Promise<boolean> {
+  let destinationHandle
+  let sourceHandle
+  try {
+    destinationHandle = await open(destinationPath, 'r')
+    sourceHandle = await open(sourcePath, 'r')
+
+    const destinationBuffer = Buffer.allocUnsafe(PREFIX_COMPARE_CHUNK)
+    const sourceBuffer = Buffer.allocUnsafe(PREFIX_COMPARE_CHUNK)
+
+    for (let offset = 0; offset < length; offset += PREFIX_COMPARE_CHUNK) {
+      const size = Math.min(PREFIX_COMPARE_CHUNK, length - offset)
+      const [destinationRead, sourceRead] = await Promise.all([
+        destinationHandle.read(destinationBuffer, 0, size, offset),
+        sourceHandle.read(sourceBuffer, 0, size, offset),
+      ])
+      if (destinationRead.bytesRead !== size || sourceRead.bytesRead !== size) {
+        return false
+      }
+      if (
+        destinationBuffer.compare(sourceBuffer, 0, size, 0, size) !== 0
+      ) {
+        return false
+      }
+    }
+    return true
+  } catch {
+    // Unreadable means unverifiable, and unverifiable means hands off.
+    return false
+  } finally {
+    await destinationHandle?.close()
+    await sourceHandle?.close()
+  }
 }
 
 async function collectPendingFiles(
@@ -262,9 +371,14 @@ async function collectPendingFiles(
         continue
       }
       const destinationStat = await statOrNull(destinationPath)
-      const action = planFileAction(sourceStat, destinationStat)
-      if (action === 'skip') continue
-      if (action === 'conflict') {
+      const decision = await decideFile(
+        sourcePath,
+        destinationPath,
+        sourceStat,
+        destinationStat,
+      )
+      if (decision.action === 'skip') continue
+      if (decision.action === 'conflict') {
         // Reported rather than resolved: picking a winner would throw away one
         // side's messages, and only the user knows which history matters.
         conflicts.push({
@@ -278,10 +392,16 @@ async function collectPendingFiles(
       pending.push({
         source: sourcePath,
         destination: destinationPath,
-        bytes: sourceStat.size,
+        bytes:
+          decision.action === 'copy'
+            ? sourceStat.size
+            : decision.action === 'append'
+              ? sourceStat.size - (decision.appendFrom ?? 0)
+              : 0,
         atimeMs: sourceStat.atimeMs,
         mtimeMs: sourceStat.mtimeMs,
-        timestampOnly: action === 'repair-date',
+        action: decision.action,
+        appendFrom: decision.appendFrom,
       })
     }
   }
@@ -446,7 +566,7 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
   // projects that are already fully imported.
   const projects = new Set(
     files
-      .filter(file => !file.timestampOnly)
+      .filter(file => file.action !== 'repair-date')
       .map(
         file => relative(sourceProjects, file.source).split(/[/\\]/)[0] ?? '',
       ),
@@ -492,12 +612,9 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
     destinationDir,
     available: true,
     files,
-    // Only what will actually be transferred. A timestamp repair moves no
-    // bytes, and counting it would promise a 1.5 GB copy that never happens.
-    bytes: files.reduce(
-      (total, file) => total + (file.timestampOnly ? 0 : file.bytes),
-      0,
-    ),
+    // Only what will actually be transferred: a whole file for a copy, just the
+    // new tail for an append, nothing for a date repair.
+    bytes: files.reduce((total, file) => total + file.bytes, 0),
     projects: projects.size,
     settings,
     configKeys: [...configKeys],
@@ -520,6 +637,7 @@ export async function runClaudeCodeImport(
 ): Promise<ImportResult> {
   const result: ImportResult = {
     filesCopied: 0,
+    filesAppended: 0,
     filesRepaired: 0,
     bytesCopied: 0,
     settingsImported: false,
@@ -537,14 +655,22 @@ export async function runClaudeCodeImport(
         await mkdir(dir, { recursive: true })
         createdDirs.add(dir)
       }
-      if (file.timestampOnly) {
-        result.filesRepaired++
-      } else {
-        await copyFile(file.source, file.destination)
-        result.bytesCopied += file.bytes
-        result.filesCopied++
+      switch (file.action) {
+        case 'repair-date':
+          result.filesRepaired++
+          break
+        case 'append':
+          await appendTail(file.source, file.destination, file.appendFrom ?? 0)
+          result.bytesCopied += file.bytes
+          result.filesAppended++
+          break
+        case 'copy':
+          await copyFile(file.source, file.destination)
+          result.bytesCopied += file.bytes
+          result.filesCopied++
+          break
       }
-      // After the copy, not before: copyFile sets mtime to now.
+      // After the write, not before: writing sets mtime to now.
       await utimes(
         file.destination,
         new Date(file.atimeMs),
@@ -554,7 +680,10 @@ export async function runClaudeCodeImport(
       result.failures.push({ path: file.source, error: String(error) })
     }
     onProgress?.(
-      result.filesCopied + result.filesRepaired + result.failures.length,
+      result.filesCopied +
+        result.filesAppended +
+        result.filesRepaired +
+        result.failures.length,
       plan.files.length,
     )
   }
@@ -649,7 +778,7 @@ export async function runClaudeCodeImport(
   result.failures.push(...plan.unreadable)
 
   logForDebugging(
-    `Claude Code import: ${result.filesCopied} copied, ${result.filesRepaired} repaired, ${result.failures.length} failures`,
+    `Claude Code import: ${result.filesCopied} copied, ${result.filesAppended} appended, ${result.filesRepaired} repaired, ${result.failures.length} failures`,
   )
   return result
 }

@@ -36,12 +36,23 @@ function formatBytes(bytes: number): string {
 /** One line per thing the import would do, so the user confirms specifics. */
 function planSummary(plan: ImportPlan): string[] {
   const lines: string[] = []
-  const repairs = plan.files.filter(file => file.timestampOnly).length
-  const copies = plan.files.length - repairs
+  const count = (action: string): number =>
+    plan.files.filter(file => file.action === action).length
+  const copies = count('copy')
+  const appends = count('append')
+  const repairs = count('repair-date')
   if (copies > 0) {
     lines.push(
-      `${copies} conversation file${copies === 1 ? '' : 's'} across ${plan.projects} project${plan.projects === 1 ? '' : 's'} (${formatBytes(plan.bytes)})`,
+      `${copies} new conversation file${copies === 1 ? '' : 's'} across ${plan.projects} project${plan.projects === 1 ? '' : 's'}`,
     )
+  }
+  if (appends > 0) {
+    lines.push(
+      `${appends} conversation${appends === 1 ? '' : 's'} to extend with messages added in Claude Code since`,
+    )
+  }
+  if (copies > 0 || appends > 0) {
+    lines.push(`${formatBytes(plan.bytes)} to transfer in total`)
   }
   if (repairs > 0) {
     lines.push(
@@ -232,9 +243,18 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
           {result.filesCopied > 0 ? (
             <Text>
               {result.filesCopied} file
-              {result.filesCopied === 1 ? '' : 's'} copied (
-              {formatBytes(result.bytesCopied)})
+              {result.filesCopied === 1 ? '' : 's'} copied
             </Text>
+          ) : null}
+          {result.filesAppended > 0 ? (
+            <Text>
+              {result.filesAppended} conversation
+              {result.filesAppended === 1 ? '' : 's'} extended with newer
+              messages
+            </Text>
+          ) : null}
+          {result.bytesCopied > 0 ? (
+            <Text>{formatBytes(result.bytesCopied)} transferred</Text>
           ) : null}
           {result.filesRepaired > 0 ? (
             <Text>
@@ -243,7 +263,9 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
                 : `${result.filesRepaired} files restored to their original dates`}
             </Text>
           ) : null}
-          {result.filesCopied === 0 && result.filesRepaired === 0 ? (
+          {result.filesCopied === 0 &&
+          result.filesAppended === 0 &&
+          result.filesRepaired === 0 ? (
             <Text>No conversation files needed copying.</Text>
           ) : null}
           {result.conflicts.length > 0 ? (
