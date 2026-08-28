@@ -156,6 +156,11 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
         )
       }
       const plan = stage.plan
+      const nothingToDo =
+        plan.files.length === 0 &&
+        !plan.settings &&
+        plan.configKeys.length === 0 &&
+        !plan.credentials
       return (
         <Pane>
           <Box marginBottom={1}>
@@ -211,16 +216,22 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
             </Text>
           </Box>
           <Box marginTop={1}>
-            <Select
-              options={[
-                { label: 'Import', value: 'import' },
-                { label: 'Cancel', value: 'cancel' },
-              ]}
-              onChange={value =>
-                value === 'import' ? startImport(plan) : onDone()
-              }
-              onCancel={onDone}
-            />
+            {nothingToDo ? (
+              // Everything is already here; the screen exists only to show what
+              // could not be brought across.
+              <Text dimColor>Nothing left to import. (press esc to close)</Text>
+            ) : (
+              <Select
+                options={[
+                  { label: 'Import', value: 'import' },
+                  { label: 'Cancel', value: 'cancel' },
+                ]}
+                onChange={value =>
+                  value === 'import' ? startImport(plan) : onDone()
+                }
+                onCancel={onDone}
+              />
+            )}
           </Box>
         </Pane>
       )
@@ -267,7 +278,9 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
           ) : null}
           {result.filesCopied === 0 &&
           result.filesAppended === 0 &&
-          result.filesRepaired === 0 ? (
+          result.filesRepaired === 0 &&
+          result.conflicts.length === 0 &&
+          result.failures.length === 0 ? (
             <Text>No conversation files needed copying.</Text>
           ) : null}
           {result.conflicts.length > 0 ? (

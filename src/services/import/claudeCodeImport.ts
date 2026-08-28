@@ -177,6 +177,11 @@ export type ImportResult = {
 export function isEmptyPlan(plan: ImportPlan): boolean {
   return (
     plan.files.length === 0 &&
+    // A plan that would do nothing but has something to say is not empty:
+    // treating it as such would swallow the conflicts and the unreadable files
+    // behind "everything has already been imported".
+    plan.conflicts.length === 0 &&
+    plan.unreadable.length === 0 &&
     !plan.settings &&
     plan.configKeys.length === 0 &&
     !plan.credentials
@@ -376,17 +381,26 @@ async function appendTail(
 
       const buffer = Buffer.allocUnsafe(PREFIX_COMPARE_CHUNK)
       let offset = from
-      for (;;) {
-        const bytesRead = await readFully(
-          sourceHandle,
-          buffer,
-          PREFIX_COMPARE_CHUNK,
-          offset,
-        )
-        if (bytesRead === 0) break
-        // Explicit position, for the same reason as 'r+'.
-        await writeFully(destinationHandle, buffer, bytesRead, offset)
-        offset += bytesRead
+      try {
+        for (;;) {
+          const bytesRead = await readFully(
+            sourceHandle,
+            buffer,
+            PREFIX_COMPARE_CHUNK,
+            offset,
+          )
+          if (bytesRead === 0) break
+          // Explicit position, for the same reason as 'r+'.
+          await writeFully(destinationHandle, buffer, bytesRead, offset)
+          offset += bytesRead
+        }
+      } catch (error) {
+        // A failure part-way through — a full disk, an IO error — would leave
+        // half a message on the end of the transcript. Cut back to the length
+        // that was verified, so the file is exactly what it was before. The
+        // next run re-plans and appends the whole tail again.
+        await destinationHandle.truncate(from).catch(() => {})
+        throw error
       }
     } finally {
       await destinationHandle.close()
@@ -512,10 +526,12 @@ async function collectPendingFiles(
         // Reported rather than resolved: picking a winner would throw away one
         // side's messages, and only the user knows which history matters.
         conflicts.push({
-          path: sourcePath,
+          // The axa file, because that is the one the message is about: it is
+          // the copy being kept, and the one the user would open to compare.
+          path: destinationPath,
           error:
-            'Changed in both places since the last import. Left as it is in ' +
-            'axa — the Claude Code copy is unchanged if you want it.',
+            'Changed here and in Claude Code since the last import, so neither ' +
+            `contains the other. Kept as it is; ${sourcePath} is unchanged.`,
         })
         continue
       }
