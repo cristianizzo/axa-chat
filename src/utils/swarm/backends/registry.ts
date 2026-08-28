@@ -11,7 +11,10 @@ import {
 import { createInProcessBackend } from './InProcessBackend.js'
 import { getPreferTmuxOverIterm2 } from './it2Setup.js'
 import { createPaneBackendExecutor } from './PaneBackendExecutor.js'
-import { getTeammateModeFromSnapshot } from './teammateModeSnapshot.js'
+import {
+  getTeammateModeFromSnapshot,
+  type TeammateMode,
+} from './teammateModeSnapshot.js'
 import type {
   BackendDetectionResult,
   PaneBackend,
@@ -150,10 +153,20 @@ export async function detectAndGetBackend(): Promise<BackendDetectionResult> {
   // Check all environment conditions upfront for logging
   const insideTmux = await isInsideTmux()
   const inITerm2 = isInITerm2()
+  const mode = getTeammateMode()
 
   logForDebugging(
-    `[BackendRegistry] Environment: insideTmux=${insideTmux}, inITerm2=${inITerm2}`,
+    `[BackendRegistry] Environment: insideTmux=${insideTmux}, inITerm2=${inITerm2}, mode=${mode}`,
   )
+
+  // An explicit `iterm2` mode outside iTerm2 has no backend to select. Say so,
+  // rather than quietly running somewhere the user didn't ask for.
+  if (mode === 'iterm2' && !inITerm2) {
+    throw new Error(
+      'teammateMode is "iterm2" but this session is not running in iTerm2. ' +
+        'Use "auto", "tmux" or "in-process", or start the session from iTerm2.',
+    )
+  }
 
   // Priority 1: If inside tmux, always use tmux
   if (insideTmux) {
@@ -172,8 +185,13 @@ export async function detectAndGetBackend(): Promise<BackendDetectionResult> {
 
   // Priority 2: If in iTerm2, try to use native panes
   if (inITerm2) {
-    // Check if user previously chose to prefer tmux over iTerm2
-    const preferTmux = getPreferTmuxOverIterm2()
+    // An explicit `iterm2` mode is a direct instruction, so it outranks the
+    // stored preference. That preference is written by a single "use tmux
+    // instead" answer to the setup prompt and never expires, so without this
+    // it would silently outlive the moment it was given and there would be no
+    // way to ask for native panes again.
+    const explicitIterm2 = mode === 'iterm2'
+    const preferTmux = !explicitIterm2 && getPreferTmuxOverIterm2()
     if (preferTmux) {
       logForDebugging(
         '[BackendRegistry] User prefers tmux over iTerm2, skipping iTerm2 detection',
@@ -197,6 +215,22 @@ export async function detectAndGetBackend(): Promise<BackendDetectionResult> {
         }
         return cachedDetectionResult
       }
+    }
+
+    // Asked for iTerm2 by name and it2 isn't there: falling back to tmux would
+    // answer a different question than the one asked, and silently. Name the
+    // missing dependency instead — this is the one case where the user has
+    // said which backend they want.
+    if (explicitIterm2) {
+      logForDebugging(
+        '[BackendRegistry] ERROR: teammateMode "iterm2" but it2 CLI not available',
+      )
+      throw new Error(
+        'teammateMode is "iterm2" but the it2 CLI is not installed. ' +
+          'Install it with: pipx install it2 (or pip3 install --user it2), ' +
+          'then enable iTerm2 > Settings > General > Magic > Python API. ' +
+          'Use "auto" to fall back to tmux automatically instead.',
+      )
     }
 
     // In iTerm2 but it2 not available - check if tmux can be used as fallback
@@ -332,7 +366,7 @@ export function markInProcessFallback(): void {
  * Gets the teammate mode for this session.
  * Returns the session snapshot captured at startup, ignoring runtime config changes.
  */
-function getTeammateMode(): 'auto' | 'tmux' | 'in-process' {
+function getTeammateMode(): TeammateMode {
   return getTeammateModeFromSnapshot()
 }
 
@@ -363,7 +397,9 @@ export function isInProcessEnabled(): boolean {
   let enabled: boolean
   if (mode === 'in-process') {
     enabled = true
-  } else if (mode === 'tmux') {
+  } else if (mode === 'tmux' || mode === 'iterm2') {
+    // Both name a pane backend. Which one is resolved in detectAndGetBackend;
+    // here they only mean "not in-process".
     enabled = false
   } else {
     // 'auto' mode - if a prior spawn fell back to in-process because no pane

@@ -10,7 +10,15 @@ import { getGlobalConfig } from '../../../utils/config.js'
 import { logForDebugging } from '../../../utils/debug.js'
 import { logError } from '../../../utils/log.js'
 
-export type TeammateMode = 'auto' | 'tmux' | 'in-process'
+/**
+ * How teammates are placed on screen.
+ *
+ * `iterm2` names the backend `auto` could already reach but nobody could ask
+ * for: with `auto`, iTerm2 native panes were selected only when detection
+ * happened to find the it2 CLI, and a single earlier "use tmux instead" answer
+ * suppressed them for good. Naming it makes the choice reversible.
+ */
+export type TeammateMode = 'auto' | 'tmux' | 'iterm2' | 'in-process'
 
 // Module-level variable to hold the captured mode at startup
 let initialTeammateMode: TeammateMode | null = null
