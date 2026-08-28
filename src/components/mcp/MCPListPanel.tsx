@@ -14,6 +14,7 @@ import { Dialog } from '../design-system/Dialog.js';
 import { KeyboardShortcutHint } from '../design-system/KeyboardShortcutHint.js';
 import { McpParsingWarnings } from './McpParsingWarnings.js';
 import type { AgentMcpServerInfo, ServerInfo } from './types.js';
+import { BINARY_NAME } from '../../constants/product.js';
 type Props = {
   servers: ServerInfo[];
   agentServers?: AgentMcpServerInfo[];
@@ -423,7 +424,7 @@ export function MCPListPanel(t0) {
   }
   let t26;
   if ($[60] !== hasFailedClients) {
-    t26 = hasFailedClients && <Text dimColor={true}>{debugMode ? "\u203B Error logs shown inline with --debug" : "\u203B Run claude --debug to see error logs"}</Text>;
+    t26 = hasFailedClients && <Text dimColor={true}>{debugMode ? "\u203B Error logs shown inline with --debug" : `\u203B Run ${BINARY_NAME} --debug to see error logs`}</Text>;
     $[60] = hasFailedClients;
     $[61] = t26;
   } else {

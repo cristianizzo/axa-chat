@@ -8,6 +8,7 @@ import {
   type PermissionResponseEvent,
   type WorkResponse,
 } from './types.js'
+import { BINARY_NAME } from '../constants/product.js'
 
 type BridgeApiDeps = {
   baseUrl: string
@@ -471,7 +472,7 @@ function handleErrorStatus(
     case 403:
       throw new BridgeFatalError(
         isExpiredErrorType(errorType)
-          ? 'Remote Control session has expired. Please restart with `claude remote-control` or /remote-control.'
+          ? `Remote Control session has expired. Please restart with \`${BINARY_NAME} remote-control\` or /remote-control.`
           : `${context}: Access denied (403)${detail ? `: ${detail}` : ''}. Check your organization permissions.`,
         403,
         errorType,
@@ -486,7 +487,7 @@ function handleErrorStatus(
     case 410:
       throw new BridgeFatalError(
         detail ??
-          'Remote Control session has expired. Please restart with `claude remote-control` or /remote-control.',
+          `Remote Control session has expired. Please restart with \`${BINARY_NAME} remote-control\` or /remote-control.`,
         410,
         errorType ?? 'environment_expired',
       )

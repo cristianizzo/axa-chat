@@ -58,6 +58,7 @@ import {
   getXaaIdpSettings,
   isXaaEnabled,
 } from './xaaIdpLogin.js'
+import { BINARY_NAME } from '../../constants/product.js'
 
 /**
  * Timeout for individual OAuth requests (metadata discovery, token refresh, etc.)
@@ -676,7 +677,7 @@ async function performMCPXaaAuth(
   const idp = getXaaIdpSettings()
   if (!idp) {
     throw new Error(
-      "XAA: no IdP connection configured. Run 'claude mcp xaa setup --issuer <url> --client-id <id> --client-secret' to configure.",
+      `XAA: no IdP connection configured. Run '${BINARY_NAME} mcp xaa setup --issuer <url> --client-id <id> --client-secret' to configure.`,
     )
   }
 

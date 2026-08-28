@@ -8,6 +8,7 @@ import { useKeybinding } from '../../keybindings/useKeybinding.js';
 import { useAppState } from '../../state/AppState.js';
 import type { LocalJSXCommandCall } from '../../types/command.js';
 import { logForDebugging } from '../../utils/debug.js';
+import { BINARY_NAME } from '../../constants/product.js';
 type Props = {
   onDone: () => void;
 };
@@ -57,7 +58,7 @@ function SessionInfo(t0) {
   if (!remoteSessionUrl) {
     let t4;
     if ($[4] === Symbol.for("react.memo_cache_sentinel")) {
-      t4 = <Pane><Text color="warning">Not in remote mode. Start with `claude --remote` to use this command.</Text><Text dimColor={true}>(press esc to close)</Text></Pane>;
+      t4 = <Pane><Text color="warning">{`Not in remote mode. Start with \`${BINARY_NAME} --remote\` to use this command.`}</Text><Text dimColor={true}>(press esc to close)</Text></Pane>;
       $[4] = t4;
     } else {
       t4 = $[4];

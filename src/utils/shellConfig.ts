@@ -6,10 +6,21 @@
 import { open, readFile, stat } from 'fs/promises'
 import { homedir as osHomedir } from 'os'
 import { join } from 'path'
+import { BINARY_NAME } from '../constants/product.js'
 import { isFsInaccessible } from './errors.js'
 import { getLocalClaudePath } from './localInstaller.js'
 
-export const CLAUDE_ALIAS_REGEX = /^\s*alias\s+claude\s*=/
+/**
+ * Matches an alias for *our* binary, not upstream's.
+ *
+ * Built from BINARY_NAME rather than the literal `claude` so that removing a
+ * stale installer alias can never strip a Claude Code one from the user's
+ * shell config — the same reason the config dir and keychain entry are ours
+ * alone. BINARY_NAME is a plain identifier, so it needs no regex escaping.
+ */
+export const CLAUDE_ALIAS_REGEX = new RegExp(
+  `^\\s*alias\\s+${BINARY_NAME}\\s*=`,
+)
 
 type EnvLike = Record<string, string | undefined>
 
@@ -52,10 +63,14 @@ export function filterClaudeAliases(lines: string[]): {
     if (CLAUDE_ALIAS_REGEX.test(line)) {
       // Extract the alias target - handle spaces, quotes, and various formats
       // First try with quotes
-      let match = line.match(/alias\s+claude\s*=\s*["']([^"']+)["']/)
+      let match = line.match(
+        new RegExp(`alias\\s+${BINARY_NAME}\\s*=\\s*["']([^"']+)["']`),
+      )
       if (!match) {
         // Try without quotes (capturing until end of line or comment)
-        match = line.match(/alias\s+claude\s*=\s*([^#\n]+)/)
+        match = line.match(
+          new RegExp(`alias\\s+${BINARY_NAME}\\s*=\\s*([^#\\n]+)`),
+        )
       }
 
       if (match && match[1]) {
@@ -123,7 +138,9 @@ export async function findClaudeAlias(
     for (const line of lines) {
       if (CLAUDE_ALIAS_REGEX.test(line)) {
         // Extract the alias target
-        const match = line.match(/alias\s+claude=["']?([^"'\s]+)/)
+        const match = line.match(
+          new RegExp(`alias\\s+${BINARY_NAME}=["']?([^"'\\s]+)`),
+        )
         if (match && match[1]) {
           return match[1]
         }

@@ -13,6 +13,7 @@ import {
 } from 'src/tools/FileEditTool/constants.js'
 import type { z } from 'zod/v4'
 import { getOriginalCwd, getSessionId } from '../../bootstrap/state.js'
+import { CONFIG_DIR_NAME } from '../../constants/product.js'
 import { checkStatsigFeatureGate_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import type { AnyObject, Tool, ToolPermissionContext } from '../../Tool.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
@@ -110,8 +111,17 @@ export function getClaudeSkillScope(
       prefix: '/.claude/skills/',
     },
     {
-      dir: expandPath(join(homedir(), '.claude', 'skills')),
-      prefix: '~/.claude/skills/',
+      // Our config dir, not `~/.claude` — personal skills load from
+      // getClaudeConfigHomeDir()/skills (loadSkillsDir.ts:640), so the upstream
+      // name would make this scope match nothing.
+      //
+      // Built from homedir() rather than getClaudeConfigHomeDir() so `dir` and
+      // `prefix` cannot disagree when CLAUDE_CONFIG_DIR is set: `prefix` has to
+      // stay in tilde form to satisfy the
+      // GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN check that gates the resulting
+      // rule, and a pattern that check rejects would be a dead suggestion.
+      dir: expandPath(join(homedir(), CONFIG_DIR_NAME, 'skills')),
+      prefix: `~/${CONFIG_DIR_NAME}/skills/`,
     },
   ]
 
