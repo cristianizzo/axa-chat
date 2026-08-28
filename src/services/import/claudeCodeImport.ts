@@ -129,6 +129,12 @@ export type ImportPlan = {
    * visible instead of just making the import look smaller than it is.
    */
   unreadable: ImportProblem[]
+  /**
+   * Conversations that grew on both sides since the last import, so neither
+   * copy contains the other. Deliberately left alone rather than merged or
+   * overwritten.
+   */
+  conflicts: ImportProblem[]
 }
 
 export type ImportResult = {
@@ -141,6 +147,8 @@ export type ImportResult = {
   credentialsImported: boolean
   /** Everything that could not be imported. Never silently dropped. */
   failures: ImportProblem[]
+  /** Conversations left untouched because both copies had moved on. */
+  conflicts: ImportProblem[]
 }
 
 /** True when the plan would change nothing. */
@@ -161,36 +169,61 @@ async function statOrNull(path: string) {
   }
 }
 
+/** What a re-import should do with one file. */
+type FileAction =
+  /** Not in axa yet, or the source holds messages axa does not. */
+  | 'copy'
+  /** Bytes already match; only the date is wrong. */
+  | 'repair-date'
+  /** Already faithful, or axa is ahead and must not be touched. */
+  | 'skip'
+  /** Both sides gained content since the last import. */
+  | 'conflict'
+
 /**
- * Whether the destination is not already a faithful copy of the source.
+ * Decide what to do with one file, given that transcripts only ever grow.
  *
- * A transcript is append-only, so a size change means the source gained
- * messages since the last import.
+ * The rule that matters: the import must never make axa smaller. Resume an
+ * imported conversation, say one thing, and axa's copy is longer than Claude
+ * Code's — copying the source over it would silently delete every message added
+ * since. Size alone cannot catch that, because it only says the two differ, not
+ * which one is ahead, so direction is checked explicitly.
  *
- * Timestamps count too, not just size. A transcript's mtime is when the
- * conversation was last touched, and that is what `--resume` sorts by and what
- * the project list shows as "last used" — a copy carrying the time of the
- * import instead collapses months of history into one undifferentiated block.
- * Comparing them also makes a re-run repair earlier imports that did not
- * preserve them.
+ * Dates matter as well as bytes. A transcript's mtime is when the conversation
+ * was last touched, which is what `--resume` sorts by and what the project list
+ * shows as "last used", so a copy stamped at import time collapses months of
+ * history into one undifferentiated block. Comparing dates is also what lets a
+ * re-run repair an import made before they were preserved.
  */
-function needsCopy(
+function planFileAction(
   source: { size: number; mtimeMs: number },
   destination: { size: number; mtimeMs: number } | null,
-): boolean {
-  if (!destination) return true
-  return (
-    source.size !== destination.size ||
-    // Whole seconds: some filesystems store sub-second precision and some do
-    // not, and a copy that only differs in the fraction is still faithful.
-    Math.floor(source.mtimeMs / 1000) !== Math.floor(destination.mtimeMs / 1000)
-  )
+): FileAction {
+  if (!destination) return 'copy'
+
+  // Whole seconds: filesystems disagree on sub-second precision, and a copy
+  // differing only in the fraction is still faithful.
+  const sourceTime = Math.floor(source.mtimeMs / 1000)
+  const destinationTime = Math.floor(destination.mtimeMs / 1000)
+
+  if (source.size === destination.size) {
+    return sourceTime === destinationTime ? 'skip' : 'repair-date'
+  }
+
+  // axa holds more than the source: the conversation was continued here. Leave
+  // it alone — this is the case that used to truncate.
+  if (destination.size > source.size) return 'skip'
+
+  // The source holds more. Safe to take, unless axa also moved on since the
+  // copy, in which case the two have diverged and neither is a superset.
+  return destinationTime > sourceTime ? 'conflict' : 'copy'
 }
 
 async function collectPendingFiles(
   sourceRoot: string,
   destinationRoot: string,
   problems: ImportProblem[],
+  conflicts: ImportProblem[],
 ): Promise<PendingFile[]> {
   const pending: PendingFile[] = []
 
@@ -229,18 +262,27 @@ async function collectPendingFiles(
         continue
       }
       const destinationStat = await statOrNull(destinationPath)
-      if (needsCopy(sourceStat, destinationStat)) {
-        pending.push({
-          source: sourcePath,
-          destination: destinationPath,
-          bytes: sourceStat.size,
-          atimeMs: sourceStat.atimeMs,
-          mtimeMs: sourceStat.mtimeMs,
-          timestampOnly:
-            destinationStat?.size === sourceStat.size &&
-            destinationStat.mtimeMs > sourceStat.mtimeMs,
+      const action = planFileAction(sourceStat, destinationStat)
+      if (action === 'skip') continue
+      if (action === 'conflict') {
+        // Reported rather than resolved: picking a winner would throw away one
+        // side's messages, and only the user knows which history matters.
+        conflicts.push({
+          path: sourcePath,
+          error:
+            'Changed in both places since the last import. Left as it is in ' +
+            'axa — the Claude Code copy is unchanged if you want it.',
         })
+        continue
       }
+      pending.push({
+        source: sourcePath,
+        destination: destinationPath,
+        bytes: sourceStat.size,
+        atimeMs: sourceStat.atimeMs,
+        mtimeMs: sourceStat.mtimeMs,
+        timestampOnly: action === 'repair-date',
+      })
     }
   }
 
@@ -369,6 +411,7 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
     configKeys: [],
     credentials: false,
     unreadable: [],
+    conflicts: [],
   }
 
   if (CLAUDE_CODE_DIR === destinationDir) {
@@ -386,6 +429,7 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
   }
 
   const unreadable: ImportProblem[] = []
+  const conflicts: ImportProblem[] = []
 
   const sourceProjects = join(CLAUDE_CODE_DIR, 'projects')
   const files = (await statOrNull(sourceProjects))?.isDirectory()
@@ -393,6 +437,7 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
         sourceProjects,
         join(destinationDir, 'projects'),
         unreadable,
+        conflicts,
       )
     : []
 
@@ -458,6 +503,7 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
     configKeys: [...configKeys],
     credentials,
     unreadable,
+    conflicts,
   }
 }
 
@@ -480,6 +526,7 @@ export async function runClaudeCodeImport(
     configKeysImported: [],
     credentialsImported: false,
     failures: [],
+    conflicts: plan.conflicts,
   }
 
   const createdDirs = new Set<string>()

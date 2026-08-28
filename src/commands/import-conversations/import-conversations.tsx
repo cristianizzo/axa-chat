@@ -156,6 +156,24 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
               <Text key={line}>• {line}</Text>
             ))}
           </Box>
+          {plan.conflicts.length > 0 ? (
+            <Box marginTop={1} flexDirection="column">
+              <Text color="warning">
+                {plan.conflicts.length} conversation
+                {plan.conflicts.length === 1 ? '' : 's'} changed in both places
+                since the last import and will be left as {PRODUCT_NAME} has
+                {plan.conflicts.length === 1 ? ' it' : ' them'}:
+              </Text>
+              {plan.conflicts.slice(0, 3).map(conflict => (
+                <Text key={conflict.path} dimColor>
+                  {conflict.path}
+                </Text>
+              ))}
+              {plan.conflicts.length > 3 ? (
+                <Text dimColor>…and {plan.conflicts.length - 3} more</Text>
+              ) : null}
+            </Box>
+          ) : null}
           {plan.unreadable.length > 0 ? (
             <Box marginTop={1} flexDirection="column">
               <Text color="warning">
@@ -227,6 +245,13 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
           ) : null}
           {result.filesCopied === 0 && result.filesRepaired === 0 ? (
             <Text>No conversation files needed copying.</Text>
+          ) : null}
+          {result.conflicts.length > 0 ? (
+            <Text color="warning">
+              {result.conflicts.length} conversation
+              {result.conflicts.length === 1 ? '' : 's'} left untouched — changed
+              in both places since the last import
+            </Text>
           ) : null}
           {result.settingsImported ? <Text>settings.json imported</Text> : null}
           {result.configKeysImported.length > 0 ? (
