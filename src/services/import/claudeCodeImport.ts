@@ -20,6 +20,7 @@ import { execFileNoThrow } from '../../utils/execFileNoThrow.js'
 import { homedir } from 'os'
 import { dirname, join, relative } from 'path'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import type { FileHandle } from 'fs/promises'
 import { logForDebugging } from '../../utils/debug.js'
 import { getErrnoCode } from '../../utils/errors.js'
 import { logError } from '../../utils/log.js'
@@ -292,15 +293,63 @@ async function decideFile(
   }
 }
 
+/**
+ * read() and write() may move fewer bytes than asked for, even on a regular
+ * file. Treating a short read as "the file changed" or a short write as "done"
+ * would mean a false conflict or a transcript missing bytes from its middle, so
+ * both are driven to completion here rather than assumed.
+ */
+async function readFully(
+  handle: FileHandle,
+  buffer: Buffer,
+  length: number,
+  position: number,
+): Promise<number> {
+  let total = 0
+  while (total < length) {
+    const { bytesRead } = await handle.read(
+      buffer,
+      total,
+      length - total,
+      position + total,
+    )
+    if (bytesRead === 0) break
+    total += bytesRead
+  }
+  return total
+}
+
+async function writeFully(
+  handle: FileHandle,
+  buffer: Buffer,
+  length: number,
+  position: number,
+): Promise<void> {
+  let total = 0
+  while (total < length) {
+    const { bytesWritten } = await handle.write(
+      buffer,
+      total,
+      length - total,
+      position + total,
+    )
+    if (bytesWritten === 0) {
+      throw new Error(`Write stalled after ${total} of ${length} bytes.`)
+    }
+    total += bytesWritten
+  }
+}
+
 /** Compared in 1 MB chunks; large transcripts are routinely hundreds of MB. */
 const PREFIX_COMPARE_CHUNK = 1024 * 1024
 
 /**
  * Add the source's tail to axa's copy, starting at `from`.
  *
- * Opened in append mode so the existing bytes are never rewritten — the whole
- * point of preferring this to a copy. `from` has already been verified as the
- * length of a prefix, so the result is exactly the source's content.
+ * Writes at explicit offsets from `from` onwards, so the bytes already in the
+ * file are never rewritten — the whole point of preferring this to a copy. Since
+ * `from` has been verified as the length of a prefix, the result is exactly the
+ * source's content.
  */
 async function appendTail(
   sourcePath: string,
@@ -328,15 +377,15 @@ async function appendTail(
       const buffer = Buffer.allocUnsafe(PREFIX_COMPARE_CHUNK)
       let offset = from
       for (;;) {
-        const { bytesRead } = await sourceHandle.read(
+        const bytesRead = await readFully(
+          sourceHandle,
           buffer,
-          0,
           PREFIX_COMPARE_CHUNK,
           offset,
         )
         if (bytesRead === 0) break
         // Explicit position, for the same reason as 'r+'.
-        await destinationHandle.write(buffer, 0, bytesRead, offset)
+        await writeFully(destinationHandle, buffer, bytesRead, offset)
         offset += bytesRead
       }
     } finally {
@@ -385,10 +434,10 @@ async function comparePrefix(
     for (let offset = 0; offset < length; offset += PREFIX_COMPARE_CHUNK) {
       const size = Math.min(PREFIX_COMPARE_CHUNK, length - offset)
       const [destinationRead, sourceRead] = await Promise.all([
-        destinationHandle.read(destinationBuffer, 0, size, offset),
-        sourceHandle.read(sourceBuffer, 0, size, offset),
+        readFully(destinationHandle, destinationBuffer, size, offset),
+        readFully(sourceHandle, sourceBuffer, size, offset),
       ])
-      if (destinationRead.bytesRead !== size || sourceRead.bytesRead !== size) {
+      if (destinationRead !== size || sourceRead !== size) {
         // Short read on a file that stat said was long enough: it is being
         // written, or truncated underneath us. Unverifiable, not different.
         return {
