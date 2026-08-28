@@ -375,7 +375,7 @@ async function appendTail(
         // longer describes the file. Reported as a failure rather than guessed
         // at; the next run re-plans against whatever it looks like then.
         throw new Error(
-          `Grew from ${from} to ${size} bytes while the import was running; left unchanged.`,
+          `Changed from ${from} to ${size} bytes while the import was running; left unchanged.`,
         )
       }
 
@@ -536,7 +536,12 @@ async function collectPendingFiles(
         continue
       }
       if (decision.action === 'unreadable') {
-        problems.push({ path: sourcePath, error: decision.error })
+        // Names both files: the comparison reads each of them, so either could
+        // be the one that failed, and the user needs to know where to look.
+        problems.push({
+          path: sourcePath,
+          error: `${decision.error} (comparing against ${destinationPath})`,
+        })
         continue
       }
 
