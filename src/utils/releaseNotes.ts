@@ -74,46 +74,30 @@ export function _resetChangelogCacheForTesting(): void {
 }
 
 /**
- * Migrate changelog from old config-based storage to file-based storage.
- * This should be called once at startup to ensure the migration happens
- * before any other config saves that might re-add the deprecated field.
- */
-export async function migrateChangelogFromConfig(): Promise<void> {
-  const config = getGlobalConfig()
-  if (!config.cachedChangelog) {
-    return
-  }
-
-  const cachePath = getChangelogCachePath()
-
-  // If cache file doesn't exist, create it from old config
-  try {
-    await mkdir(dirname(cachePath), { recursive: true })
-    await writeFile(cachePath, config.cachedChangelog, {
-      encoding: 'utf-8',
-      flag: 'wx', // Write only if file doesn't exist
-    })
-  } catch {
-    // File already exists, which is fine - skip silently
-  }
-
-  // Remove the deprecated field from config
-  saveGlobalConfig(({ cachedChangelog: _, ...rest }) => rest)
-}
-
-/**
- * Delete the pre-fork cache holding upstream's changelog.
+ * Drop every trace of the upstream changelog this fork used to fetch.
  *
- * Nothing reads it any more, so this is housekeeping rather than correctness —
- * but it is half a megabyte of another project's release notes sitting in this
- * install's cache dir, and leaving it there invites someone to wire it back up.
- * Best-effort: a cache we cannot delete is still a cache nobody reads.
+ * Two places hold it on an existing install: the deprecated `cachedChangelog`
+ * config field, and the `changelog.md` cache file. Both contain upstream's
+ * release notes, so both are discarded rather than carried forward.
+ *
+ * This replaces a migration that copied `cachedChangelog` into the cache file.
+ * That was correct while the two changelogs were the same document; now it
+ * would seed this fork's cache with another product's notes and defeat the
+ * point of changing the URL — the loudest possible version of the bug, since
+ * it survives having no CHANGELOG.md of our own.
+ *
+ * Called once at startup, before any other config save can re-add the field.
+ * Best-effort throughout: a file we cannot delete is still a file nobody reads.
  */
-export async function pruneUpstreamChangelogCache(): Promise<void> {
+export async function discardUpstreamChangelogState(): Promise<void> {
   try {
     await rm(getUpstreamChangelogCachePath(), { force: true })
   } catch {
-    // Nothing to do — the file is unreferenced either way.
+    // Unreferenced either way — the read path uses a different filename.
+  }
+
+  if (getGlobalConfig().cachedChangelog) {
+    saveGlobalConfig(({ cachedChangelog: _, ...rest }) => rest)
   }
 }
 
