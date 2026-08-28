@@ -384,13 +384,24 @@ export function mergeHookInstructions(
 
 /** Max size per backup chunk file (5MB). */
 const BACKUP_CHUNK_SIZE = 5 * 1024 * 1024
-/** Max number of compaction backup sets to keep. Oldest are deleted. */
-const MAX_BACKUP_SETS = 3
+/**
+ * Max number of compaction backup sets to keep. Oldest are deleted.
+ *
+ * Effectively "keep everything": backups are the only surviving record of what
+ * a conversation contained before compaction, and a heavily compacted session
+ * still lands far under this. Upstream kept 3, which silently discarded the
+ * history of any long-running session — 24 of this repo's own 27 sets.
+ *
+ * The ceiling stays finite so a pathological session cannot fill the disk
+ * unbounded, and the pruning path keeps its test coverage.
+ */
+const MAX_BACKUP_SETS = 1000
 
 /**
  * Save a full backup of pre-compaction messages to disk.
  * Large conversations are split into multiple chunk files (max 5MB each).
- * Only the last 3 compaction backups are kept — older sets are deleted.
+ * Backups are kept as plain JSONL and are not pruned in practice (see
+ * MAX_BACKUP_SETS) so old conversations stay searchable with grep.
  * Returns the backup directory path (or first chunk), or undefined on failure.
  */
 async function savePreCompactBackup(messages: Message[]): Promise<string | undefined> {
@@ -427,7 +438,8 @@ async function savePreCompactBackup(messages: Message[]): Promise<string | undef
       if (!firstChunkPath) firstChunkPath = chunkPath
     }
 
-    // Cleanup: keep only the last MAX_BACKUP_SETS compaction sets
+    // Safety ceiling only — MAX_BACKUP_SETS is high enough that real sessions
+    // never reach it. Nothing is deleted in normal use.
     await pruneOldBackups(backupDir)
 
     return firstChunkPath
