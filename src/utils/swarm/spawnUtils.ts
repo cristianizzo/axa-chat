@@ -9,37 +9,49 @@ import {
   getMainLoopModelOverride,
   getSessionBypassPermissionsMode,
 } from '../../bootstrap/state.js'
-import { existsSync } from 'fs'
 import { quote } from '../bash/shellQuote.js'
-import { isInBundledMode } from '../bundledMode.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
 import { getTeammateModeFromSnapshot } from './backends/teammateModeSnapshot.js'
 import { TEAMMATE_COMMAND_ENV_VAR } from './constants.js'
+
+/**
+ * Bun mounts a compiled binary's bundled entrypoint under this prefix.
+ *
+ * Windows uses a drive-letter form instead of a posix path, so both spellings
+ * are listed. Neither names a file outside the running process.
+ */
+const BUNDLED_ENTRYPOINT_PREFIXES = ['/$bunfs/', 'B:\\~BUN\\']
 
 /**
  * Gets the command to use for spawning teammate processes.
  * Uses TEAMMATE_COMMAND_ENV_VAR if set, otherwise falls back to the
  * current process executable path.
  *
- * The entrypoint is used only when it names a file that exists. A Bun-compiled
- * binary sets argv[1] to a path under the `/$bunfs/` virtual mount, which
- * resolves inside this process and nowhere else, so handing it to a shell
- * produces "No such file or directory" and every pane-backed teammate fails to
- * start. isInBundledMode() does not catch this on its own: it keys off
- * Bun.embeddedFiles, which is empty for a build that embeds no assets, so a
- * compiled binary can report false and fall straight through to argv[1].
- * Testing the path is the property that actually matters, and it holds
- * whatever the runtime and platform.
+ * argv[1] is rejected when it points into Bun's virtual mount. A compiled
+ * binary sets it to a path there, which resolves inside this process and
+ * nowhere else, so passing it to a shell produces "No such file or directory"
+ * and every pane-backed teammate fails to start. process.execPath is the real
+ * executable in both a compiled binary and a script run.
+ *
+ * Two things make this easy to get wrong, both verified against a compiled
+ * binary rather than assumed:
+ *
+ * - `isInBundledMode()` does not identify a compiled binary. It keys off
+ *   Bun.embeddedFiles, which is empty unless the build embeds assets, so it
+ *   reports false for exactly the binaries that need handling.
+ * - `existsSync()` on the virtual path returns true, because the mount is a
+ *   real filesystem as far as this process is concerned. Asking the
+ *   filesystem cannot distinguish the two cases; only the path can.
  */
 export function getTeammateCommand(): string {
   if (process.env[TEAMMATE_COMMAND_ENV_VAR]) {
     return process.env[TEAMMATE_COMMAND_ENV_VAR]
   }
   const entrypoint = process.argv[1]
-  if (entrypoint && !isInBundledMode() && existsSync(entrypoint)) {
-    return entrypoint
-  }
-  return process.execPath
+  const isVirtual =
+    !entrypoint ||
+    BUNDLED_ENTRYPOINT_PREFIXES.some(prefix => entrypoint.startsWith(prefix))
+  return isVirtual ? process.execPath : entrypoint
 }
 
 /**
