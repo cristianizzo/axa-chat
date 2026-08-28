@@ -36,9 +36,16 @@ function formatBytes(bytes: number): string {
 /** One line per thing the import would do, so the user confirms specifics. */
 function planSummary(plan: ImportPlan): string[] {
   const lines: string[] = []
-  if (plan.files.length > 0) {
+  const repairs = plan.files.filter(file => file.timestampOnly).length
+  const copies = plan.files.length - repairs
+  if (copies > 0) {
     lines.push(
-      `${plan.files.length} conversation file${plan.files.length === 1 ? '' : 's'} across ${plan.projects} project${plan.projects === 1 ? '' : 's'} (${formatBytes(plan.bytes)})`,
+      `${copies} conversation file${copies === 1 ? '' : 's'} across ${plan.projects} project${plan.projects === 1 ? '' : 's'} (${formatBytes(plan.bytes)})`,
+    )
+  }
+  if (repairs > 0) {
+    lines.push(
+      `${repairs} already-imported file${repairs === 1 ? '' : 's'} to restore the original date on`,
     )
   }
   if (plan.settings) lines.push('settings.json')

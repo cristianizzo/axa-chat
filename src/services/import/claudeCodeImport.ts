@@ -25,7 +25,14 @@ import { getErrnoCode } from '../../utils/errors.js'
 import { logError } from '../../utils/log.js'
 import { getSecureStorage } from '../../utils/secureStorage/index.js'
 import { getUsername } from '../../utils/secureStorage/macOsKeychainHelpers.js'
-import { copyFile, mkdir, readFile, readdir, stat } from 'fs/promises'
+import {
+  copyFile,
+  mkdir,
+  readFile,
+  readdir,
+  stat,
+  utimes,
+} from 'fs/promises'
 
 /** Where a Claude Code install keeps its data. */
 export const CLAUDE_CODE_DIR = join(homedir(), '.claude')
@@ -82,6 +89,15 @@ type PendingFile = {
   source: string
   destination: string
   bytes: number
+  /** Carried over to the copy so the conversation keeps its real date. */
+  atimeMs: number
+  mtimeMs: number
+  /**
+   * True when the bytes are already in place and only the timestamps are
+   * wrong — an import from before timestamps were preserved. Repairing those
+   * is a utimes() call, not a 1.5 GB re-copy.
+   */
+  timestampOnly: boolean
 }
 
 /** Something the import could not do, and why. Always reported to the user. */
@@ -144,13 +160,26 @@ async function statOrNull(path: string) {
  * messages after the last import. mtime covers rewrites that happen to land on
  * the same length.
  */
+/**
+ * Whether the destination is not already a faithful copy of the source.
+ *
+ * Timestamps count, not just size. A transcript's mtime is when the
+ * conversation was last touched, and that is what `--resume` sorts by and what
+ * the project list shows as "last used" — a copy carrying the time of the
+ * import instead collapses months of history into one undifferentiated block.
+ * Comparing them also makes a re-run repair earlier imports that did not
+ * preserve them.
+ */
 function needsCopy(
   source: { size: number; mtimeMs: number },
   destination: { size: number; mtimeMs: number } | null,
 ): boolean {
   if (!destination) return true
   return (
-    source.size !== destination.size || source.mtimeMs > destination.mtimeMs
+    source.size !== destination.size ||
+    // Whole seconds: some filesystems store sub-second precision and some do
+    // not, and a copy that only differs in the fraction is still faithful.
+    Math.floor(source.mtimeMs / 1000) !== Math.floor(destination.mtimeMs / 1000)
   )
 }
 
@@ -201,6 +230,9 @@ async function collectPendingFiles(
           source: sourcePath,
           destination: destinationPath,
           bytes: sourceStat.size,
+          atimeMs: sourceStat.atimeMs,
+          mtimeMs: sourceStat.mtimeMs,
+          timestampOnly: destinationStat?.size === sourceStat.size,
         })
       }
     }
@@ -404,7 +436,12 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
     destinationDir,
     available: true,
     files,
-    bytes: files.reduce((total, file) => total + file.bytes, 0),
+    // Only what will actually be transferred. A timestamp repair moves no
+    // bytes, and counting it would promise a 1.5 GB copy that never happens.
+    bytes: files.reduce(
+      (total, file) => total + (file.timestampOnly ? 0 : file.bytes),
+      0,
+    ),
     projects: projects.size,
     settings,
     configKeys: [...configKeys],
@@ -441,9 +478,17 @@ export async function runClaudeCodeImport(
         await mkdir(dir, { recursive: true })
         createdDirs.add(dir)
       }
-      await copyFile(file.source, file.destination)
+      if (!file.timestampOnly) {
+        await copyFile(file.source, file.destination)
+        result.bytesCopied += file.bytes
+      }
+      // After the copy, not before: copyFile sets mtime to now.
+      await utimes(
+        file.destination,
+        new Date(file.atimeMs),
+        new Date(file.mtimeMs),
+      )
       result.filesCopied++
-      result.bytesCopied += file.bytes
     } catch (error) {
       result.failures.push({ path: file.source, error: String(error) })
     }
