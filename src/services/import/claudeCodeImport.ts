@@ -18,12 +18,13 @@
 
 import { execFileNoThrow } from '../../utils/execFileNoThrow.js'
 import { homedir } from 'os'
-import { join, relative } from 'path'
+import { dirname, join, relative } from 'path'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { getErrnoCode } from '../../utils/errors.js'
 import { logError } from '../../utils/log.js'
 import { getSecureStorage } from '../../utils/secureStorage/index.js'
+import { getUsername } from '../../utils/secureStorage/macOsKeychainHelpers.js'
 import { copyFile, mkdir, readFile, readdir, stat } from 'fs/promises'
 
 /** Where a Claude Code install keeps its data. */
@@ -271,7 +272,10 @@ async function readSourceCredentials(
       [
         'find-generic-password',
         '-a',
-        process.env.USER ?? '',
+        // The same resolution the storage layer uses to write entries, so a
+        // launch context without $USER set (a LaunchAgent, an IDE) still finds
+        // the account Claude Code stored the credentials under.
+        getUsername(),
         '-w',
         '-s',
         CLAUDE_CODE_KEYCHAIN_SERVICE,
@@ -431,7 +435,7 @@ export async function runClaudeCodeImport(
 
   const createdDirs = new Set<string>()
   for (const file of plan.files) {
-    const dir = file.destination.slice(0, file.destination.lastIndexOf('/'))
+    const dir = dirname(file.destination)
     try {
       if (!createdDirs.has(dir)) {
         await mkdir(dir, { recursive: true })

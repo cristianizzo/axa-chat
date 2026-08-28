@@ -26,7 +26,7 @@ import {
 } from '../../services/mcp/xaaIdpLogin.js'
 import { parseEnvVars } from '../../utils/envUtils.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
-import { PRODUCT_NAME } from '../../constants/product.js'
+import { BINARY_NAME, PRODUCT_NAME } from '../../constants/product.js'
 
 /**
  * Registers the `mcp add` subcommand on the given Commander command.
@@ -38,13 +38,13 @@ export function registerMcpAddCommand(mcp: Command): void {
       `Add an MCP server to ${PRODUCT_NAME}.\n\n` +
         'Examples:\n' +
         '  # Add HTTP server:\n' +
-        '  claude mcp add --transport http sentry https://mcp.sentry.dev/mcp\n\n' +
+        `  ${BINARY_NAME} mcp add --transport http sentry https://mcp.sentry.dev/mcp\n\n` +
         '  # Add HTTP server with headers:\n' +
-        '  claude mcp add --transport http corridor https://app.corridor.dev/api/mcp --header "Authorization: Bearer ..."\n\n' +
+        `  ${BINARY_NAME} mcp add --transport http corridor https://app.corridor.dev/api/mcp --header "Authorization: Bearer ..."\n\n` +
         '  # Add stdio server with environment variables:\n' +
-        '  claude mcp add -e API_KEY=xxx my-server -- npx my-mcp-server\n\n' +
+        `  ${BINARY_NAME} mcp add -e API_KEY=xxx my-server -- npx my-mcp-server\n\n` +
         '  # Add stdio server with subprocess flags:\n' +
-        '  claude mcp add my-server -- my-command --some-flag arg1',
+        `  ${BINARY_NAME} mcp add my-server -- my-command --some-flag arg1`,
     )
     .option(
       '-s, --scope <scope>',
