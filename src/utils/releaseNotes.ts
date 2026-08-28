@@ -1,16 +1,19 @@
 import axios from 'axios'
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { coerce } from 'semver'
 import { getIsNonInteractiveSession } from '../bootstrap/state.js'
 import { getGlobalConfig, saveGlobalConfig } from './config.js'
 import { getClaudeConfigHomeDir } from './envUtils.js'
-import { toError } from './errors.js'
+import { isENOENT, toError } from './errors.js'
 import { logError } from './log.js'
 import { isEssentialTrafficOnly } from './privacyLevel.js'
 import { gt } from './semver.js'
 
 const MAX_RELEASE_NOTES_SHOWN = 5
+
+/** How long to wait before re-checking a repo that published no changelog. */
+const CHANGELOG_RETRY_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 /**
  * We fetch the changelog from GitHub instead of bundling it with the build.
@@ -25,16 +28,39 @@ const MAX_RELEASE_NOTES_SHOWN = 5
  * 2. We fetch the changelog in the background and store it in config
  * 3. Next time the user starts Claude, the cached changelog is available immediately
  */
+/**
+ * This fork's own changelog, not the upstream project it was forked from.
+ *
+ * These pointed at `anthropics/claude-code`. Because this fork inherits that
+ * project's version numbering the entries matched, so the startup banner's
+ * "What's new" feed and `/release-notes` presented another product's release
+ * notes as this one's — users saw lines about Claude Max subscriptions and
+ * organization-managed logins describing releases this build never shipped.
+ *
+ * Until a CHANGELOG.md exists at the URL below the fetch finds nothing, the
+ * cache stays empty, and the feed falls back to its own empty message. Silent
+ * and true beats confident and wrong.
+ */
 export const CHANGELOG_URL =
-  'https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md'
+  'https://github.com/cristianizzo/axa-chat/blob/main/CHANGELOG.md'
 const RAW_CHANGELOG_URL =
-  'https://raw.githubusercontent.com/anthropics/claude-code/refs/heads/main/CHANGELOG.md'
+  'https://raw.githubusercontent.com/cristianizzo/axa-chat/refs/heads/main/CHANGELOG.md'
 
 /**
- * Get the path for the cached changelog file.
- * The changelog is stored at ~/.claude/cache/changelog.md
+ * Get the path for the cached changelog file, under this install's config dir.
+ *
+ * Deliberately not the old `changelog.md`. Every existing install has one of
+ * those holding the upstream changelog this fork used to fetch, and reading it
+ * back would keep showing another product's release notes long after the URL
+ * was corrected. A new name means those caches are simply never read again;
+ * `pruneUpstreamChangelogCache` deletes them.
  */
 function getChangelogCachePath(): string {
+  return join(getClaudeConfigHomeDir(), 'cache', 'changelog-axa.md')
+}
+
+/** The pre-fork cache, holding upstream's changelog. Read by no one now. */
+function getUpstreamChangelogCachePath(): string {
   return join(getClaudeConfigHomeDir(), 'cache', 'changelog.md')
 }
 
@@ -48,31 +74,58 @@ export function _resetChangelogCacheForTesting(): void {
 }
 
 /**
- * Migrate changelog from old config-based storage to file-based storage.
- * This should be called once at startup to ensure the migration happens
- * before any other config saves that might re-add the deprecated field.
+ * Drop every trace of the upstream changelog this fork used to fetch.
+ *
+ * Two places hold it on an existing install: the deprecated `cachedChangelog`
+ * config field, and the `changelog.md` cache file. Both contain upstream's
+ * release notes, so both are discarded rather than carried forward.
+ *
+ * This replaces a migration that copied `cachedChangelog` into the cache file.
+ * That was correct while the two changelogs were the same document; now it
+ * would seed this fork's cache with another product's notes and defeat the
+ * point of changing the URL — the loudest possible version of the bug, since
+ * it survives having no CHANGELOG.md of our own.
+ *
+ * `changelogLastFetched` goes with them: it timed a fetch of the upstream URL,
+ * so leaving it in place would let the retry back-off throttle the *new* URL's
+ * very first fetch for up to a day. Clearing it is deliberately conditional on
+ * having actually found upstream state — clearing it on every start would wipe
+ * the stamp the back-off measures from, and the back-off would never engage.
+ *
+ * Called once at startup, before any other config save can re-add the field.
+ * Best-effort throughout: a file we cannot delete is still a file nobody reads.
  */
-export async function migrateChangelogFromConfig(): Promise<void> {
-  const config = getGlobalConfig()
-  if (!config.cachedChangelog) {
+export async function discardUpstreamChangelogState(): Promise<void> {
+  let hadUpstreamState = false
+
+  try {
+    // Not `force`: the ENOENT tells us there was nothing to carry forward,
+    // which is exactly the signal the conditional below needs.
+    await rm(getUpstreamChangelogCachePath())
+    hadUpstreamState = true
+  } catch (error) {
+    // Only ENOENT means "there was no upstream state". Any other failure
+    // (a permission problem, say) means the file was there and we could not
+    // remove it — still upstream state, and the stamp below must go.
+    if (!isENOENT(error)) {
+      hadUpstreamState = true
+    }
+  }
+
+  if (getGlobalConfig().cachedChangelog) {
+    hadUpstreamState = true
+  }
+
+  if (!hadUpstreamState) {
     return
   }
 
-  const cachePath = getChangelogCachePath()
-
-  // If cache file doesn't exist, create it from old config
-  try {
-    await mkdir(dirname(cachePath), { recursive: true })
-    await writeFile(cachePath, config.cachedChangelog, {
-      encoding: 'utf-8',
-      flag: 'wx', // Write only if file doesn't exist
-    })
-  } catch {
-    // File already exists, which is fine - skip silently
-  }
-
-  // Remove the deprecated field from config
-  saveGlobalConfig(({ cachedChangelog: _, ...rest }) => rest)
+  // One write for both: dropping the deprecated field, and the stamp that
+  // measured the old URL.
+  saveGlobalConfig(
+    ({ cachedChangelog: _content, changelogLastFetched: _stamp, ...rest }) =>
+      rest,
+  )
 }
 
 /**
@@ -90,7 +143,31 @@ export async function fetchAndStoreChangelog(): Promise<void> {
     return
   }
 
-  const response = await axios.get(RAW_CHANGELOG_URL)
+  // checkForReleaseNotes re-fetches whenever the cache is empty, so a repo
+  // with no CHANGELOG.md would hit the network on every single start, for
+  // ever. Back that case off to once a day. Only the empty case is throttled:
+  // a cache that exists is refreshed as eagerly as before, so a real changelog
+  // still updates the moment the version changes.
+  if (!(await getStoredChangelog())) {
+    const lastFetched = getGlobalConfig().changelogLastFetched ?? 0
+    if (Date.now() - lastFetched < CHANGELOG_RETRY_INTERVAL_MS) {
+      return
+    }
+  }
+
+  // 404 is an expected answer, not a failure: the repo need not publish a
+  // CHANGELOG.md, and letting axios throw would log an error on every start
+  // for a file whose absence is a valid state. Anything else still throws and
+  // is reported by the caller.
+  const response = await axios.get(RAW_CHANGELOG_URL, {
+    validateStatus: status => status === 200 || status === 404,
+  })
+  if (response.status === 404) {
+    // Record the attempt so the throttle above can see it. Without this the
+    // back-off has nothing to measure from and never engages.
+    recordChangelogFetchAttempt()
+    return
+  }
   if (response.status === 200) {
     const changelogContent = response.data
 
@@ -109,13 +186,17 @@ export async function fetchAndStoreChangelog(): Promise<void> {
     await writeFile(cachePath, changelogContent, { encoding: 'utf-8' })
     changelogMemoryCache = changelogContent
 
-    // Update timestamp in config
-    const changelogLastFetched = Date.now()
-    saveGlobalConfig(current => ({
-      ...current,
-      changelogLastFetched,
-    }))
+    recordChangelogFetchAttempt()
   }
+}
+
+/** Stamp the last fetch attempt, which is what the retry back-off reads. */
+function recordChangelogFetchAttempt(): void {
+  const changelogLastFetched = Date.now()
+  saveGlobalConfig(current => ({
+    ...current,
+    changelogLastFetched,
+  }))
 }
 
 /**
