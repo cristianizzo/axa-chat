@@ -34,6 +34,17 @@ let cachedBackend: PaneBackend | null = null
 let cachedDetectionResult: BackendDetectionResult | null = null
 
 /**
+ * The teammate mode the cached result was resolved under.
+ *
+ * The mode is not fixed for the session: changing it in Settings calls
+ * clearCliTeammateModeOverride, which rewrites the startup snapshot. Serving a
+ * result resolved under the previous mode would hand back a backend the user
+ * has just stopped asking for — silently, which is what this mode exists to
+ * prevent.
+ */
+let cachedDetectionMode: TeammateMode | null = null
+
+/**
  * Flag to track if backends have been registered.
  */
 let backendsRegistered = false
@@ -140,12 +151,22 @@ export async function detectAndGetBackend(): Promise<BackendDetectionResult> {
   // Ensure backends are registered before detection
   await ensureBackendsRegistered()
 
-  // Return cached result if available
-  if (cachedDetectionResult) {
+  const mode = getTeammateMode()
+
+  // Return cached result if available, but only if it was resolved under the
+  // mode in force now — see cachedDetectionMode.
+  if (cachedDetectionResult && cachedDetectionMode === mode) {
     logForDebugging(
       `[BackendRegistry] Using cached backend: ${cachedDetectionResult.backend.type}`,
     )
     return cachedDetectionResult
+  }
+  if (cachedDetectionResult) {
+    logForDebugging(
+      `[BackendRegistry] Discarding backend cached under mode=${cachedDetectionMode}, now mode=${mode}`,
+    )
+    cachedDetectionResult = null
+    cachedBackend = null
   }
 
   logForDebugging('[BackendRegistry] Starting backend detection...')
@@ -153,7 +174,6 @@ export async function detectAndGetBackend(): Promise<BackendDetectionResult> {
   // Check all environment conditions upfront for logging
   const insideTmux = await isInsideTmux()
   const inITerm2 = isInITerm2()
-  const mode = getTeammateMode()
 
   logForDebugging(
     `[BackendRegistry] Environment: insideTmux=${insideTmux}, inITerm2=${inITerm2}, mode=${mode}`,
@@ -189,6 +209,7 @@ export async function detectAndGetBackend(): Promise<BackendDetectionResult> {
     )
     const backend = createTmuxBackend()
     cachedBackend = backend
+    cachedDetectionMode = mode
     cachedDetectionResult = {
       backend,
       isNative: true,
@@ -222,6 +243,7 @@ export async function detectAndGetBackend(): Promise<BackendDetectionResult> {
         )
         const backend = createITermBackend()
         cachedBackend = backend
+        cachedDetectionMode = mode
         cachedDetectionResult = {
           backend,
           isNative: true,
@@ -261,6 +283,7 @@ export async function detectAndGetBackend(): Promise<BackendDetectionResult> {
       // chosen to prefer tmux - otherwise they'd be re-prompted on every spawn.
       const backend = createTmuxBackend()
       cachedBackend = backend
+      cachedDetectionMode = mode
       cachedDetectionResult = {
         backend,
         isNative: false,
@@ -288,6 +311,7 @@ export async function detectAndGetBackend(): Promise<BackendDetectionResult> {
     logForDebugging('[BackendRegistry] Selected: tmux (external session mode)')
     const backend = createTmuxBackend()
     cachedBackend = backend
+    cachedDetectionMode = mode
     cachedDetectionResult = {
       backend,
       isNative: false,
@@ -507,6 +531,7 @@ async function getPaneBackendExecutor(): Promise<TeammateExecutor> {
 export function resetBackendDetection(): void {
   cachedBackend = null
   cachedDetectionResult = null
+  cachedDetectionMode = null
   cachedInProcessBackend = null
   cachedPaneBackendExecutor = null
   backendsRegistered = false
