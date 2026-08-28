@@ -237,9 +237,35 @@ async function decideFile(
   const destinationTime = Math.floor(destination.mtimeMs / 1000)
 
   if (source.size === destination.size) {
-    return sourceTime === destinationTime
-      ? { action: 'skip' }
-      : { action: 'repair-date' }
+    if (sourceTime === destinationTime) return { action: 'skip' }
+
+    // Same length, different date. Which way round decides whether the bytes
+    // need checking.
+    if (destinationTime > sourceTime) {
+      // axa's copy is newer than a source that has not been touched since —
+      // the signature of a copy stamped at import time. Nothing could have
+      // rewritten the source in between without moving its own date forward,
+      // so the bytes are the ones we wrote. Verifying instead would mean
+      // re-reading the whole store to confirm what the dates already establish.
+      return { action: 'repair-date' }
+    }
+
+    // The source is newer at the same length, so it was rewritten rather than
+    // appended to. Its date says nothing about whether the content still
+    // matches, so read it.
+    const rewritten = await comparePrefix(
+      destinationPath,
+      sourcePath,
+      destination.size,
+    )
+    switch (rewritten.status) {
+      case 'prefix':
+        return { action: 'repair-date' }
+      case 'differs':
+        return { action: 'conflict' }
+      case 'unreadable':
+        return { action: 'unreadable', error: rewritten.error }
+    }
   }
 
   // axa holds more than the source: the conversation was continued here, or
@@ -283,8 +309,22 @@ async function appendTail(
 ): Promise<void> {
   const sourceHandle = await open(sourcePath, 'r')
   try {
-    const destinationHandle = await open(destinationPath, 'a')
+    // 'r+', not 'a': append mode writes at whatever the end happens to be when
+    // each write lands. If axa appended to this transcript between the plan and
+    // now — resuming the conversation during an import is entirely possible —
+    // that would interleave the source's tail after messages it never preceded.
+    const destinationHandle = await open(destinationPath, 'r+')
     try {
+      const { size } = await destinationHandle.stat()
+      if (size !== from) {
+        // Someone wrote to it since it was checked, so the verified prefix no
+        // longer describes the file. Reported as a failure rather than guessed
+        // at; the next run re-plans against whatever it looks like then.
+        throw new Error(
+          `Grew from ${from} to ${size} bytes while the import was running; left unchanged.`,
+        )
+      }
+
       const buffer = Buffer.allocUnsafe(PREFIX_COMPARE_CHUNK)
       let offset = from
       for (;;) {
@@ -295,7 +335,8 @@ async function appendTail(
           offset,
         )
         if (bytesRead === 0) break
-        await destinationHandle.write(buffer, 0, bytesRead)
+        // Explicit position, for the same reason as 'r+'.
+        await destinationHandle.write(buffer, 0, bytesRead, offset)
         offset += bytesRead
       }
     } finally {

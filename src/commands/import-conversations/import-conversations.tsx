@@ -50,7 +50,7 @@ function planSummary(plan: ImportPlan): string[] {
   }
   if (appends > 0) {
     lines.push(
-      `${appends} conversation${appends === 1 ? '' : 's'} to extend with messages added in Claude Code since`,
+      `${appends} conversation${appends === 1 ? '' : 's'} to extend with messages added in Claude Code since the last import`,
     )
   }
   if (copies > 0 || appends > 0) {
