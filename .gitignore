@@ -7,11 +7,14 @@ cli-dev.next.tmp
 openclaw/
 docs/
 CLAUDE.md
+AXA.md
+AXA.local.md
 *.bun-build
 .bun-build-active/
 .idea/
 conversation-backup.jsonl
 .claude/
+.axa/
 .axa-install.json
 .axa-update.json
 .axa-update.json.lock

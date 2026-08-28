@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import { CONFIG_DIR_NAME } from '../constants/product.js'
 import chalk from 'chalk'
 import { spawnSync } from 'child_process'
 import {
@@ -202,7 +203,7 @@ const GIT_NO_PROMPT_ENV = {
 }
 
 function worktreesDir(repoRoot: string): string {
-  return join(repoRoot, '.claude', 'worktrees')
+  return join(repoRoot, CONFIG_DIR_NAME, 'worktrees')
 }
 
 // Flatten nested slugs (`user/feature` → `user+feature`) for both the branch

@@ -1,4 +1,5 @@
 import { c as _c } from "react/compiler-runtime";
+import { CONFIG_DIR_NAME } from '../constants/product.js'
 import figures from 'figures';
 import { join } from 'path';
 import React, { Suspense, use, useCallback, useEffect, useMemo, useState } from 'react';
@@ -167,7 +168,7 @@ export function Doctor(t0) {
       getDoctorDiagnostic().then(setDiagnostic);
       (async () => {
         const userAgentsDir = join(getClaudeConfigHomeDir(), "agents");
-        const projectAgentsDir = join(getOriginalCwd(), ".claude", "agents");
+        const projectAgentsDir = join(getOriginalCwd(), CONFIG_DIR_NAME, "agents");
         const {
           activeAgents,
           allAgents,

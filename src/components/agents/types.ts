@@ -1,8 +1,9 @@
 import type { SettingSource } from 'src/utils/settings/constants.js'
+import { CONFIG_DIR_NAME } from '../../constants/product.js'
 import type { AgentDefinition } from '../../tools/AgentTool/loadAgentsDir.js'
 
 export const AGENT_PATHS = {
-  FOLDER_NAME: '.claude',
+  FOLDER_NAME: CONFIG_DIR_NAME,
   AGENTS_DIR: 'agents',
 } as const
 

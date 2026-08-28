@@ -76,6 +76,11 @@ export const DANGEROUS_DIRECTORIES = [
   '.git',
   '.vscode',
   '.idea',
+  CONFIG_DIR_NAME,
+  // Legacy, and deliberately still listed. A project that has not been
+  // migrated still keeps live config here, so dropping it would remove this
+  // protection from exactly the projects that predate the rename — the ones
+  // still relying on it.
   '.claude',
 ] as const
 
@@ -107,7 +112,7 @@ export function getClaudeSkillScope(
 
   const bases = [
     {
-      dir: expandPath(join(getOriginalCwd(), '.claude', 'skills')),
+      dir: expandPath(join(getOriginalCwd(), CONFIG_DIR_NAME, 'skills')),
       prefix: '/.claude/skills/',
     },
     {
@@ -240,9 +245,9 @@ function isClaudeConfigFilePath(filePath: string): boolean {
   // Check if file is within .claude/commands or .claude/agents directories
   // using proper path segment validation (not string matching with includes())
   // pathInWorkingPath now handles case-insensitive comparison to prevent bypasses
-  const commandsDir = join(getOriginalCwd(), '.claude', 'commands')
-  const agentsDir = join(getOriginalCwd(), '.claude', 'agents')
-  const skillsDir = join(getOriginalCwd(), '.claude', 'skills')
+  const commandsDir = join(getOriginalCwd(), CONFIG_DIR_NAME, 'commands')
+  const agentsDir = join(getOriginalCwd(), CONFIG_DIR_NAME, 'agents')
+  const skillsDir = join(getOriginalCwd(), CONFIG_DIR_NAME, 'skills')
 
   return (
     pathInWorkingPath(filePath, commandsDir) ||
@@ -463,11 +468,13 @@ function isDangerousFilePathToAutoEdit(path: string): boolean {
         continue
       }
 
-      // Special case: .claude/worktrees/ is a structural path (where Claude stores
-      // git worktrees), not a user-created dangerous directory. Skip the .claude
-      // segment when it's followed by 'worktrees'. Any nested .claude directories
-      // within the worktree (not followed by 'worktrees') are still blocked.
-      if (dir === '.claude') {
+      // Special case: <config>/worktrees/ is a structural path (where axa
+      // stores git worktrees), not a user-created dangerous directory. Skip the
+      // config segment when it's followed by 'worktrees'. Any nested config
+      // directories within the worktree (not followed by 'worktrees') are still
+      // blocked. Both spellings, since an unmigrated project still has its
+      // worktrees under the legacy name.
+      if (dir === CONFIG_DIR_NAME || dir === '.claude') {
         const nextSegment = pathSegments[i + 1]
         if (
           nextSegment &&
@@ -1599,7 +1606,7 @@ export function checkEditableInternalPath(
   // .claude/ only (not ~/.claude/) since launch.json is per-project.
   if (
     normalizeCaseForComparison(normalizedPath) ===
-    normalizeCaseForComparison(join(getOriginalCwd(), '.claude', 'launch.json'))
+    normalizeCaseForComparison(join(getOriginalCwd(), CONFIG_DIR_NAME, 'launch.json'))
   ) {
     return {
       behavior: 'allow',

@@ -1,4 +1,5 @@
 import memoize from 'lodash-es/memoize.js'
+import { MEMORY_FILE_NAME } from './constants/product.js'
 import { join } from 'path'
 import {
   getCurrentProjectConfig,
@@ -19,7 +20,7 @@ export type Step = {
 
 export function getSteps(): Step[] {
   const hasClaudeMd = getFsImplementation().existsSync(
-    join(getCwd(), 'CLAUDE.md'),
+    join(getCwd(), MEMORY_FILE_NAME),
   )
   const isWorkspaceDirEmpty = isDirEmpty(getCwd())
 

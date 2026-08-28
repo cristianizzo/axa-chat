@@ -19,7 +19,8 @@ import { AppStateProvider } from './state/AppState.js';
 import { onChangeAppState } from './state/onChangeAppState.js';
 import { normalizeApiKeyForConfig } from './utils/authPortable.js';
 import { getExternalClaudeMdIncludes, getMemoryFiles, shouldShowClaudeMdExternalIncludesWarning } from './utils/claudemd.js';
-import { checkHasTrustDialogAccepted, getCustomApiKeyStatus, getGlobalConfig, saveGlobalConfig } from './utils/config.js';
+import { checkHasTrustDialogAccepted, getCurrentProjectConfig, getCustomApiKeyStatus, getGlobalConfig, saveCurrentProjectConfig, saveGlobalConfig } from './utils/config.js';
+import { getOriginalCwd } from './bootstrap/state.js';
 import { updateDeepLinkTerminalPreference } from './utils/deepLink/terminalPreference.js';
 import { isEnvTruthy, isRunningOnHomespace } from './utils/envUtils.js';
 import { type FpsMetrics, FpsTracker } from './utils/fpsTracker.js';
@@ -148,6 +149,32 @@ export async function showSetupScreens(root: Root, permissionMode: PermissionMod
     // picks up fresh auth headers.
     resetGrowthBook();
     void initializeGrowthBook();
+
+    // Offer to import a Claude Code project layout, once per project.
+    //
+    // After trust on purpose: this reads and writes files in the repo, so it
+    // must not run anywhere the user has not said they trust it. Before the
+    // memory files are read below, so an accepted import takes effect on this
+    // run rather than the next one.
+    if (!getCurrentProjectConfig().hasAnsweredLegacyProjectImport) {
+      const projectRoot = getOriginalCwd();
+      const {
+        findLegacyProjectFiles,
+        hasAnything
+      } = await import('./utils/legacyProjectImport.js');
+      const findings = await findLegacyProjectFiles(projectRoot);
+      if (hasAnything(findings)) {
+        const {
+          LegacyProjectImportDialog
+        } = await import('./components/LegacyProjectImportDialog.js');
+        await showSetupDialog(root, done => <LegacyProjectImportDialog projectRoot={projectRoot} findings={findings} onDone={done} />);
+        // Recorded for accept and decline alike — see the field's comment.
+        saveCurrentProjectConfig(current => ({
+          ...current,
+          hasAnsweredLegacyProjectImport: true
+        }));
+      }
+    }
 
     // Now that trust is established, prefetch system context if it wasn't already
     void getSystemContext();

@@ -7,6 +7,7 @@
     "jsx": "react-jsx",
     "allowJs": true,
     "types": ["bun"],
+    "ignoreDeprecations": "6.0",
     "baseUrl": ".",
     "paths": {
       "src/*": ["src/*"]

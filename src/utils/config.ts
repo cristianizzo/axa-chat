@@ -1,4 +1,9 @@
 import { feature } from 'bun:bundle'
+import {
+  LEGACY_MEMORY_FILE_NAME,
+  LOCAL_MEMORY_FILE_NAME,
+  MEMORY_FILE_NAME,
+} from '../constants/product.js'
 import { randomBytes } from 'crypto'
 import { unwatchFile, watchFile } from 'fs'
 import memoize from 'lodash-es/memoize.js'
@@ -112,6 +117,14 @@ export type ProjectConfig = {
   hasTrustDialogAccepted?: boolean
 
   hasCompletedProjectOnboarding?: boolean
+  /**
+   * The user answered the offer to import this project's Claude Code layout.
+   *
+   * Set on accept and on decline alike: someone who keeps using both tools in
+   * one repo means it, and asking again every launch would be nagging rather
+   * than helping.
+   */
+  hasAnsweredLegacyProjectImport?: boolean
   projectOnboardingSeenCount: number
   hasClaudeMdExternalIncludesApproved?: boolean
   hasClaudeMdExternalIncludesWarningShown?: boolean
@@ -1879,13 +1892,16 @@ export function getMemoryPath(memoryType: MemoryType): string {
 
   switch (memoryType) {
     case 'User':
-      return join(getClaudeConfigHomeDir(), 'CLAUDE.md')
+      return join(getClaudeConfigHomeDir(), MEMORY_FILE_NAME)
     case 'Local':
-      return join(cwd, 'CLAUDE.local.md')
+      return join(cwd, LOCAL_MEMORY_FILE_NAME)
     case 'Project':
-      return join(cwd, 'CLAUDE.md')
+      return join(cwd, MEMORY_FILE_NAME)
     case 'Managed':
-      return join(getManagedFilePath(), 'CLAUDE.md')
+      // Managed settings are deployed by an administrator into a
+      // system-wide, Claude-branded location that this fork does not own;
+      // renaming the file there would just stop reading what they deployed.
+      return join(getManagedFilePath(), LEGACY_MEMORY_FILE_NAME)
     case 'AutoMem':
       return getAutoMemEntrypoint()
   }
