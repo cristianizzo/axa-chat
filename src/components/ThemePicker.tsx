@@ -7,6 +7,7 @@ import { Box, Text, usePreviewTheme, useTheme, useThemeSetting } from '../ink.js
 import { useRegisterKeybindingContext } from '../keybindings/KeybindingContext.js';
 import { useKeybinding } from '../keybindings/useKeybinding.js';
 import { useShortcutDisplay } from '../keybindings/useShortcutDisplay.js';
+import { PRODUCT_NAME } from '../constants/product.js';
 import { useAppState, useSetAppState } from '../state/AppState.js';
 import { gracefulShutdown } from '../utils/gracefulShutdown.js';
 import { updateSettingsForSource } from '../utils/settings/settings.js';
@@ -235,7 +236,7 @@ export function ThemePicker(t0) {
       newStart: 1,
       oldLines: 3,
       newLines: 3,
-      lines: [" function greet() {", "-  console.log(\"Hello, World!\");", "+  console.log(\"Hello, Claude!\");", " }"]
+      lines: [" function greet() {", "-  console.log(\"Hello, World!\");", `+  console.log("Hello, ${PRODUCT_NAME}!");`, " }"]
     };
     $[34] = t20;
   } else {
@@ -243,7 +244,7 @@ export function ThemePicker(t0) {
   }
   let t21;
   if ($[35] !== columns) {
-    t21 = <Box flexDirection="column" borderTop={true} borderBottom={true} borderLeft={false} borderRight={false} borderStyle="dashed" borderColor="subtle"><StructuredDiff patch={t20} dim={false} filePath="demo.js" firstLine={null} width={columns} /></Box>;
+    t21 = <Box flexDirection="column"><StructuredDiff patch={t20} dim={false} filePath="demo.js" firstLine={null} width={columns} /></Box>;
     $[35] = columns;
     $[36] = t21;
   } else {
