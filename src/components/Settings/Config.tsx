@@ -917,10 +917,10 @@ export function Config({
       id: 'teammateMode',
       label,
       value: globalConfig.teammateMode ?? 'auto',
-      options: ['auto', 'tmux', 'in-process'],
+      options: ['auto', 'tmux', 'iterm2', 'in-process'],
       type: 'enum' as const,
       onChange(mode_0: string) {
-        if (mode_0 !== 'auto' && mode_0 !== 'tmux' && mode_0 !== 'in-process') {
+        if (mode_0 !== 'auto' && mode_0 !== 'tmux' && mode_0 !== 'iterm2' && mode_0 !== 'in-process') {
           return;
         }
         // Clear CLI override and set new mode (pass mode to avoid race condition)
@@ -935,6 +935,25 @@ export function Config({
         });
         logEvent('tengu_teammate_mode_changed', {
           mode: mode_0 as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
+        });
+      }
+    }, {
+      // Written by answering "use tmux instead" once at the it2 setup prompt,
+      // and never expires. Without a row here the only way back to native
+      // panes was editing config.json by hand, with nothing on screen to
+      // suggest the setting existed at all.
+      id: 'preferTmuxOverIterm2',
+      label: 'Prefer tmux over iTerm2 panes',
+      value: globalConfig.preferTmuxOverIterm2 === true,
+      type: 'boolean' as const,
+      onChange(prefer: boolean) {
+        saveGlobalConfig(current_pref => ({
+          ...current_pref,
+          preferTmuxOverIterm2: prefer
+        }));
+        setGlobalConfig({
+          ...getGlobalConfig(),
+          preferTmuxOverIterm2: prefer
         });
       }
     }, {

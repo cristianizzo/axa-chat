@@ -126,8 +126,14 @@ export const SUPPORTED_SETTINGS: Record<string, SettingConfig> = {
     source: 'global',
     type: 'string',
     description:
-      'How to spawn teammates: "tmux" for traditional tmux, "in-process" for same process, "auto" to choose automatically',
+      'How to spawn teammates: "tmux" for traditional tmux, "iterm2" for native iTerm2 panes, "in-process" for same process, "auto" to choose automatically',
     options: TEAMMATE_MODES,
+  },
+  preferTmuxOverIterm2: {
+    source: 'global',
+    type: 'boolean',
+    description:
+      'Prefer tmux over iTerm2 native panes. Set by answering "use tmux instead" once at the it2 setup prompt; ignored when teammateMode is "iterm2"',
   },
   ...(process.env.USER_TYPE === 'ant'
     ? {

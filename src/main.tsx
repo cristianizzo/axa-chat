@@ -3864,7 +3864,7 @@ async function run(): Promise<CommanderCommand> {
   program.addOption(new Option('--agent-color <color>', 'Teammate UI color').hideHelp());
   program.addOption(new Option('--plan-mode-required', 'Require plan mode before implementation').hideHelp());
   program.addOption(new Option('--parent-session-id <id>', 'Parent session ID for analytics correlation').hideHelp());
-  program.addOption(new Option('--teammate-mode <mode>', 'How to spawn teammates: "tmux", "in-process", or "auto"').choices(['auto', 'tmux', 'in-process']).hideHelp());
+  program.addOption(new Option('--teammate-mode <mode>', 'How to spawn teammates: "tmux", "iterm2", "in-process", or "auto"').choices(['auto', 'tmux', 'iterm2', 'in-process']).hideHelp());
   program.addOption(new Option('--agent-type <type>', 'Custom agent type for this teammate').hideHelp());
 
   // Enable SDK URL for all builds but hide from help
@@ -4671,7 +4671,7 @@ type TeammateOptions = {
   agentColor?: string;
   planModeRequired?: boolean;
   parentSessionId?: string;
-  teammateMode?: 'auto' | 'tmux' | 'in-process';
+  teammateMode?: 'auto' | 'tmux' | 'iterm2' | 'in-process';
   agentType?: string;
 };
 function extractTeammateOptions(options: unknown): TeammateOptions {
@@ -4687,7 +4687,7 @@ function extractTeammateOptions(options: unknown): TeammateOptions {
     agentColor: typeof opts.agentColor === 'string' ? opts.agentColor : undefined,
     planModeRequired: typeof opts.planModeRequired === 'boolean' ? opts.planModeRequired : undefined,
     parentSessionId: typeof opts.parentSessionId === 'string' ? opts.parentSessionId : undefined,
-    teammateMode: teammateMode === 'auto' || teammateMode === 'tmux' || teammateMode === 'in-process' ? teammateMode : undefined,
+    teammateMode: teammateMode === 'auto' || teammateMode === 'tmux' || teammateMode === 'iterm2' || teammateMode === 'in-process' ? teammateMode : undefined,
     agentType: typeof opts.agentType === 'string' ? opts.agentType : undefined
   };
 }
