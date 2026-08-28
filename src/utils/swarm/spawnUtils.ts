@@ -9,6 +9,7 @@ import {
   getMainLoopModelOverride,
   getSessionBypassPermissionsMode,
 } from '../../bootstrap/state.js'
+import { existsSync } from 'fs'
 import { quote } from '../bash/shellQuote.js'
 import { isInBundledMode } from '../bundledMode.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
@@ -19,12 +20,26 @@ import { TEAMMATE_COMMAND_ENV_VAR } from './constants.js'
  * Gets the command to use for spawning teammate processes.
  * Uses TEAMMATE_COMMAND_ENV_VAR if set, otherwise falls back to the
  * current process executable path.
+ *
+ * The entrypoint is used only when it names a file that exists. A Bun-compiled
+ * binary sets argv[1] to a path under the `/$bunfs/` virtual mount, which
+ * resolves inside this process and nowhere else, so handing it to a shell
+ * produces "No such file or directory" and every pane-backed teammate fails to
+ * start. isInBundledMode() does not catch this on its own: it keys off
+ * Bun.embeddedFiles, which is empty for a build that embeds no assets, so a
+ * compiled binary can report false and fall straight through to argv[1].
+ * Testing the path is the property that actually matters, and it holds
+ * whatever the runtime and platform.
  */
 export function getTeammateCommand(): string {
   if (process.env[TEAMMATE_COMMAND_ENV_VAR]) {
     return process.env[TEAMMATE_COMMAND_ENV_VAR]
   }
-  return isInBundledMode() ? process.execPath : process.argv[1]!
+  const entrypoint = process.argv[1]
+  if (entrypoint && !isInBundledMode() && existsSync(entrypoint)) {
+    return entrypoint
+  }
+  return process.execPath
 }
 
 /**
