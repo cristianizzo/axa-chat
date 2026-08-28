@@ -220,9 +220,9 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
           ) : null}
           {result.filesRepaired > 0 ? (
             <Text>
-              {result.filesRepaired} file
-              {result.filesRepaired === 1 ? '' : 's'} restored to their original
-              date
+              {result.filesRepaired === 1
+                ? '1 file restored to its original date'
+                : `${result.filesRepaired} files restored to their original dates`}
             </Text>
           ) : null}
           {result.filesCopied === 0 && result.filesRepaired === 0 ? (
