@@ -5,7 +5,7 @@ import { coerce } from 'semver'
 import { getIsNonInteractiveSession } from '../bootstrap/state.js'
 import { getGlobalConfig, saveGlobalConfig } from './config.js'
 import { getClaudeConfigHomeDir } from './envUtils.js'
-import { toError } from './errors.js'
+import { isENOENT, toError } from './errors.js'
 import { logError } from './log.js'
 import { isEssentialTrafficOnly } from './privacyLevel.js'
 import { gt } from './semver.js'
@@ -103,9 +103,13 @@ export async function discardUpstreamChangelogState(): Promise<void> {
     // which is exactly the signal the conditional below needs.
     await rm(getUpstreamChangelogCachePath())
     hadUpstreamState = true
-  } catch {
-    // Absent, or not ours to remove. Unreferenced either way — the read path
-    // uses a different filename.
+  } catch (error) {
+    // Only ENOENT means "there was no upstream state". Any other failure
+    // (a permission problem, say) means the file was there and we could not
+    // remove it — still upstream state, and the stamp below must go.
+    if (!isENOENT(error)) {
+      hadUpstreamState = true
+    }
   }
 
   if (getGlobalConfig().cachedChangelog) {
