@@ -170,6 +170,20 @@ export async function detectAndGetBackend(): Promise<BackendDetectionResult> {
 
   // Priority 1: If inside tmux, always use tmux
   if (insideTmux) {
+    // Except when iTerm2 was asked for by name. Panes are placed by whatever
+    // owns the terminal, and inside a tmux session that is tmux, so the
+    // request cannot be honoured — but silently returning tmux is the exact
+    // substitution this mode exists to prevent.
+    if (mode === 'iterm2') {
+      logForDebugging(
+        '[BackendRegistry] ERROR: teammateMode "iterm2" but running inside tmux',
+      )
+      throw new Error(
+        'teammateMode is "iterm2" but this session is running inside tmux, ' +
+          'which owns the panes. Detach from tmux and run from iTerm2 directly, ' +
+          'or use "tmux" or "auto".',
+      )
+    }
     logForDebugging(
       '[BackendRegistry] Selected: tmux (running inside tmux session)',
     )

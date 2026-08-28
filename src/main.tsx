@@ -4687,7 +4687,7 @@ function extractTeammateOptions(options: unknown): TeammateOptions {
     agentColor: typeof opts.agentColor === 'string' ? opts.agentColor : undefined,
     planModeRequired: typeof opts.planModeRequired === 'boolean' ? opts.planModeRequired : undefined,
     parentSessionId: typeof opts.parentSessionId === 'string' ? opts.parentSessionId : undefined,
-    teammateMode: teammateMode === 'auto' || teammateMode === 'tmux' || teammateMode === 'in-process' ? teammateMode : undefined,
+    teammateMode: teammateMode === 'auto' || teammateMode === 'tmux' || teammateMode === 'iterm2' || teammateMode === 'in-process' ? teammateMode : undefined,
     agentType: typeof opts.agentType === 'string' ? opts.agentType : undefined
   };
 }
