@@ -11,6 +11,7 @@
 
 import type { Dirent } from 'fs'
 import { readdir, stat } from 'fs/promises'
+import { getErrnoCode } from '../../utils/errors.js'
 import { dirname, join } from 'path'
 import {
   listCandidates,
@@ -212,7 +213,7 @@ async function summarize(
     missingPath: path !== undefined && !(await exists(path)),
     orphanedData: walked.transcripts.length === 0 && walked.bytes > 0,
     unreadable: walked.unreadable,
-    isCurrent: dir === currentDir,
+    isCurrent: samePath(dir, currentDir),
   }
 }
 
@@ -234,6 +235,20 @@ function isEmptyDirectory(project: ProjectSummary): boolean {
   return (
     !project.unreadable && project.conversations === 0 && project.bytes === 0
   )
+}
+
+/**
+ * Compare two paths for identity, allowing for a case-insensitive filesystem.
+ *
+ * Both sides are built the same way, but not from the same string: one comes
+ * from readdir and is whatever is on disk, the other from sanitizing the cwd.
+ * On macOS and Windows those can differ in case for the same directory, and the
+ * cost of getting it wrong is a project the user can delete while writing to it.
+ */
+function samePath(a: string, b: string): boolean {
+  return process.platform === 'darwin' || process.platform === 'win32'
+    ? a.toLowerCase() === b.toLowerCase()
+    : a === b
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -259,9 +274,12 @@ export async function listProjects(): Promise<ProjectSummary[]> {
   let entries: Dirent[]
   try {
     entries = await readdir(projectsDir, { withFileTypes: true })
-  } catch {
-    // No store yet — a fresh install before the first conversation is saved.
-    return []
+  } catch (error) {
+    // Only a missing directory means "no store yet" — a fresh install before
+    // the first conversation is saved. Anything else is a real failure, and
+    // swallowing it would answer a permission problem with "No projects yet".
+    if (getErrnoCode(error) === 'ENOENT') return []
+    throw error
   }
 
   // Bounded here too: each project's own scan already fans out internally, so
