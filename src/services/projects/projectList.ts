@@ -24,6 +24,7 @@ import {
 import {
   extractJsonStringField,
   readSessionLite,
+  validateUuid,
 } from '../../utils/sessionStoragePortable.js'
 
 export type ProjectSummary = {
@@ -109,7 +110,15 @@ async function walkProject(dir: string): Promise<Walked> {
         walked.bytes += fileStat.size
         const mtime = fileStat.mtime.getTime()
         if (mtime > walked.lastUsed) walked.lastUsed = mtime
-        if (depth === 0 && entry.name.endsWith('.jsonl')) {
+        // Only `<uuid>.jsonl` at the top level is a conversation — the same
+        // test listCandidates applies. Counting every .jsonl would inflate the
+        // count with stray files and could hand readProjectPath a `cwd` taken
+        // from something that is not a transcript at all.
+        if (
+          depth === 0 &&
+          entry.name.endsWith('.jsonl') &&
+          validateUuid(entry.name.slice(0, -'.jsonl'.length))
+        ) {
           walked.transcripts.push({ path, mtime })
         }
       }),

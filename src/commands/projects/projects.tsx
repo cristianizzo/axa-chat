@@ -1,6 +1,6 @@
 import { basename } from 'path'
 import * as React from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Select } from '../../components/CustomSelect/select.js'
 import { Pane } from '../../components/design-system/Pane.js'
 import { BINARY_NAME } from '../../constants/product.js'
@@ -13,6 +13,7 @@ import {
 } from '../../services/projects/projectList.js'
 import type { SessionInfo } from '../../utils/listSessionsImpl.js'
 import type { LocalJSXCommandCall } from '../../types/command.js'
+import { quote } from '../../utils/bash/shellQuote.js'
 import { formatFileSize, formatRelativeTime } from '../../utils/format.js'
 import { logError } from '../../utils/log.js'
 
@@ -76,20 +77,31 @@ function ProjectRow({ project }: { project: ProjectSummary }): React.ReactNode {
 function ProjectsScreen({ onDone }: Props): React.ReactNode {
   const [view, setView] = useState<View>({ status: 'loading' })
 
+  /**
+   * Identifies the navigation a pending read belongs to.
+   *
+   * Reading a project with hundreds of conversations takes long enough to press
+   * Esc during, and the resolved promise would otherwise drop the user back
+   * into the screen they just left. Every navigation takes a new token and only
+   * the newest is allowed to render.
+   */
+  const navigation = useRef(0)
+  const beginNavigation = (): number => ++navigation.current
+  const isCurrent = (token: number): boolean => navigation.current === token
+
   useEffect(() => {
-    let cancelled = false
+    const token = beginNavigation()
     void (async () => {
       try {
         const projects = await listProjects()
-        if (!cancelled) setView({ status: 'list', projects })
+        if (isCurrent(token)) setView({ status: 'list', projects })
       } catch (error) {
         logError(error)
-        if (!cancelled) setView({ status: 'error', message: String(error) })
+        if (isCurrent(token)) setView({ status: 'error', message: String(error) })
       }
     })()
-    return () => {
-      cancelled = true
-    }
+    // Mount only: the list is re-read through reload() after an action.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Esc goes back a level rather than straight out, so opening a project by
@@ -107,24 +119,29 @@ function ProjectsScreen({ onDone }: Props): React.ReactNode {
   )
 
   async function reload(): Promise<void> {
+    const token = beginNavigation()
     setView({ status: 'loading' })
     try {
-      setView({ status: 'list', projects: await listProjects() })
+      const projects = await listProjects()
+      if (isCurrent(token)) setView({ status: 'list', projects })
     } catch (error) {
       logError(error)
-      setView({ status: 'error', message: String(error) })
+      if (isCurrent(token)) setView({ status: 'error', message: String(error) })
     }
   }
 
   function open(project: ProjectSummary): void {
+    const token = beginNavigation()
     setView({ status: 'opening', project })
     void (async () => {
       try {
         const conversations = await listProjectConversations(project.dir)
-        setView({ status: 'detail', project, conversations })
+        if (isCurrent(token)) {
+          setView({ status: 'detail', project, conversations })
+        }
       } catch (error) {
         logError(error)
-        setView({ status: 'error', message: String(error) })
+        if (isCurrent(token)) setView({ status: 'error', message: String(error) })
       }
     })()
   }
@@ -261,7 +278,9 @@ function ProjectsScreen({ onDone }: Props): React.ReactNode {
           <Box marginTop={1}>
             <Text dimColor>
               {project.path && !project.missingPath
-                ? `cd ${project.path} && ${BINARY_NAME} --resume`
+                ? // Quoted: paths with spaces are normal on macOS and Windows,
+                  // and this line is meant to be copied straight into a shell.
+                  `cd ${quote([project.path])} && ${BINARY_NAME} --resume`
                 : 'esc to go back'}
             </Text>
           </Box>
