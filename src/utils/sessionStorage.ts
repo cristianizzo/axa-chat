@@ -731,6 +731,11 @@ class Project {
   resetSessionFile(): void {
     this.sessionFile = null
     this.pendingEntries = []
+    // The byte throttle counts toward the file being dropped here, so it
+    // means nothing for the next one. /clear, /resume and print-mode session
+    // switches all come through here; carrying a nearly-full counter over
+    // would re-append metadata on the new session's very first drain.
+    this.bytesSinceMetadataReAppend = 0
   }
 
   /**
