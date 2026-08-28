@@ -86,19 +86,42 @@ export function _resetChangelogCacheForTesting(): void {
  * point of changing the URL — the loudest possible version of the bug, since
  * it survives having no CHANGELOG.md of our own.
  *
+ * `changelogLastFetched` goes with them: it timed a fetch of the upstream URL,
+ * so leaving it in place would let the retry back-off throttle the *new* URL's
+ * very first fetch for up to a day. Clearing it is deliberately conditional on
+ * having actually found upstream state — clearing it on every start would wipe
+ * the stamp the back-off measures from, and the back-off would never engage.
+ *
  * Called once at startup, before any other config save can re-add the field.
  * Best-effort throughout: a file we cannot delete is still a file nobody reads.
  */
 export async function discardUpstreamChangelogState(): Promise<void> {
+  let hadUpstreamState = false
+
   try {
-    await rm(getUpstreamChangelogCachePath(), { force: true })
+    // Not `force`: the ENOENT tells us there was nothing to carry forward,
+    // which is exactly the signal the conditional below needs.
+    await rm(getUpstreamChangelogCachePath())
+    hadUpstreamState = true
   } catch {
-    // Unreferenced either way — the read path uses a different filename.
+    // Absent, or not ours to remove. Unreferenced either way — the read path
+    // uses a different filename.
   }
 
   if (getGlobalConfig().cachedChangelog) {
-    saveGlobalConfig(({ cachedChangelog: _, ...rest }) => rest)
+    hadUpstreamState = true
   }
+
+  if (!hadUpstreamState) {
+    return
+  }
+
+  // One write for both: dropping the deprecated field, and the stamp that
+  // measured the old URL.
+  saveGlobalConfig(
+    ({ cachedChangelog: _content, changelogLastFetched: _stamp, ...rest }) =>
+      rest,
+  )
 }
 
 /**
