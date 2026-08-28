@@ -383,13 +383,18 @@ export async function setup(
   // Pre-fetch data for Logo v2 - await to ensure it's ready before logo renders.
   // --bare / SIMPLE: skip — release notes are interactive-UI display data,
   // and getRecentActivity() reads up to 10 session JSONL files.
+  //
+  // The two feeds are independent: LogoV2 renders "Recent activity" every
+  // time and reads it through getRecentActivitySync(), a plain cache read
+  // with no subscription, so whatever the cache holds at first render is
+  // final. Gating the fetch on hasReleaseNotes left that cache empty for
+  // anyone whose changelog was already seen, and the banner permanently
+  // claimed "No recent activity" on projects full of conversations.
   if (!isBareMode()) {
-    const { hasReleaseNotes } = await checkForReleaseNotes(
-      getGlobalConfig().lastReleaseNotesSeen,
-    )
-    if (hasReleaseNotes) {
-      await getRecentActivity()
-    }
+    await Promise.all([
+      checkForReleaseNotes(getGlobalConfig().lastReleaseNotesSeen),
+      getRecentActivity(),
+    ])
   }
 
   // If permission mode is set to bypass, verify we're in a safe environment
