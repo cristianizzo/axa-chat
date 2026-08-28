@@ -11,6 +11,7 @@ import {
   runClaudeCodeImport,
   type ImportPlan,
   type ImportResult,
+  type PendingAction,
 } from '../../services/import/claudeCodeImport.js'
 import type { LocalJSXCommandCall } from '../../types/command.js'
 import { logError } from '../../utils/log.js'
@@ -36,7 +37,8 @@ function formatBytes(bytes: number): string {
 /** One line per thing the import would do, so the user confirms specifics. */
 function planSummary(plan: ImportPlan): string[] {
   const lines: string[] = []
-  const count = (action: string): number =>
+  // Typed, so a mistyped action is a compile error rather than a silent zero.
+  const count = (action: PendingAction): number =>
     plan.files.filter(file => file.action === action).length
   const copies = count('copy')
   const appends = count('append')

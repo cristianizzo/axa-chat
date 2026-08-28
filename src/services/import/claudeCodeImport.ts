@@ -85,34 +85,45 @@ const IMPORTED_CONFIG_KEYS = [
   'hasCompletedOnboarding',
 ] as const
 
-/** A single file the import would copy. */
-type PendingFile = {
+/** What every pending file carries, whatever will be done to it. */
+type PendingFileBase = {
   source: string
   destination: string
   /** How much will actually be transferred: the whole file, or just the tail. */
   bytes: number
-  /** Carried over to the copy so the conversation keeps its real date. */
+  /** Carried over to the write so the conversation keeps its real date. */
   atimeMs: number
   mtimeMs: number
-  action: PendingAction
-  /**
-   * For an append, the offset to resume from — which is the current size of
-   * axa's copy, already verified to be a prefix of the source.
-   */
-  appendFrom?: number
 }
 
 /**
- * What will be done to a file. Note what is absent: there is no "overwrite".
- * A file that already exists in axa is never replaced.
+ * A single file the import will act on.
+ *
+ * Note what is absent: there is no "overwrite". A file already in axa is never
+ * replaced — it is copied if new, extended if the source grew, and otherwise
+ * left alone.
+ *
+ * Discriminated on `action` so `appendFrom` exists exactly where it means
+ * something. An append without an offset would restart at byte 0 and duplicate
+ * the entire transcript into itself, so the type makes that unrepresentable
+ * rather than leaving a default to be got right at every call site.
  */
-type PendingAction =
-  /** Not in axa at all. */
-  | 'copy'
-  /** In axa, and the source has extra messages on the end. Adds only those. */
-  | 'append'
-  /** Byte-for-byte identical, but stamped with the date of an old import. */
-  | 'repair-date'
+export type PendingFile = PendingFileBase &
+  (
+    | { action: 'copy' }
+    | { action: 'repair-date' }
+    | {
+        action: 'append'
+        /**
+         * Offset to resume from: the current size of axa's copy, already
+         * verified to be a byte-for-byte prefix of the source.
+         */
+        appendFrom: number
+      }
+  )
+
+/** The action alone, for callers that only need to name one. */
+export type PendingAction = PendingFile['action']
 
 /** Something the import could not do, and why. Always reported to the user. */
 export type ImportProblem = { path: string; error: string }
@@ -179,13 +190,17 @@ async function statOrNull(path: string) {
   }
 }
 
-/** The outcome of deciding one file, including the two that do no work. */
+/** The outcome of deciding one file, including the outcomes that do no work. */
 type FileDecision =
-  | { action: PendingAction; appendFrom?: number }
+  | { action: 'copy' }
+  | { action: 'repair-date' }
+  | { action: 'append'; appendFrom: number }
   /** Nothing to do, or nothing that can be done safely. */
   | { action: 'skip' }
   /** The two copies have diverged; neither contains the other. */
   | { action: 'conflict' }
+  /** Could not be compared, so nothing is known and nothing is done. */
+  | { action: 'unreadable'; error: string }
 
 /**
  * Decide what to do with one file.
@@ -198,7 +213,7 @@ type FileDecision =
  * can gain a tail, never lose one.
  *
  * Appending is only offered when axa's copy is a verified prefix of the source
- * (see isPrefixOfSource) — which is the normal state of an append-only
+ * (see comparePrefix) — which is the normal state of an append-only
  * transcript that grew in Claude Code after being imported. Anything else is a
  * conflict and is left alone.
  *
@@ -233,9 +248,22 @@ async function decideFile(
 
   // The source holds more — but only take the extra if everything axa already
   // has is unchanged underneath it. Otherwise the two have diverged.
-  return (await isPrefixOfSource(destinationPath, sourcePath, destination.size))
-    ? { action: 'append', appendFrom: destination.size }
-    : { action: 'conflict' }
+  const comparison = await comparePrefix(
+    destinationPath,
+    sourcePath,
+    destination.size,
+  )
+  switch (comparison.status) {
+    case 'prefix':
+      return { action: 'append', appendFrom: destination.size }
+    case 'differs':
+      return { action: 'conflict' }
+    case 'unreadable':
+      // Not a conflict: nothing is known about whether they diverged. Reported
+      // as the IO error it is, so a permissions problem is fixable rather than
+      // presented as "you changed this in both places".
+      return { action: 'unreadable', error: comparison.error }
+  }
 }
 
 /** Compared in 1 MB chunks; large transcripts are routinely hundreds of MB. */
@@ -278,6 +306,11 @@ async function appendTail(
   }
 }
 
+type PrefixComparison =
+  | { status: 'prefix' }
+  | { status: 'differs' }
+  | { status: 'unreadable'; error: string }
+
 /**
  * Is axa's copy exactly the first `length` bytes of the source?
  *
@@ -285,15 +318,20 @@ async function appendTail(
  * dates can only say the two files differ; it cannot tell a transcript that
  * simply grew from one that was rewritten. Reading the bytes can.
  *
+ * "Cannot tell" is reported separately from "they differ". Treating an
+ * unreadable file as a difference would tell the user they had edited the same
+ * conversation in two places when the real problem is a permission they could
+ * fix.
+ *
  * Costs a full read of the destination, so it runs only for the few files that
  * actually grew since the last import — never on a first import, where nothing
  * exists to compare against.
  */
-async function isPrefixOfSource(
+async function comparePrefix(
   destinationPath: string,
   sourcePath: string,
   length: number,
-): Promise<boolean> {
+): Promise<PrefixComparison> {
   let destinationHandle
   let sourceHandle
   try {
@@ -310,18 +348,20 @@ async function isPrefixOfSource(
         sourceHandle.read(sourceBuffer, 0, size, offset),
       ])
       if (destinationRead.bytesRead !== size || sourceRead.bytesRead !== size) {
-        return false
+        // Short read on a file that stat said was long enough: it is being
+        // written, or truncated underneath us. Unverifiable, not different.
+        return {
+          status: 'unreadable',
+          error: 'File changed size while it was being compared.',
+        }
       }
-      if (
-        destinationBuffer.compare(sourceBuffer, 0, size, 0, size) !== 0
-      ) {
-        return false
+      if (destinationBuffer.compare(sourceBuffer, 0, size, 0, size) !== 0) {
+        return { status: 'differs' }
       }
     }
-    return true
-  } catch {
-    // Unreadable means unverifiable, and unverifiable means hands off.
-    return false
+    return { status: 'prefix' }
+  } catch (error) {
+    return { status: 'unreadable', error: String(error) }
   } finally {
     await destinationHandle?.close()
     await sourceHandle?.close()
@@ -389,20 +429,33 @@ async function collectPendingFiles(
         })
         continue
       }
-      pending.push({
+      if (decision.action === 'unreadable') {
+        problems.push({ path: sourcePath, error: decision.error })
+        continue
+      }
+
+      const common = {
         source: sourcePath,
         destination: destinationPath,
-        bytes:
-          decision.action === 'copy'
-            ? sourceStat.size
-            : decision.action === 'append'
-              ? sourceStat.size - (decision.appendFrom ?? 0)
-              : 0,
         atimeMs: sourceStat.atimeMs,
         mtimeMs: sourceStat.mtimeMs,
-        action: decision.action,
-        appendFrom: decision.appendFrom,
-      })
+      }
+      switch (decision.action) {
+        case 'copy':
+          pending.push({ ...common, action: 'copy', bytes: sourceStat.size })
+          break
+        case 'append':
+          pending.push({
+            ...common,
+            action: 'append',
+            appendFrom: decision.appendFrom,
+            bytes: sourceStat.size - decision.appendFrom,
+          })
+          break
+        case 'repair-date':
+          pending.push({ ...common, action: 'repair-date', bytes: 0 })
+          break
+      }
     }
   }
 
@@ -561,12 +614,13 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
       )
     : []
 
-  // Counted over the files that will actually be copied, matching `bytes`.
-  // Including timestamp repairs here would report conversations arriving from
-  // projects that are already fully imported.
+  // Counted over new files only, because that is the line it is shown on:
+  // "N new conversation files across M projects". An append lands in a project
+  // that is already here and a date repair moves nothing, so counting either
+  // would overstate how much is arriving.
   const projects = new Set(
     files
-      .filter(file => file.action !== 'repair-date')
+      .filter(file => file.action === 'copy')
       .map(
         file => relative(sourceProjects, file.source).split(/[/\\]/)[0] ?? '',
       ),
@@ -660,7 +714,7 @@ export async function runClaudeCodeImport(
           result.filesRepaired++
           break
         case 'append':
-          await appendTail(file.source, file.destination, file.appendFrom ?? 0)
+          await appendTail(file.source, file.destination, file.appendFrom)
           result.bytesCopied += file.bytes
           result.filesAppended++
           break
