@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { coerce } from 'semver'
 import { getIsNonInteractiveSession } from '../bootstrap/state.js'
@@ -25,16 +25,39 @@ const MAX_RELEASE_NOTES_SHOWN = 5
  * 2. We fetch the changelog in the background and store it in config
  * 3. Next time the user starts Claude, the cached changelog is available immediately
  */
+/**
+ * This fork's own changelog, not the upstream project it was forked from.
+ *
+ * These pointed at `anthropics/claude-code`. Because this fork inherits that
+ * project's version numbering the entries matched, so the startup banner's
+ * "What's new" feed and `/release-notes` presented another product's release
+ * notes as this one's — users saw lines about Claude Max subscriptions and
+ * organization-managed logins describing releases this build never shipped.
+ *
+ * Until a CHANGELOG.md exists at the URL below the fetch finds nothing, the
+ * cache stays empty, and the feed falls back to its own empty message. Silent
+ * and true beats confident and wrong.
+ */
 export const CHANGELOG_URL =
-  'https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md'
+  'https://github.com/cristianizzo/axa-chat/blob/main/CHANGELOG.md'
 const RAW_CHANGELOG_URL =
-  'https://raw.githubusercontent.com/anthropics/claude-code/refs/heads/main/CHANGELOG.md'
+  'https://raw.githubusercontent.com/cristianizzo/axa-chat/refs/heads/main/CHANGELOG.md'
 
 /**
- * Get the path for the cached changelog file.
- * The changelog is stored at ~/.claude/cache/changelog.md
+ * Get the path for the cached changelog file, under this install's config dir.
+ *
+ * Deliberately not the old `changelog.md`. Every existing install has one of
+ * those holding the upstream changelog this fork used to fetch, and reading it
+ * back would keep showing another product's release notes long after the URL
+ * was corrected. A new name means those caches are simply never read again;
+ * `pruneUpstreamChangelogCache` deletes them.
  */
 function getChangelogCachePath(): string {
+  return join(getClaudeConfigHomeDir(), 'cache', 'changelog-axa.md')
+}
+
+/** The pre-fork cache, holding upstream's changelog. Read by no one now. */
+function getUpstreamChangelogCachePath(): string {
   return join(getClaudeConfigHomeDir(), 'cache', 'changelog.md')
 }
 
@@ -76,6 +99,22 @@ export async function migrateChangelogFromConfig(): Promise<void> {
 }
 
 /**
+ * Delete the pre-fork cache holding upstream's changelog.
+ *
+ * Nothing reads it any more, so this is housekeeping rather than correctness —
+ * but it is half a megabyte of another project's release notes sitting in this
+ * install's cache dir, and leaving it there invites someone to wire it back up.
+ * Best-effort: a cache we cannot delete is still a cache nobody reads.
+ */
+export async function pruneUpstreamChangelogCache(): Promise<void> {
+  try {
+    await rm(getUpstreamChangelogCachePath(), { force: true })
+  } catch {
+    // Nothing to do — the file is unreferenced either way.
+  }
+}
+
+/**
  * Fetch the changelog from GitHub and store it in cache file
  * This runs in the background and doesn't block the UI
  */
@@ -90,7 +129,13 @@ export async function fetchAndStoreChangelog(): Promise<void> {
     return
   }
 
-  const response = await axios.get(RAW_CHANGELOG_URL)
+  // 404 is an expected answer, not a failure: the repo need not publish a
+  // CHANGELOG.md, and letting axios throw would log an error on every start
+  // for a file whose absence is a valid state. Anything else still throws and
+  // is reported by the caller.
+  const response = await axios.get(RAW_CHANGELOG_URL, {
+    validateStatus: status => status === 200 || status === 404,
+  })
   if (response.status === 200) {
     const changelogContent = response.data
 

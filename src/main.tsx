@@ -197,7 +197,7 @@ import { isInBundledMode, isRunningWithBun } from './utils/bundledMode.js';
 import { logForDiagnosticsNoPII } from './utils/diagLogs.js';
 import { filterExistingPaths, getKnownPathsForRepo } from './utils/githubRepoPathMapping.js';
 import { clearPluginCache, loadAllPluginsCacheOnly } from './utils/plugins/pluginLoader.js';
-import { migrateChangelogFromConfig } from './utils/releaseNotes.js';
+import { migrateChangelogFromConfig, pruneUpstreamChangelogCache } from './utils/releaseNotes.js';
 import { SandboxManager } from './utils/sandbox/sandbox-adapter.js';
 import { fetchSession, prepareApiRequest } from './utils/teleport/api.js';
 import { checkOutTeleportedSessionBranch, processMessagesForTeleportResume, teleportToRemoteWithErrorHandling, validateGitState, validateSessionRepository } from './utils/teleport.js';
@@ -349,6 +349,9 @@ function runMigrations(): void {
   migrateChangelogFromConfig().catch(() => {
     // Silently ignore migration errors - will retry on next startup
   });
+  // Drop the pre-fork cache holding upstream's changelog. Same fire-and-forget
+  // treatment: nothing reads that file, so a failure costs only disk space.
+  pruneUpstreamChangelogCache().catch(() => {});
 }
 
 /**
