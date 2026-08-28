@@ -17,6 +17,9 @@ import { quote } from '../../utils/bash/shellQuote.js'
 import { formatFileSize, formatRelativeTime } from '../../utils/format.js'
 import { logError } from '../../utils/log.js'
 
+/** Rows in the detail view; the rest are summarised as a count. */
+const SHOWN_CONVERSATIONS = 10
+
 type Props = {
   onDone: () => void
 }
@@ -49,6 +52,7 @@ function projectFlags(project: ProjectSummary): string[] {
   if (project.isCurrent) flags.push('current')
   if (project.missingPath) flags.push('folder deleted')
   if (project.orphanedData) flags.push('no conversations left')
+  if (project.unreadable) flags.push('partly unreadable')
   return flags
 }
 
@@ -248,6 +252,12 @@ function ProjectsScreen({ onDone }: Props): React.ReactNode {
               The folder {project.path} no longer exists.
             </Text>
           ) : null}
+          {project.unreadable ? (
+            <Text color="warning">
+              Part of this project could not be read, so the counts above are a
+              minimum.
+            </Text>
+          ) : null}
           {project.orphanedData ? (
             <Text color="warning">
               No conversations left here, but {formatFileSize(project.bytes)} of
@@ -259,7 +269,7 @@ function ProjectsScreen({ onDone }: Props): React.ReactNode {
             {conversations.length === 0 ? (
               <Text dimColor>Nothing readable to list.</Text>
             ) : (
-              conversations.slice(0, 10).map(conversation => (
+              conversations.slice(0, SHOWN_CONVERSATIONS).map(conversation => (
                 <Box key={conversation.sessionId}>
                   <Text dimColor>
                     {formatRelativeTime(
@@ -270,8 +280,13 @@ function ProjectsScreen({ onDone }: Props): React.ReactNode {
                 </Box>
               ))
             )}
-            {conversations.length > 10 ? (
-              <Text dimColor>…and {conversations.length - 10} more</Text>
+            {project.conversations > SHOWN_CONVERSATIONS ? (
+              // Counted from the project, not from what was loaded: the read is
+              // capped, so a project with 672 conversations would otherwise
+              // claim to have 100.
+              <Text dimColor>
+                …and {project.conversations - SHOWN_CONVERSATIONS} more
+              </Text>
             ) : null}
           </Box>
 

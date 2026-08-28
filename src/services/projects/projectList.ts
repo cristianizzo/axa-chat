@@ -63,6 +63,11 @@ export type ProjectSummary = {
   orphanedData: boolean
   /** Holds the running session's transcript, so it must not be moved away. */
   isCurrent: boolean
+  /**
+   * Part of the project could not be listed, so `conversations` and `bytes`
+   * are lower bounds rather than counts.
+   */
+  unreadable: boolean
 }
 
 /**
@@ -101,6 +106,8 @@ type Walked = {
   lastUsed: number
   /** Top-level transcripts only, newest first. */
   transcripts: { path: string; mtime: number }[]
+  /** Some part of the tree could not be listed, so the numbers are a floor. */
+  unreadable: boolean
 }
 
 /**
@@ -111,15 +118,23 @@ type Walked = {
  * was deleted, and a top-level-only scan would report it as 0 bytes.
  */
 async function walkProject(dir: string): Promise<Walked> {
-  const walked: Walked = { bytes: 0, lastUsed: 0, transcripts: [] }
+  const walked: Walked = {
+    bytes: 0,
+    lastUsed: 0,
+    transcripts: [],
+    unreadable: false,
+  }
 
   async function visit(current: string, depth: number): Promise<void> {
     let entries: Dirent[]
     try {
       entries = await readdir(current, { withFileTypes: true })
     } catch {
-      // Unreadable subtree: it contributes nothing rather than failing the
-      // whole listing. The project still shows up with the sizes we could read.
+      // A subtree we cannot list contributes nothing rather than failing the
+      // whole listing — but it has to be recorded. Silently returning zero
+      // makes an unreadable project indistinguishable from an empty one, and
+      // empty ones are hidden, so the project would vanish entirely.
+      walked.unreadable = true
       return
     }
 
@@ -196,6 +211,7 @@ async function summarize(
     lastUsed: walked.lastUsed,
     missingPath: path !== undefined && !(await exists(path)),
     orphanedData: walked.transcripts.length === 0 && walked.bytes > 0,
+    unreadable: walked.unreadable,
     isCurrent: dir === currentDir,
   }
 }
@@ -212,7 +228,12 @@ async function summarize(
  * bytes and therefore deserves to be seen and reclaimed.
  */
 function isEmptyDirectory(project: ProjectSummary): boolean {
-  return project.conversations === 0 && project.bytes === 0
+  // An unreadable project is never "empty": the scan found nothing because it
+  // was not allowed to look, and hiding it would bury the one row the user
+  // needs in order to fix the permission.
+  return (
+    !project.unreadable && project.conversations === 0 && project.bytes === 0
+  )
 }
 
 async function exists(path: string): Promise<boolean> {
