@@ -211,11 +211,23 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
           <Box marginBottom={1}>
             <Text bold>Import complete</Text>
           </Box>
-          <Text>
-            {result.filesCopied} file
-            {result.filesCopied === 1 ? '' : 's'} copied (
-            {formatBytes(result.bytesCopied)})
-          </Text>
+          {result.filesCopied > 0 ? (
+            <Text>
+              {result.filesCopied} file
+              {result.filesCopied === 1 ? '' : 's'} copied (
+              {formatBytes(result.bytesCopied)})
+            </Text>
+          ) : null}
+          {result.filesRepaired > 0 ? (
+            <Text>
+              {result.filesRepaired} file
+              {result.filesRepaired === 1 ? '' : 's'} restored to their original
+              date
+            </Text>
+          ) : null}
+          {result.filesCopied === 0 && result.filesRepaired === 0 ? (
+            <Text>No conversation files needed copying.</Text>
+          ) : null}
           {result.settingsImported ? <Text>settings.json imported</Text> : null}
           {result.configKeysImported.length > 0 ? (
             <Text>

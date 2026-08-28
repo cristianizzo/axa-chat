@@ -96,6 +96,12 @@ type PendingFile = {
    * True when the bytes are already in place and only the timestamps are
    * wrong — an import from before timestamps were preserved. Repairing those
    * is a utimes() call, not a 1.5 GB re-copy.
+   *
+   * Requires the destination to be *newer* than the source, not merely the
+   * same size. That is the signature of a copy stamped at import time, and it
+   * is what rules out the dangerous case: a source rewritten to the same
+   * length after it was copied is newer than the destination, so it still
+   * gets copied rather than having its stale bytes silently blessed.
    */
   timestampOnly: boolean
 }
@@ -127,6 +133,8 @@ export type ImportPlan = {
 
 export type ImportResult = {
   filesCopied: number
+  /** Files that were already present and only had their date restored. */
+  filesRepaired: number
   bytesCopied: number
   settingsImported: boolean
   configKeysImported: string[]
@@ -154,16 +162,12 @@ async function statOrNull(path: string) {
 }
 
 /**
- * Should `source` replace `destination`?
- *
- * A transcript is append-only, so a size change means the source gained
- * messages after the last import. mtime covers rewrites that happen to land on
- * the same length.
- */
-/**
  * Whether the destination is not already a faithful copy of the source.
  *
- * Timestamps count, not just size. A transcript's mtime is when the
+ * A transcript is append-only, so a size change means the source gained
+ * messages since the last import.
+ *
+ * Timestamps count too, not just size. A transcript's mtime is when the
  * conversation was last touched, and that is what `--resume` sorts by and what
  * the project list shows as "last used" — a copy carrying the time of the
  * import instead collapses months of history into one undifferentiated block.
@@ -232,7 +236,9 @@ async function collectPendingFiles(
           bytes: sourceStat.size,
           atimeMs: sourceStat.atimeMs,
           mtimeMs: sourceStat.mtimeMs,
-          timestampOnly: destinationStat?.size === sourceStat.size,
+          timestampOnly:
+            destinationStat?.size === sourceStat.size &&
+            destinationStat.mtimeMs > sourceStat.mtimeMs,
         })
       }
     }
@@ -390,10 +396,15 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
       )
     : []
 
+  // Counted over the files that will actually be copied, matching `bytes`.
+  // Including timestamp repairs here would report conversations arriving from
+  // projects that are already fully imported.
   const projects = new Set(
-    files.map(
-      file => relative(sourceProjects, file.source).split(/[/\\]/)[0] ?? '',
-    ),
+    files
+      .filter(file => !file.timestampOnly)
+      .map(
+        file => relative(sourceProjects, file.source).split(/[/\\]/)[0] ?? '',
+      ),
   )
 
   const sourceSettings = join(CLAUDE_CODE_DIR, 'settings.json')
@@ -463,6 +474,7 @@ export async function runClaudeCodeImport(
 ): Promise<ImportResult> {
   const result: ImportResult = {
     filesCopied: 0,
+    filesRepaired: 0,
     bytesCopied: 0,
     settingsImported: false,
     configKeysImported: [],
@@ -478,9 +490,12 @@ export async function runClaudeCodeImport(
         await mkdir(dir, { recursive: true })
         createdDirs.add(dir)
       }
-      if (!file.timestampOnly) {
+      if (file.timestampOnly) {
+        result.filesRepaired++
+      } else {
         await copyFile(file.source, file.destination)
         result.bytesCopied += file.bytes
+        result.filesCopied++
       }
       // After the copy, not before: copyFile sets mtime to now.
       await utimes(
@@ -488,11 +503,13 @@ export async function runClaudeCodeImport(
         new Date(file.atimeMs),
         new Date(file.mtimeMs),
       )
-      result.filesCopied++
     } catch (error) {
       result.failures.push({ path: file.source, error: String(error) })
     }
-    onProgress?.(result.filesCopied + result.failures.length, plan.files.length)
+    onProgress?.(
+      result.filesCopied + result.filesRepaired + result.failures.length,
+      plan.files.length,
+    )
   }
 
   if (plan.settings) {
@@ -585,7 +602,7 @@ export async function runClaudeCodeImport(
   result.failures.push(...plan.unreadable)
 
   logForDebugging(
-    `Claude Code import: ${result.filesCopied} files, ${result.failures.length} failures`,
+    `Claude Code import: ${result.filesCopied} copied, ${result.filesRepaired} repaired, ${result.failures.length} failures`,
   )
   return result
 }
