@@ -149,6 +149,23 @@ function ImportConversations({ onDone }: Props): React.ReactNode {
               <Text key={line}>• {line}</Text>
             ))}
           </Box>
+          {plan.unreadable.length > 0 ? (
+            <Box marginTop={1} flexDirection="column">
+              <Text color="warning">
+                {plan.unreadable.length} item
+                {plan.unreadable.length === 1 ? '' : 's'} could not be read and
+                are not included above:
+              </Text>
+              {plan.unreadable.slice(0, 3).map(problem => (
+                <Text key={problem.path} dimColor>
+                  {problem.path}: {problem.error}
+                </Text>
+              ))}
+              {plan.unreadable.length > 3 ? (
+                <Text dimColor>…and {plan.unreadable.length - 3} more</Text>
+              ) : null}
+            </Box>
+          ) : null}
           <Box marginTop={1}>
             <Text dimColor>
               Nothing is removed from {plan.sourceDir}, and existing{' '}

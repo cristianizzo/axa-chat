@@ -21,6 +21,7 @@ import { homedir } from 'os'
 import { join, relative } from 'path'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { logForDebugging } from '../../utils/debug.js'
+import { getErrnoCode } from '../../utils/errors.js'
 import { logError } from '../../utils/log.js'
 import { getSecureStorage } from '../../utils/secureStorage/index.js'
 import { copyFile, mkdir, readFile, readdir, stat } from 'fs/promises'
@@ -82,6 +83,9 @@ type PendingFile = {
   bytes: number
 }
 
+/** Something the import could not do, and why. Always reported to the user. */
+export type ImportProblem = { path: string; error: string }
+
 export type ImportPlan = {
   sourceDir: string
   destinationDir: string
@@ -96,6 +100,12 @@ export type ImportPlan = {
   settings: boolean
   configKeys: string[]
   credentials: boolean
+  /**
+   * Things the scan could not read, so they are absent from the counts above.
+   * Carried into the result rather than dropped, so a permission problem is
+   * visible instead of just making the import look smaller than it is.
+   */
+  unreadable: ImportProblem[]
 }
 
 export type ImportResult = {
@@ -104,8 +114,8 @@ export type ImportResult = {
   settingsImported: boolean
   configKeysImported: string[]
   credentialsImported: boolean
-  /** Files that could not be copied, with the reason. Never silently dropped. */
-  failures: { path: string; error: string }[]
+  /** Everything that could not be imported. Never silently dropped. */
+  failures: ImportProblem[]
 }
 
 /** True when the plan would change nothing. */
@@ -146,6 +156,7 @@ function needsCopy(
 async function collectPendingFiles(
   sourceRoot: string,
   destinationRoot: string,
+  problems: ImportProblem[],
 ): Promise<PendingFile[]> {
   const pending: PendingFile[] = []
 
@@ -153,9 +164,11 @@ async function collectPendingFiles(
     let entries
     try {
       entries = await readdir(dir, { withFileTypes: true })
-    } catch {
-      // An unreadable directory contributes nothing to the plan; the import
-      // itself will surface a failure if it later hits the same path.
+    } catch (error) {
+      // Nothing downstream will hit this path again — the import only copies
+      // what the scan found — so an unreadable directory has to be reported
+      // here or it disappears without trace.
+      problems.push({ path: dir, error: String(error) })
       return
     }
     for (const entry of entries) {
@@ -170,11 +183,18 @@ async function collectPendingFiles(
         destinationRoot,
         relative(sourceRoot, sourcePath),
       )
-      const [sourceStat, destinationStat] = await Promise.all([
-        statOrNull(sourcePath),
-        statOrNull(destinationPath),
-      ])
-      if (!sourceStat) continue
+      let sourceStat
+      try {
+        sourceStat = await stat(sourcePath)
+      } catch (error) {
+        // A file that vanished between the readdir and the stat is not a
+        // problem: there is nothing left to import. Anything else is.
+        if (getErrnoCode(error) !== 'ENOENT') {
+          problems.push({ path: sourcePath, error: String(error) })
+        }
+        continue
+      }
+      const destinationStat = await statOrNull(destinationPath)
       if (needsCopy(sourceStat, destinationStat)) {
         pending.push({
           source: sourcePath,
@@ -189,18 +209,33 @@ async function collectPendingFiles(
   return pending
 }
 
-async function readJsonFile(
-  path: string,
-): Promise<Record<string, unknown> | null> {
+/**
+ * A file that is not there is a normal state — the user may never have used
+ * that part of Claude Code. A file that is there but unreadable or corrupt is
+ * not, and has to be told apart so it can be reported instead of quietly
+ * importing nothing.
+ */
+type JsonFile =
+  | { status: 'ok'; value: Record<string, unknown> }
+  | { status: 'missing' }
+  | { status: 'unreadable'; error: string }
+
+async function readJsonFile(path: string): Promise<JsonFile> {
+  let raw: string
   try {
-    const raw = await readFile(path, 'utf-8')
+    raw = await readFile(path, 'utf-8')
+  } catch (error) {
+    if (getErrnoCode(error) === 'ENOENT') return { status: 'missing' }
+    return { status: 'unreadable', error: String(error) }
+  }
+  try {
     const parsed: unknown = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return null
+      return { status: 'unreadable', error: 'File is not a JSON object.' }
     }
-    return parsed as Record<string, unknown>
-  } catch {
-    return null
+    return { status: 'ok', value: parsed as Record<string, unknown> }
+  } catch (error) {
+    return { status: 'unreadable', error: String(error) }
   }
 }
 
@@ -220,8 +255,16 @@ function readOwnCredentials(): StoredCredentials {
   return (getSecureStorage().read() ?? {}) as StoredCredentials
 }
 
-/** Read the source install's stored credentials, without touching axa's own. */
-async function readSourceCredentials(): Promise<StoredCredentials | null> {
+/**
+ * Read the source install's stored credentials, without touching axa's own.
+ *
+ * Anything that goes wrong is appended to `problems`: a corrupt keychain entry
+ * or credentials file is the difference between "you are still signed in" and
+ * "log in again", so it cannot be swallowed.
+ */
+async function readSourceCredentials(
+  problems: ImportProblem[],
+): Promise<StoredCredentials | null> {
   if (process.platform === 'darwin') {
     const { stdout, code } = await execFileNoThrow(
       'security',
@@ -241,15 +284,28 @@ async function readSourceCredentials(): Promise<StoredCredentials | null> {
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
           return parsed as StoredCredentials
         }
+        problems.push({
+          path: CLAUDE_CODE_KEYCHAIN_SERVICE,
+          error: 'Keychain entry is not a JSON object.',
+        })
         return null
-      } catch {
+      } catch (error) {
+        problems.push({
+          path: CLAUDE_CODE_KEYCHAIN_SERVICE,
+          error: String(error),
+        })
         return null
       }
     }
     // Fall through: a keychain miss is normal for an install that stored
     // credentials as a plain file instead.
   }
-  return await readJsonFile(CLAUDE_CODE_CREDENTIALS_FILE)
+
+  const file = await readJsonFile(CLAUDE_CODE_CREDENTIALS_FILE)
+  if (file.status === 'unreadable') {
+    problems.push({ path: CLAUDE_CODE_CREDENTIALS_FILE, error: file.error })
+  }
+  return file.status === 'ok' ? (file.value as StoredCredentials) : null
 }
 
 /**
@@ -270,6 +326,7 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
     settings: false,
     configKeys: [],
     credentials: false,
+    unreadable: [],
   }
 
   if (CLAUDE_CODE_DIR === destinationDir) {
@@ -286,11 +343,14 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
     }
   }
 
+  const unreadable: ImportProblem[] = []
+
   const sourceProjects = join(CLAUDE_CODE_DIR, 'projects')
   const files = (await statOrNull(sourceProjects))?.isDirectory()
     ? await collectPendingFiles(
         sourceProjects,
         join(destinationDir, 'projects'),
+        unreadable,
       )
     : []
 
@@ -307,23 +367,30 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
     !(await statOrNull(destinationSettings))
 
   const sourceConfig = await readJsonFile(CLAUDE_CODE_CONFIG_FILE)
+  if (sourceConfig.status === 'unreadable') {
+    unreadable.push({
+      path: CLAUDE_CODE_CONFIG_FILE,
+      error: sourceConfig.error,
+    })
+  }
   const { getGlobalConfig } = await import('../../utils/config.js')
   const destinationConfig = getGlobalConfig() as unknown as Record<
     string,
     unknown
   >
-  const configKeys = sourceConfig
-    ? IMPORTED_CONFIG_KEYS.filter(
-        key =>
-          sourceConfig[key] !== undefined &&
-          destinationConfig[key] === undefined,
-      )
-    : []
+  const configKeys =
+    sourceConfig.status === 'ok'
+      ? IMPORTED_CONFIG_KEYS.filter(
+          key =>
+            sourceConfig.value[key] !== undefined &&
+            destinationConfig[key] === undefined,
+        )
+      : []
 
   // Only offer the login if axa is not already signed in. Same rule as the
   // config keys: an import adds what is missing, it never replaces what is
   // there.
-  const source = await readSourceCredentials()
+  const source = await readSourceCredentials(unreadable)
   const own = readOwnCredentials()
   const credentials =
     source !== null && Object.keys(source).some(key => own[key] === undefined)
@@ -338,6 +405,7 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
     settings,
     configKeys: [...configKeys],
     credentials,
+    unreadable,
   }
 }
 
@@ -396,7 +464,18 @@ export async function runClaudeCodeImport(
 
   if (plan.configKeys.length > 0) {
     const sourceConfig = await readJsonFile(CLAUDE_CODE_CONFIG_FILE)
-    if (sourceConfig) {
+    if (sourceConfig.status !== 'ok') {
+      // The plan only listed keys because this file parsed a moment ago, so
+      // failing to read it now means something changed underneath us. Report
+      // it: the user is expecting those keys.
+      result.failures.push({
+        path: CLAUDE_CODE_CONFIG_FILE,
+        error:
+          sourceConfig.status === 'missing'
+            ? 'File disappeared after the import was planned.'
+            : sourceConfig.error,
+      })
+    } else {
       const { saveGlobalConfig } = await import('../../utils/config.js')
       let imported: string[] = []
       try {
@@ -411,8 +490,11 @@ export async function runClaudeCodeImport(
           for (const key of plan.configKeys) {
             // Re-check rather than trusting the plan: the config may have
             // gained the key since it was made.
-            if (next[key] === undefined && sourceConfig[key] !== undefined) {
-              next[key] = sourceConfig[key]
+            if (
+              next[key] === undefined &&
+              sourceConfig.value[key] !== undefined
+            ) {
+              next[key] = sourceConfig.value[key]
               imported.push(key)
             }
           }
@@ -431,7 +513,7 @@ export async function runClaudeCodeImport(
   }
 
   if (plan.credentials) {
-    const source = await readSourceCredentials()
+    const source = await readSourceCredentials(result.failures)
     if (source) {
       // Merge the other way round from a spread: what axa already holds wins,
       // so importing can add a login but never invalidate one — a stale
@@ -447,6 +529,11 @@ export async function runClaudeCodeImport(
       }
     }
   }
+
+  // Appended last so the progress callback's `filesDone + failures` count stays
+  // a count of files. These were already unreadable at planning time, so they
+  // never had a copy attempt of their own.
+  result.failures.push(...plan.unreadable)
 
   logForDebugging(
     `Claude Code import: ${result.filesCopied} files, ${result.failures.length} failures`,
