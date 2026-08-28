@@ -150,7 +150,11 @@ async function walkProject(dir: string): Promise<Walked> {
       let fileStat
       try {
         fileStat = await stat(path)
-      } catch {
+      } catch (error) {
+        // A file that vanished mid-scan is nothing. One we are not allowed to
+        // stat is something: without recording it, a project of unreadable
+        // files reports zero bytes and gets hidden as empty.
+        if (getErrnoCode(error) !== 'ENOENT') walked.unreadable = true
         return
       }
       walked.bytes += fileStat.size

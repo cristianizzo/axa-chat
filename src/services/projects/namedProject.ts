@@ -28,16 +28,18 @@ const WINDOWS_RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
  * Turn a user-supplied name into a directory name.
  *
  * sanitizePath does the security work — the result cannot contain a path
- * separator, so it cannot escape the projects directory. It cannot collide
- * with a directory-derived project either: those are sanitized absolute paths,
- * so on unix they always begin with `-`.
+ * separator, so it cannot escape the projects directory.
  *
  * What it does not do is avoid the Windows device names, where `--project con`
  * would produce a directory that cannot be created and every later write would
  * fail. Those get a suffix.
  */
 function toDirectoryName(name: string): string {
-  const sanitized = sanitizePath(name)
+  // Leading dashes are stripped, which is what actually keeps named projects
+  // out of the path-derived namespace: sanitizePath('/tmp') is '-tmp', so
+  // `--project /tmp` would otherwise land on the directory belonging to the
+  // real /tmp. Falls back when a name sanitizes away to nothing.
+  const sanitized = sanitizePath(name).replace(/^-+/, '') || 'project'
   return WINDOWS_RESERVED_NAMES.test(sanitized)
     ? `${sanitized}-project`
     : sanitized
