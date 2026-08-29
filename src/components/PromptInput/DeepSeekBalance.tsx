@@ -118,7 +118,7 @@ export function DeepSeekBalance({
   return (
     <Text dimColor wrap="truncate">
       {label}
-      {separator ? ' ·' : ''}
+      {separator ? ' · ' : ''}
     </Text>
   )
 }

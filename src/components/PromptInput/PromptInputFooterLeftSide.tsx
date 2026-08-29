@@ -467,7 +467,7 @@ function ModeIndicator({
     // the empty Box keeps the height stable while DeepSeekBalance renders the
     // account when active and nothing when it is not.
     if (isFullscreenEnvEnabled()) {
-      return <Box height={1}>{<DeepSeekBalance />}</Box>
+      return <Box height={1}><DeepSeekBalance /></Box>
     }
     return <DeepSeekBalance />
   }
@@ -475,7 +475,7 @@ function ModeIndicator({
   // flexShrink=0 keeps mode + pill at natural width; the remaining parts
   // truncate at the tail as one string inside the Text wrapper.
   return <Box height={1} overflow="hidden">
-      {<DeepSeekBalance separator={modePart !== null || tasksPart !== null || parts.length > 0} />}
+      <DeepSeekBalance separator={modePart !== null || tasksPart !== null || parts.length > 0} />
       {modePart && <Box flexShrink={0}>
           {modePart}
           {(tasksPart || parts.length > 0) && <Text dimColor> · </Text>}
