@@ -903,7 +903,6 @@ export const getMemoryFiles = memoize(
         // Try reading <config>/memory file and <config>/rules/*.md (Project).
         // Only CONFIG_DIR_NAME is read: a legacy .claude/ layout is brought
         // over by the one-time import flow, not read from two spellings here.
-        // processedPaths dedupes, so a project with both is read once.
         {
           const configDir = CONFIG_DIR_NAME
           result.push(
@@ -959,7 +958,7 @@ export const getMemoryFiles = memoize(
           )),
         )
 
-        // Same pair from the additional directory, both config dir names.
+        // Same pair from the additional directory, under CONFIG_DIR_NAME.
         {
           const configDir = CONFIG_DIR_NAME
           result.push(

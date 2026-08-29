@@ -22,6 +22,7 @@ import { normalizeApiKeyForConfig } from './utils/authPortable.js';
 import { getExternalClaudeMdIncludes, getMemoryFiles, shouldShowClaudeMdExternalIncludesWarning } from './utils/claudemd.js';
 import { checkHasTrustDialogAccepted, getCurrentProjectConfig, getCustomApiKeyStatus, getGlobalConfig, saveCurrentProjectConfig, saveGlobalConfig } from './utils/config.js';
 import { getOriginalCwd } from './bootstrap/state.js';
+import { findCanonicalGitRoot } from './utils/git.js';
 import { updateDeepLinkTerminalPreference } from './utils/deepLink/terminalPreference.js';
 import { isEnvTruthy, isRunningOnHomespace } from './utils/envUtils.js';
 import { type FpsMetrics, FpsTracker } from './utils/fpsTracker.js';
@@ -158,7 +159,11 @@ export async function showSetupScreens(root: Root, permissionMode: PermissionMod
     // memory files are read below, so an accepted import takes effect on this
     // run rather than the next one.
     if (!getCurrentProjectConfig().hasAnsweredLegacyProjectImport) {
-      const projectRoot = getOriginalCwd();
+      // The "once per project" flag is keyed off the canonical git root, so the
+      // import scans that same root — a launch from a subdirectory or a worktree
+      // must not look for legacy files in the wrong place while still marking
+      // the canonical project as answered.
+      const projectRoot = findCanonicalGitRoot(getOriginalCwd()) ?? getOriginalCwd();
       const {
         findLegacyProjectFiles,
         hasAnything

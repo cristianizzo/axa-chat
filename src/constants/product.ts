@@ -26,12 +26,9 @@ export const PRODUCT_NAME = 'AXA Chat'
  * traded one problem for a worse one: the two scopes disagreed, so where a
  * given piece of state landed depended on which code path wrote it, and a fork
  * that refuses to touch `~/.claude` was still writing another product's name
- * into every repo it was used on. One name at both scopes, and
- * `migrateProjectConfigDir` moves an existing `.claude/` across.
- *
- * `CLAUDE.md` at a repo root is not this directory and keeps its name — it is
- * read by the model and by other tools, and is a contract in the sense the
- * comment above describes.
+ * into every repo it was used on. One name at both scopes, and an existing
+ * `.claude/`, `CLAUDE.md` and `CLAUDE.local.md` are offered across exactly once
+ * by a copy-based import — never read from both spellings.
  */
 export const CONFIG_DIR_NAME = '.axa'
 

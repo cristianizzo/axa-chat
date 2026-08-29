@@ -8,10 +8,8 @@ import { isEnvTruthy } from './envUtils.js'
  *
  * This fork ships agent teams on by default — upstream's external-build
  * opt-in assumed a hosted product where the killswitch protects users from an
- * unfinished feature, and there is no killswitch here: GrowthBook is never
- * contacted, so 'tengu_amber_flint' can never fire. Requiring
- * CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 on every launch made the feature
- * present but unreachable.
+ * unfinished feature. Requiring CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 on every
+ * launch made the feature present but unreachable.
  *
  * Off switch, kept deliberately: setting the variable to 0 disables it again.
  * Higher-precedence settings and a shell export still apply per the normal
