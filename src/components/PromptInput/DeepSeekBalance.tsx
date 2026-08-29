@@ -53,7 +53,12 @@ function formatEntry(entry: DeepSeekBalanceInfo): string {
   return `${symbol}${amount.toFixed(2)}`
 }
 
-export function DeepSeekBalance(): React.ReactNode {
+export function DeepSeekBalance({
+  separator = false,
+}: {
+  /** Render a trailing ` ·` so the pill reads as part of a joined row. */
+  separator?: boolean
+}): React.ReactNode {
   const [label, setLabel] = useState<string | null>(null)
   // Re-run the effect when the account switches so polling starts/tears down
   // with the active provider instead of staying frozen from mount.
@@ -113,6 +118,7 @@ export function DeepSeekBalance(): React.ReactNode {
   return (
     <Text dimColor wrap="truncate">
       {label}
+      {separator ? ' ·' : ''}
     </Text>
   )
 }
