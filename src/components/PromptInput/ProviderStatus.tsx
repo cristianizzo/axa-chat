@@ -9,6 +9,7 @@ import {
   PROVIDER_CONNECTED_GLYPH,
   PROVIDER_DISCONNECTED_GLYPH,
 } from '../../utils/logoV2Utils.js'
+import { isActiveAccountServingRequests } from '../../utils/model/providers.js'
 import { Text } from '../../ink.js'
 
 /**
@@ -26,6 +27,12 @@ import { Text } from '../../ink.js'
  */
 export function ProviderStatus(): React.ReactNode {
   useAppState(s => s.authVersion)
+  // Same guard as the banner's provider line: when CLAUDE_CODE_USE_BEDROCK/
+  // _VERTEX/_FOUNDRY is set, the logged-in account is not the backend serving
+  // requests, and naming it would be misleading.
+  if (!isActiveAccountServingRequests()) {
+    return null
+  }
   const id = getActiveAuthProvider()
   const provider = getProvider(id)
   const label = provider.shortLabel ?? provider.label
