@@ -41,6 +41,7 @@ import { useHasSelection, useSelection } from '../../ink/hooks/use-selection.js'
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js';
 import { getPlatform } from '../../utils/platform.js';
 import { PrBadge } from '../PrBadge.js';
+import { DeepSeekBalance } from './DeepSeekBalance.js';
 
 // Dead code elimination: conditional import for proactive mode
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -462,12 +463,19 @@ function ModeIndicator({
   // from 0→1 row. Always render 1 row in fullscreen; return a space when
   // empty so Yoga reserves the row without painting anything visible.
   if (parts.length === 0 && !tasksPart && !modePart) {
-    return isFullscreenEnvEnabled() ? <Text> </Text> : null;
+    // Fullscreen needs a reserved row (flexShrink:0 steals from ScrollBox);
+    // the empty Box keeps the height stable while DeepSeekBalance renders the
+    // account when active and nothing when it is not.
+    if (isFullscreenEnvEnabled()) {
+      return <Box height={1}><DeepSeekBalance /></Box>
+    }
+    return <DeepSeekBalance />
   }
 
   // flexShrink=0 keeps mode + pill at natural width; the remaining parts
   // truncate at the tail as one string inside the Text wrapper.
   return <Box height={1} overflow="hidden">
+      <DeepSeekBalance separator={modePart !== null || tasksPart !== null || parts.length > 0} />
       {modePart && <Box flexShrink={0}>
           {modePart}
           {(tasksPart || parts.length > 0) && <Text dimColor> · </Text>}
