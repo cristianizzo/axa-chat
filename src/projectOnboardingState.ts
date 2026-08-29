@@ -19,7 +19,7 @@ export type Step = {
 }
 
 export function getSteps(): Step[] {
-  const hasClaudeMd = getFsImplementation().existsSync(
+  const hasMemoryFile = getFsImplementation().existsSync(
     join(getCwd(), MEMORY_FILE_NAME),
   )
   const isWorkspaceDirEmpty = isDirEmpty(getCwd())
@@ -35,7 +35,7 @@ export function getSteps(): Step[] {
     {
       key: 'axamd',
       text: `Run /init to create a ${MEMORY_FILE_NAME} file with instructions for ${ASSISTANT_NAME}`,
-      isComplete: hasClaudeMd,
+      isComplete: hasMemoryFile,
       isCompletable: true,
       isEnabled: !isWorkspaceDirEmpty,
     },
