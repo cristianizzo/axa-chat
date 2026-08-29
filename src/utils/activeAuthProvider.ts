@@ -15,10 +15,43 @@ import {
   type AuthProviderId,
   DEFAULT_AUTH_PROVIDER,
   getProvider,
+  getProviderModelCatalog,
+  getProviderModelCatalogForModel,
   inferProviderFromCredentials,
   isAuthProviderId,
 } from '../config/providers/index.js'
 import { getGlobalConfig, saveGlobalConfig } from './config.js'
+import { isModelAlias } from './model/aliases.js'
+
+/**
+ * Whether the given provider can serve the given concrete model ID.
+ *
+ * The provider-agnostic half of model.ts's isServableByActiveProvider, kept
+ * here so the write path can validate without importing model.ts — which reads
+ * this module, so the dependency would be a cycle. aliases.js is
+ * dependency-free and safe to pull in.
+ *
+ * @param id - The provider to test
+ * @param model - A concrete model ID, or an alias
+ * @returns Whether that provider can serve it
+ */
+function isModelServableByProvider(id: AuthProviderId, model: string): boolean {
+  // Aliases carry no provider; each provider resolves them to something it
+  // serves. Only a concrete ID pins a provider, so only a concrete ID can be
+  // wrong.
+  if (isModelAlias(model)) {
+    return true
+  }
+  const targetCatalog = getProviderModelCatalog(id)
+  if (targetCatalog) {
+    return targetCatalog.acceptsModel(model)
+  }
+  // No catalog of its own: it can serve anything except a model that
+  // demonstrably belongs to another provider's catalog. A provider that pins
+  // one exact model instead of listing a catalog (Ollama) never reaches here —
+  // ownedModel returns above — so this stays a question about catalogs only.
+  return !getProviderModelCatalogForModel(model)
+}
 
 /**
  * True when credentials for the given provider are present on this machine.
@@ -112,6 +145,20 @@ export function getStoredModelForProvider(
  * second answer that {@link getStoredModelForProvider} never reads. Passing
  * null clears the entry.
  *
+ * A concrete ID the provider cannot serve is dropped rather than stored. The
+ * caller records the *outgoing* session's model, which is only that account's
+ * own choice when the session actually ran on it — on a login, or when the
+ * switch happens before the session ever sampled the outgoing provider, the
+ * value can be another provider's ID (this is how `claude-opus-5` ends up
+ * recorded under `deepseek`).
+ *
+ * Today every reader re-checks servability, so a wrong entry is inert rather
+ * than harmful. Dropping it here keeps that defence from being the only one:
+ * the map means what it says, so a future reader that trusts it — model
+ * display, or anything sizing a context window from the stored ID — cannot
+ * silently inherit another provider's model. Aliases carry no provider and are
+ * always safe to keep.
+ *
  * @param id - The provider to record against
  * @param model - The model id to store, or null to forget it
  */
@@ -120,6 +167,9 @@ export function setStoredModelForProvider(
   model: string | null,
 ): void {
   if (getProvider(id).ownedModel) {
+    return
+  }
+  if (model !== null && !isModelServableByProvider(id, model)) {
     return
   }
   saveGlobalConfig(config => {
