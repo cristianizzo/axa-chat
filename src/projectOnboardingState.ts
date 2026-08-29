@@ -1,5 +1,5 @@
 import memoize from 'lodash-es/memoize.js'
-import { MEMORY_FILE_NAME } from './constants/product.js'
+import { ASSISTANT_NAME, MEMORY_FILE_NAME } from './constants/product.js'
 import { join } from 'path'
 import {
   getCurrentProjectConfig,
@@ -8,7 +8,6 @@ import {
 import { getCwd } from './utils/cwd.js'
 import { isDirEmpty } from './utils/file.js'
 import { getFsImplementation } from './utils/fsOperations.js'
-import { ASSISTANT_NAME } from './constants/product.js'
 
 export type Step = {
   key: string

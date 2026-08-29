@@ -1,5 +1,5 @@
 import { c as _c } from "react/compiler-runtime";
-import { CONFIG_DIR_NAME } from '../constants/product.js'
+import { CONFIG_DIR_NAME } from '../constants/product.js';
 import figures from 'figures';
 import { join } from 'path';
 import React, { Suspense, use, useCallback, useEffect, useMemo, useState } from 'react';
