@@ -153,7 +153,11 @@ async function copyFileIfAbsent(
     if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') return false
     if (isENOENT(error)) return false
     logError(error)
-    outcome.failures.push({ path: from, error: String(error) })
+    // Name both ends of the failed copy: a read error points at the source,
+    // a write error at the destination, and only naming `from` misattributes
+    // the latter. Kept readable for the `could not copy ${path}: ${error}`
+    // message in the import dialog.
+    outcome.failures.push({ path: `${from} → ${to}`, error: String(error) })
     return false
   }
 }
@@ -226,14 +230,14 @@ export async function importLegacyProject(
         } catch (error) {
           logError(error)
           outcome.failures.push({
-            path: join(from, entry.name),
+            path: `${join(from, entry.name)} → ${target}`,
             error: String(error),
           })
         }
       }
     } catch (error) {
       logError(error)
-      outcome.failures.push({ path: from, error: String(error) })
+      outcome.failures.push({ path: `${from} → ${to}`, error: String(error) })
     }
   }
 
