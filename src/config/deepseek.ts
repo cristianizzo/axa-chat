@@ -26,11 +26,9 @@ export const DEEPSEEK_MESSAGES_PATH = '/v1/chat/completions'
  * in `reasoning_content` SSE deltas. Flash is the workhorse, Pro trades a much
  * lower concurrency limit and a higher price for more capability.
  *
- * The retired `deepseek-chat` / `deepseek-reasoner` IDs are still accepted by
- * the API as aliases (both resolve to `deepseek-v4-flash`), so an account with
- * one of them persisted keeps working — it just no longer appears in `/model`.
- *
  * Adding an entry here surfaces it in the `/model` picker for DeepSeek accounts.
+ * Retired IDs belong in {@link DEEPSEEK_LEGACY_MODEL_IDS} instead, so they keep
+ * working without being offered to new sessions.
  */
 export const DEEPSEEK_MODELS = [
   {
@@ -46,6 +44,23 @@ export const DEEPSEEK_MODELS = [
 ] as const satisfies readonly { id: string; label: string; description: string }[]
 
 export type DeepSeekModelId = (typeof DEEPSEEK_MODELS)[number]['id']
+
+/**
+ * Retired model IDs the API still serves as aliases onto `deepseek-v4-flash`.
+ *
+ * An account that stored one of these before the V4 rename keeps sending it, so
+ * the catalog has to recognise it. It is deliberately kept out of
+ * {@link DEEPSEEK_MODELS} so `/model` only ever offers the current IDs.
+ *
+ * Recognition is not cosmetic: a model no catalog claims falls through to the
+ * generic 200k context default, which puts autocompact's threshold at 167k
+ * instead of 967k — the same class of bug as the 64k window these IDs used to
+ * carry, which compacted DeepSeek sessions at 43k.
+ */
+export const DEEPSEEK_LEGACY_MODEL_IDS = [
+  'deepseek-chat',
+  'deepseek-reasoner',
+] as const satisfies readonly string[]
 
 /** The model used when an account is first set up or no preference is stored. */
 export const DEFAULT_DEEPSEEK_MODEL: DeepSeekModelId = 'deepseek-v4-flash'
