@@ -157,15 +157,20 @@ const TEAMMATE_ENV_VARS = [
 
 /**
  * Builds the `env KEY=VALUE ...` string for teammate spawn commands.
- * Always includes CLAUDECODE=1. CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 is
- * forced on for the spawned child only when the feature is currently enabled
- * in this process — an explicit opt-out (setting it to 0) is respected rather
- * than silently overridden. Plus any provider/config env vars that are set in
- * the current process.
+ * Always includes CLAUDECODE=1. CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS is
+ * forwarded so the child mirrors the parent's effective state: an explicit
+ * value (including the opt-out `0`) is passed through verbatim, otherwise `=1`
+ * is set when the feature is enabled. Omitting it on an opt-out would let the
+ * child read unset as enabled in this fork and silently undo the parent's
+ * choice. Plus any provider/config env vars that are set in the current
+ * process.
  */
 export function buildInheritedEnvVars(): string {
   const envVars = ['CLAUDECODE=1']
-  if (isAgentSwarmsEnabled()) {
+  const agentTeamsOptOut = process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+  if (agentTeamsOptOut !== undefined) {
+    envVars.push(`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=${quote([agentTeamsOptOut])}`)
+  } else if (isAgentSwarmsEnabled()) {
     envVars.push('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1')
   }
 
