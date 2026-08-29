@@ -46,8 +46,10 @@ function isModelServableByProvider(id: AuthProviderId, model: string): boolean {
   if (targetCatalog) {
     return targetCatalog.acceptsModel(model)
   }
-  // No catalog of its own (Anthropic): it can serve anything except a model
-  // that demonstrably belongs to another provider's catalog.
+  // No catalog of its own: it can serve anything except a model that
+  // demonstrably belongs to another provider's catalog. A provider that pins
+  // one exact model instead of listing a catalog (Ollama) never reaches here —
+  // ownedModel returns above — so this stays a question about catalogs only.
   return !getProviderModelCatalogForModel(model)
 }
 
