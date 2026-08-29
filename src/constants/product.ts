@@ -13,18 +13,47 @@
 export const PRODUCT_NAME = 'AXA Chat'
 
 /**
- * The per-user config directory, under `$HOME`.
+ * The config directory name, used at both scopes: `~/.axa` per user, and
+ * `<repo>/.axa` per project.
  *
  * Deliberately *not* `.claude`. axa owns its storage outright: it starts empty
  * on a fresh install and never reads or writes `~/.claude`, so an existing
  * Claude Code install keeps working untouched alongside it. Existing history is
  * pulled across only by an explicit, re-runnable `/import-conversations`.
  *
- * Note this is the *home* directory only. Project-local `.claude/` (CLAUDE.md,
- * settings.local.json, agents, skills committed to a repo) keeps its upstream
- * name — those files are shared with collaborators and read by other tools.
+ * The project scope used to keep the upstream `.claude` name, on the grounds
+ * that those files are shared with collaborators and read by other tools. That
+ * traded one problem for a worse one: the two scopes disagreed, so where a
+ * given piece of state landed depended on which code path wrote it, and a fork
+ * that refuses to touch `~/.claude` was still writing another product's name
+ * into every repo it was used on. One name at both scopes, and an existing
+ * `.claude/`, `CLAUDE.md` and `CLAUDE.local.md` are offered across exactly once
+ * by a copy-based import — never read from both spellings.
  */
 export const CONFIG_DIR_NAME = '.axa'
+
+/**
+ * The pre-rename project directory, and the memory filenames that went with it.
+ *
+ * Read in exactly one place: the startup check that offers to import a Claude
+ * Code project into axa. Nothing else consults them — axa reads and writes its
+ * own names only, so a project that declines the import is simply a project
+ * axa has no instructions for, rather than one silently served by another
+ * product's files.
+ */
+export const LEGACY_CONFIG_DIR_NAME = '.claude'
+export const LEGACY_MEMORY_FILE_NAME = 'CLAUDE.md'
+export const LEGACY_LOCAL_MEMORY_FILE_NAME = 'CLAUDE.local.md'
+
+/**
+ * The project instruction files axa reads and writes.
+ *
+ * `CLAUDE.md` is an upstream name for an upstream product. Keeping it would
+ * mean this fork asking users to put a competitor's filename in their repo,
+ * and would leave the tree half-renamed next to `.axa/`.
+ */
+export const MEMORY_FILE_NAME = 'AXA.md'
+export const LOCAL_MEMORY_FILE_NAME = 'AXA.local.md'
 
 /**
  * Base name of the macOS Keychain entry holding credentials.

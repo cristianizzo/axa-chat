@@ -10,21 +10,56 @@ import {
   getSessionBypassPermissionsMode,
 } from '../../bootstrap/state.js'
 import { quote } from '../bash/shellQuote.js'
-import { isInBundledMode } from '../bundledMode.js'
+import { isAgentSwarmsEnabled } from '../agentSwarmsEnabled.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
 import { getTeammateModeFromSnapshot } from './backends/teammateModeSnapshot.js'
 import { TEAMMATE_COMMAND_ENV_VAR } from './constants.js'
 
 /**
+ * Bun mounts a compiled binary's bundled entrypoint under this prefix.
+ *
+ * Windows uses a drive-letter form instead of a posix path, so both spellings
+ * are listed. Neither names a file outside the running process.
+ */
+const BUNDLED_ENTRYPOINT_PREFIXES = ['/$bunfs/', 'B:\\~BUN\\']
+
+/**
  * Gets the command to use for spawning teammate processes.
  * Uses TEAMMATE_COMMAND_ENV_VAR if set, otherwise falls back to the
  * current process executable path.
+ *
+ * argv[1] is rejected when it points into Bun's virtual mount. A compiled
+ * binary sets it to a path there, which resolves inside this process and
+ * nowhere else, so passing it to a shell produces "No such file or directory"
+ * and every pane-backed teammate fails to start. process.execPath is the real
+ * executable in both a compiled binary and a script run.
+ *
+ * Two things make this easy to get wrong, both verified against a compiled
+ * binary rather than assumed:
+ *
+ * - `isInBundledMode()` does not identify a compiled binary. It keys off
+ *   Bun.embeddedFiles, which is empty unless the build embeds assets, so it
+ *   reports false for exactly the binaries that need handling.
+ * - `existsSync()` on the virtual path returns true, because the mount is a
+ *   real filesystem as far as this process is concerned. Asking the
+ *   filesystem cannot distinguish the two cases; only the path can.
  */
 export function getTeammateCommand(): string {
   if (process.env[TEAMMATE_COMMAND_ENV_VAR]) {
     return process.env[TEAMMATE_COMMAND_ENV_VAR]
   }
-  return isInBundledMode() ? process.execPath : process.argv[1]!
+  const entrypoint = process.argv[1]
+  // Compare case-insensitively: Windows drive-letter paths are case-insensitive,
+  // so Bun might report the virtual entrypoint with a different casing of the
+  // drive letter than the constant above. Lowercasing both sides keeps the
+  // drive-letter match reliable; the posix prefix is already lowercase.
+  const entrypointLower = entrypoint?.toLowerCase()
+  const isVirtual =
+    !entrypoint ||
+    BUNDLED_ENTRYPOINT_PREFIXES.some(prefix =>
+      entrypointLower!.startsWith(prefix.toLowerCase()),
+    )
+  return isVirtual ? process.execPath : entrypoint
 }
 
 /**
@@ -129,11 +164,22 @@ const TEAMMATE_ENV_VARS = [
 
 /**
  * Builds the `env KEY=VALUE ...` string for teammate spawn commands.
- * Always includes CLAUDECODE=1 and CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1,
- * plus any provider/config env vars that are set in the current process.
+ * Always includes CLAUDECODE=1. CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS is
+ * forwarded so the child mirrors the parent's effective state: an explicit
+ * value (including the opt-out `0`) is passed through verbatim, otherwise `=1`
+ * is set when the feature is enabled. Omitting it on an opt-out would let the
+ * child read unset as enabled in this fork and silently undo the parent's
+ * choice. Plus any provider/config env vars that are set in the current
+ * process.
  */
 export function buildInheritedEnvVars(): string {
-  const envVars = ['CLAUDECODE=1', 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1']
+  const envVars = ['CLAUDECODE=1']
+  const agentTeamsOptOut = process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+  if (agentTeamsOptOut !== undefined) {
+    envVars.push(`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=${quote([agentTeamsOptOut])}`)
+  } else if (isAgentSwarmsEnabled()) {
+    envVars.push('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1')
+  }
 
   for (const key of TEAMMATE_ENV_VARS) {
     const value = process.env[key]

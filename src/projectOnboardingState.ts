@@ -1,4 +1,5 @@
 import memoize from 'lodash-es/memoize.js'
+import { ASSISTANT_NAME, MEMORY_FILE_NAME } from './constants/product.js'
 import { join } from 'path'
 import {
   getCurrentProjectConfig,
@@ -7,7 +8,6 @@ import {
 import { getCwd } from './utils/cwd.js'
 import { isDirEmpty } from './utils/file.js'
 import { getFsImplementation } from './utils/fsOperations.js'
-import { ASSISTANT_NAME } from './constants/product.js'
 
 export type Step = {
   key: string
@@ -18,8 +18,8 @@ export type Step = {
 }
 
 export function getSteps(): Step[] {
-  const hasClaudeMd = getFsImplementation().existsSync(
-    join(getCwd(), 'CLAUDE.md'),
+  const hasMemoryFile = getFsImplementation().existsSync(
+    join(getCwd(), MEMORY_FILE_NAME),
   )
   const isWorkspaceDirEmpty = isDirEmpty(getCwd())
 
@@ -32,9 +32,9 @@ export function getSteps(): Step[] {
       isEnabled: isWorkspaceDirEmpty,
     },
     {
-      key: 'claudemd',
-      text: `Run /init to create a CLAUDE.md file with instructions for ${ASSISTANT_NAME}`,
-      isComplete: hasClaudeMd,
+      key: 'axamd',
+      text: `Run /init to create a ${MEMORY_FILE_NAME} file with instructions for ${ASSISTANT_NAME}`,
+      isComplete: hasMemoryFile,
       isCompletable: true,
       isEnabled: !isWorkspaceDirEmpty,
     },

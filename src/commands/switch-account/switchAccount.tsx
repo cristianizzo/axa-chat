@@ -19,6 +19,7 @@ import {
   setStoredModelForProvider,
 } from '../../utils/activeAuthProvider.js'
 import { getGlobalConfig } from '../../utils/config.js'
+import { stripSignatureBlocks } from '../../utils/messages.js'
 import {
   getDefaultMainLoopModelSetting,
   renderModelSetting,
@@ -75,6 +76,15 @@ async function switchTo(
 
   setActiveAuthProvider(id)
   await clearAuthRelatedCaches()
+
+  // Signature-bearing blocks (thinking, connector_text) are bound to the
+  // credentials that produced them, so a transcript carrying Moonshot's
+  // thinking blocks is rejected outright once Anthropic is serving the
+  // session: "Invalid `signature` in `thinking` block", on every subsequent
+  // turn, with no way back except clearing the conversation. /login has always
+  // stripped them for exactly this reason; switching accounts changes the
+  // same thing about a session and needs the same treatment.
+  context.setMessages(stripSignatureBlocks)
 
   const target = resolveModelForActiveProvider()
   context.setAppState(prev => ({

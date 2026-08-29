@@ -76,6 +76,11 @@ export const DANGEROUS_DIRECTORIES = [
   '.git',
   '.vscode',
   '.idea',
+  CONFIG_DIR_NAME,
+  // Legacy, and deliberately still listed. A project that has not been
+  // migrated still keeps live config here, so dropping it would remove this
+  // protection from exactly the projects that predate the rename — the ones
+  // still relying on it.
   '.claude',
 ] as const
 
@@ -93,11 +98,12 @@ export function normalizeCaseForComparison(path: string): string {
 }
 
 /**
- * If filePath is inside a .claude/skills/{name}/ directory (project or global),
- * return the skill name and a session-allow pattern scoped to just that skill.
- * Used to offer a narrower "allow edits to this skill only" option in the
- * permission dialog and SDK suggestions, so iterating on one skill doesn't
- * require granting session access to all of .claude/ (settings.json, hooks/, etc.).
+ * If filePath is inside a {CONFIG_DIR_NAME}/skills/{name}/ directory (project
+ * or global), return the skill name and a session-allow pattern scoped to just
+ * that skill. Used to offer a narrower "allow edits to this skill only" option
+ * in the permission dialog and SDK suggestions, so iterating on one skill
+ * doesn't require granting session access to all of {CONFIG_DIR_NAME}/
+ * (settings.json, hooks/, etc.).
  */
 export function getClaudeSkillScope(
   filePath: string,
@@ -107,8 +113,8 @@ export function getClaudeSkillScope(
 
   const bases = [
     {
-      dir: expandPath(join(getOriginalCwd(), '.claude', 'skills')),
-      prefix: '/.claude/skills/',
+      dir: expandPath(join(getOriginalCwd(), CONFIG_DIR_NAME, 'skills')),
+      prefix: `/${CONFIG_DIR_NAME}/skills/`,
     },
     {
       // Our config dir, not `~/.claude` — personal skills load from
@@ -237,12 +243,12 @@ function isClaudeConfigFilePath(filePath: string): boolean {
     return true
   }
 
-  // Check if file is within .claude/commands or .claude/agents directories
-  // using proper path segment validation (not string matching with includes())
+  // Check if file is within {CONFIG_DIR_NAME}/commands, agents or skills using
+  // proper path segment validation (not string matching with includes())
   // pathInWorkingPath now handles case-insensitive comparison to prevent bypasses
-  const commandsDir = join(getOriginalCwd(), '.claude', 'commands')
-  const agentsDir = join(getOriginalCwd(), '.claude', 'agents')
-  const skillsDir = join(getOriginalCwd(), '.claude', 'skills')
+  const commandsDir = join(getOriginalCwd(), CONFIG_DIR_NAME, 'commands')
+  const agentsDir = join(getOriginalCwd(), CONFIG_DIR_NAME, 'agents')
+  const skillsDir = join(getOriginalCwd(), CONFIG_DIR_NAME, 'skills')
 
   return (
     pathInWorkingPath(filePath, commandsDir) ||
@@ -463,11 +469,13 @@ function isDangerousFilePathToAutoEdit(path: string): boolean {
         continue
       }
 
-      // Special case: .claude/worktrees/ is a structural path (where Claude stores
-      // git worktrees), not a user-created dangerous directory. Skip the .claude
-      // segment when it's followed by 'worktrees'. Any nested .claude directories
-      // within the worktree (not followed by 'worktrees') are still blocked.
-      if (dir === '.claude') {
+      // Special case: <config>/worktrees/ is a structural path (where axa
+      // stores git worktrees), not a user-created dangerous directory. Skip the
+      // config segment when it's followed by 'worktrees'. Any nested config
+      // directories within the worktree (not followed by 'worktrees') are still
+      // blocked. Both spellings, since an unmigrated project still has its
+      // worktrees under the legacy name.
+      if (dir === CONFIG_DIR_NAME || dir === '.claude') {
         const nextSegment = pathSegments[i + 1]
         if (
           nextSegment &&
@@ -1590,16 +1598,16 @@ export function checkEditableInternalPath(
     }
   }
 
-  // .claude/launch.json — desktop preview config (dev server command + port).
+  // .axa/launch.json — desktop preview config (dev server command + port).
   // The desktop's preview_start MCP tool instructs Claude to create/update
   // this file as part of the preview workflow. Without this carve-out the
-  // .claude/ DANGEROUS_DIRECTORIES check prompts for it, which in SDK mode
+  // .axa/ DANGEROUS_DIRECTORIES check prompts for it, which in SDK mode
   // cascades: user clicks "Always allow" → setMode:acceptEdits suggestion
   // applied → silent downgrade from auto mode. Matches the project-level
-  // .claude/ only (not ~/.claude/) since launch.json is per-project.
+  // .axa/ only (not ~/.claude/) since launch.json is per-project.
   if (
     normalizeCaseForComparison(normalizedPath) ===
-    normalizeCaseForComparison(join(getOriginalCwd(), '.claude', 'launch.json'))
+    normalizeCaseForComparison(join(getOriginalCwd(), CONFIG_DIR_NAME, 'launch.json'))
   ) {
     return {
       behavior: 'allow',

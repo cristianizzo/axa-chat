@@ -3,7 +3,8 @@ import { appendFileSync } from 'fs';
 import React from 'react';
 import { logEvent } from 'src/services/analytics/index.js';
 import { gracefulShutdown, gracefulShutdownSync } from 'src/utils/gracefulShutdown.js';
-import { type ChannelEntry, getAllowedChannels, setAllowedChannels, setHasDevChannels, setSessionTrustAccepted, setStatsStore } from './bootstrap/state.js';
+import type { LegacyProjectImportOutcome } from './components/LegacyProjectImportDialog.js';
+import { type ChannelEntry, getAllowedChannels, getOriginalCwd, setAllowedChannels, setHasDevChannels, setSessionTrustAccepted, setStatsStore } from './bootstrap/state.js';
 import type { Command } from './commands.js';
 import { createStatsStore, type StatsStore } from './context/stats.js';
 import { getSystemContext } from './context.js';
@@ -19,7 +20,8 @@ import { AppStateProvider } from './state/AppState.js';
 import { onChangeAppState } from './state/onChangeAppState.js';
 import { normalizeApiKeyForConfig } from './utils/authPortable.js';
 import { getExternalClaudeMdIncludes, getMemoryFiles, shouldShowClaudeMdExternalIncludesWarning } from './utils/claudemd.js';
-import { checkHasTrustDialogAccepted, getCustomApiKeyStatus, getGlobalConfig, saveGlobalConfig } from './utils/config.js';
+import { checkHasTrustDialogAccepted, getCurrentProjectConfig, getCustomApiKeyStatus, getGlobalConfig, saveCurrentProjectConfig, saveGlobalConfig } from './utils/config.js';
+import { findCanonicalGitRoot } from './utils/git.js';
 import { updateDeepLinkTerminalPreference } from './utils/deepLink/terminalPreference.js';
 import { isEnvTruthy, isRunningOnHomespace } from './utils/envUtils.js';
 import { type FpsMetrics, FpsTracker } from './utils/fpsTracker.js';
@@ -148,6 +150,47 @@ export async function showSetupScreens(root: Root, permissionMode: PermissionMod
     // picks up fresh auth headers.
     resetGrowthBook();
     void initializeGrowthBook();
+
+    // Offer to import a Claude Code project layout, once per project.
+    //
+    // After trust on purpose: this reads and writes files in the repo, so it
+    // must not run anywhere the user has not said they trust it. Before the
+    // memory files are read below, so an accepted import takes effect on this
+    // run rather than the next one.
+    if (!getCurrentProjectConfig().hasAnsweredLegacyProjectImport) {
+      // The "once per project" flag is keyed off the canonical git root, so the
+      // import scans that same root — a launch from a subdirectory or a worktree
+      // must not look for legacy files in the wrong place while still marking
+      // the canonical project as answered.
+      const projectRoot = findCanonicalGitRoot(getOriginalCwd()) ?? getOriginalCwd();
+      const {
+        findLegacyProjectFiles,
+        hasAnything
+      } = await import('./utils/legacyProjectImport.js');
+      const findings = await findLegacyProjectFiles(projectRoot);
+      if (hasAnything(findings)) {
+        const {
+          LegacyProjectImportDialog
+        } = await import('./components/LegacyProjectImportDialog.js');
+        await showSetupDialog(root, done => (
+          <LegacyProjectImportDialog
+            projectRoot={projectRoot}
+            findings={findings}
+            onDone={(outcome: LegacyProjectImportOutcome) => {
+              // Recorded for accept and decline alike — but not for a failed
+              // import, so a transient failure can be retried on a later run.
+              if (outcome !== 'failed') {
+                saveCurrentProjectConfig(current => ({
+                  ...current,
+                  hasAnsweredLegacyProjectImport: true
+                }));
+              }
+              done();
+            }}
+          />
+        ));
+      }
+    }
 
     // Now that trust is established, prefetch system context if it wasn't already
     void getSystemContext();

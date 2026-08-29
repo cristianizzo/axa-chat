@@ -1,4 +1,5 @@
 import { realpath } from 'fs/promises'
+import { CONFIG_DIR_NAME } from '../constants/product.js'
 import ignore from 'ignore'
 import memoize from 'lodash-es/memoize.js'
 import {
@@ -665,7 +666,7 @@ export const getSkillDirCommands = memoize(
       const additionalSkillsNested = await Promise.all(
         additionalDirs.map(dir =>
           loadSkillsFromSkillsDir(
-            join(dir, '.claude', 'skills'),
+            join(dir, CONFIG_DIR_NAME, 'skills'),
             'projectSettings',
           ),
         ),
@@ -700,7 +701,7 @@ export const getSkillDirCommands = memoize(
         ? Promise.all(
             additionalDirs.map(dir =>
               loadSkillsFromSkillsDir(
-                join(dir, '.claude', 'skills'),
+                join(dir, CONFIG_DIR_NAME, 'skills'),
                 'projectSettings',
               ),
             ),
@@ -874,7 +875,7 @@ export async function discoverSkillDirsForPaths(
     // CWD-level skills are already loaded at startup, so we only discover nested ones
     // Use prefix+separator check to avoid matching /project-backup when cwd is /project
     while (currentDir.startsWith(resolvedCwd + pathSep)) {
-      const skillDir = join(currentDir, '.claude', 'skills')
+      const skillDir = join(currentDir, CONFIG_DIR_NAME, 'skills')
 
       // Skip if we've already checked this path (hit or miss) — avoids
       // repeating the same failed stat on every Read/Write/Edit call when

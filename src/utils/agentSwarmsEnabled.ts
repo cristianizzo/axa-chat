@@ -2,24 +2,18 @@ import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growt
 import { isEnvTruthy } from './envUtils.js'
 
 /**
- * Check if --agent-teams flag is provided via CLI.
- * Checks process.argv directly to avoid import cycles with bootstrap/state.
- * Note: The flag is only shown in help for ant users, but if external users
- * pass it anyway, it will work (subject to the killswitch).
- */
-function isAgentTeamsFlagSet(): boolean {
-  return process.argv.includes('--agent-teams')
-}
-
-/**
  * Centralized runtime check for agent teams/teammate features.
  * This is the single gate that should be checked everywhere teammates
  * are referenced (prompts, code, tools isEnabled, UI, etc.).
  *
- * Ant builds: always enabled.
- * External builds require both:
- * 1. Opt-in via CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS env var OR --agent-teams flag
- * 2. GrowthBook gate 'tengu_amber_flint' enabled (killswitch)
+ * This fork ships agent teams on by default — upstream's external-build
+ * opt-in assumed a hosted product where the killswitch protects users from an
+ * unfinished feature. Requiring CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 on every
+ * launch made the feature present but unreachable.
+ *
+ * Off switch, kept deliberately: setting the variable to 0 disables it again.
+ * Higher-precedence settings and a shell export still apply per the normal
+ * env rules.
  */
 export function isAgentSwarmsEnabled(): boolean {
   // Ant: always on
@@ -27,10 +21,12 @@ export function isAgentSwarmsEnabled(): boolean {
     return true
   }
 
-  // External: require opt-in via env var or --agent-teams flag
+  // Opt-out only. isEnvTruthy treats "0"/"false"/"off" as false, so an
+  // explicit CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=0 turns the feature off;
+  // anything else, including the variable being unset, leaves it on.
   if (
-    !isEnvTruthy(process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS) &&
-    !isAgentTeamsFlagSet()
+    process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS !== undefined &&
+    !isEnvTruthy(process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS)
   ) {
     return false
   }

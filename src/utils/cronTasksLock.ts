@@ -9,6 +9,7 @@
 // probe, stale-lock recovery, cleanup-on-exit.
 
 import { mkdir, readFile, unlink, writeFile } from 'fs/promises'
+import { CONFIG_DIR_NAME } from '../constants/product.js'
 import { dirname, join } from 'path'
 import { z } from 'zod/v4'
 import { getProjectRoot, getSessionId } from '../bootstrap/state.js'
@@ -20,7 +21,7 @@ import { safeParseJSON } from './json.js'
 import { lazySchema } from './lazySchema.js'
 import { jsonStringify } from './slowOperations.js'
 
-const LOCK_FILE_REL = join('.claude', 'scheduled_tasks.lock')
+const LOCK_FILE_REL = join(CONFIG_DIR_NAME, 'scheduled_tasks.lock')
 
 const schedulerLockSchema = lazySchema(() =>
   z.object({
