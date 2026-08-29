@@ -243,8 +243,8 @@ function isClaudeConfigFilePath(filePath: string): boolean {
     return true
   }
 
-  // Check if file is within .claude/commands or .claude/agents directories
-  // using proper path segment validation (not string matching with includes())
+  // Check if file is within {CONFIG_DIR_NAME}/commands, agents or skills using
+  // proper path segment validation (not string matching with includes())
   // pathInWorkingPath now handles case-insensitive comparison to prevent bypasses
   const commandsDir = join(getOriginalCwd(), CONFIG_DIR_NAME, 'commands')
   const agentsDir = join(getOriginalCwd(), CONFIG_DIR_NAME, 'agents')

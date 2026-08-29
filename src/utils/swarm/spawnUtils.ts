@@ -49,9 +49,16 @@ export function getTeammateCommand(): string {
     return process.env[TEAMMATE_COMMAND_ENV_VAR]
   }
   const entrypoint = process.argv[1]
+  // Compare case-insensitively: Windows drive-letter paths are case-insensitive,
+  // so Bun might report the virtual entrypoint with a different casing of the
+  // drive letter than the constant above. Lowercasing both sides keeps the
+  // drive-letter match reliable; the posix prefix is already lowercase.
+  const entrypointLower = entrypoint?.toLowerCase()
   const isVirtual =
     !entrypoint ||
-    BUNDLED_ENTRYPOINT_PREFIXES.some(prefix => entrypoint.startsWith(prefix))
+    BUNDLED_ENTRYPOINT_PREFIXES.some(prefix =>
+      entrypointLower!.startsWith(prefix.toLowerCase()),
+    )
   return isVirtual ? process.execPath : entrypoint
 }
 
