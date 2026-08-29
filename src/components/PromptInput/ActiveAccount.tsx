@@ -1,23 +1,26 @@
 import * as React from 'react'
 import { useEffect, useState } from 'react'
-import { DEEPSEEK_BASE_URL } from '../../config/deepseek.js'
-import { Text } from '../../ink.js'
+import { getProvider } from 'src/config/providers/index.js'
 import { useAppState } from 'src/state/AppState.js'
+import { DEEPSEEK_BASE_URL } from '../../config/deepseek.js'
+import { useMainLoopModel } from '../../hooks/useMainLoopModel.js'
+import { Text } from '../../ink.js'
+import { getActiveAuthProvider } from '../../utils/activeAuthProvider.js'
 import { getDeepSeekAuth, isDeepSeekSubscriber } from '../../utils/auth.js'
+import { isActiveAccountServingRequests } from '../../utils/model/providers.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
 
 /**
- * DeepSeek account balance, shown in the footer's right bar while a DeepSeek
- * account is serving the session.
+ * The account serving the session, as a single pill in the footer's left bar:
  *
- * DeepSeek's API exposes the remaining credit at `GET /user/balance`, which the
- * LLM endpoint has no reason to echo, so the usual "cost of the last response"
- * has no per-call signal to anchor to. This fetches it directly with the stored
- * API key and refreshes it on a timer while the account is active.
+ *   DeepSeek - deepseek-v4-flash - $7.12
  *
- * The effect subscribes to AppState `authVersion`, which `/switch-account`
- * bumps, so it tears down when DeepSeek stops being the active provider and
- * restarts when it becomes active again.
+ * Combines the active provider, its model, and — only when a DeepSeek account
+ * is serving — the remaining credit, since the balance is the one piece of that
+ * trio the LLM endpoint never echoes (it lives at `GET /user/balance`).
+ *
+ * Re-renders on account switch by subscribing to AppState `authVersion`, which
+ * `/switch-account` bumps, and the model via `useMainLoopModel`.
  */
 const REFRESH_MS = 60_000
 const REQUEST_TIMEOUT_MS = 10_000
@@ -46,35 +49,29 @@ type BalanceResponse = {
   balance_infos: DeepSeekBalanceInfo[]
 }
 
-function formatEntry(entry: DeepSeekBalanceInfo): string {
+function formatAmount(entry: DeepSeekBalanceInfo): string {
   const amount = parseFloat(entry.total_balance)
   if (!Number.isFinite(amount)) return `${entry.currency} ${entry.total_balance}`
   const symbol = CURRENCY_SYMBOLS[entry.currency] ?? `${entry.currency} `
   return `${symbol}${amount.toFixed(2)}`
 }
 
-export function DeepSeekBalance({
-  separator = false,
-}: {
-  /** Render a trailing ` ·` so the pill reads as part of a joined row. */
-  separator?: boolean
-}): React.ReactNode {
-  const [label, setLabel] = useState<string | null>(null)
-  // Re-run the effect when the account switches so polling starts/tears down
-  // with the active provider instead of staying frozen from mount.
+function useDeepSeekBalance(): string | null {
+  const [balance, setBalance] = useState<string | null>(null)
+  // Re-run when the account switches so polling starts/tears down with the
+  // active provider instead of staying frozen from mount.
   const authVersion = useAppState(s => s.authVersion)
 
   useEffect(() => {
-    const isActive = isDeepSeekSubscriber()
-    if (!isActive) {
-      setLabel(null)
+    if (!isDeepSeekSubscriber()) {
+      setBalance(null)
       return
     }
 
     async function load(): Promise<void> {
       const auth = getDeepSeekAuth()
       if (!auth?.apiKey) {
-        setLabel(null)
+        setBalance(null)
         return
       }
       // A fresh controller per request: the timeout must abort only the
@@ -88,19 +85,19 @@ export function DeepSeekBalance({
           ...getProxyFetchOptions({ forAnthropicAPI: false }),
         })
         if (!response.ok) {
-          setLabel(null)
+          setBalance(null)
           return
         }
         const body = (await response.json()) as BalanceResponse
         if (!body.is_available || !body.balance_infos?.length) {
-          setLabel(null)
+          setBalance(null)
           return
         }
-        setLabel(`DS ${body.balance_infos.map(formatEntry).join(' + ')}`)
+        setBalance(body.balance_infos.map(formatAmount).join(' + '))
       } catch {
         // Network/proxy/timeout: stay silent and retry on the next tick
         // rather than flashing an error in the footer.
-        setLabel(null)
+        setBalance(null)
       } finally {
         clearTimeout(timeout)
       }
@@ -114,11 +111,36 @@ export function DeepSeekBalance({
     }
   }, [authVersion])
 
-  if (!label) return null
+  return balance
+}
+
+export function ActiveAccount({
+  separator = false,
+}: {
+  /** Render a trailing ` ·` so the pill reads as part of a joined row. */
+  separator?: boolean
+}): React.ReactNode {
+  useAppState(s => s.authVersion)
+  const model = useMainLoopModel()
+  const balance = useDeepSeekBalance()
+
+  // Same guard as the banner's provider line: when CLAUDE_CODE_USE_BEDROCK/
+  // _VERTEX/_FOUNDRY is set, the logged-in account is not the backend serving
+  // requests, and naming it would be misleading.
+  if (!isActiveAccountServingRequests()) {
+    return null
+  }
+
+  const provider = getProvider(getActiveAuthProvider())
+  const label = provider.shortLabel ?? provider.label
+
+  const parts = [label, model]
+  if (balance) parts.push(balance)
+
   return (
     <Text dimColor wrap="truncate">
-      {label}
-      {separator ? ' · ' : ''}
+      {parts.join(' - ')}
+      {separator ? ' ·' : ''}
     </Text>
   )
 }
