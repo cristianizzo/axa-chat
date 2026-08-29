@@ -31,6 +31,7 @@ import { IdeStatusIndicator } from '../IdeStatusIndicator.js';
 import { MemoryUsageIndicator } from '../MemoryUsageIndicator.js';
 import { SentryErrorBoundary } from '../SentryErrorBoundary.js';
 import { TokenWarning } from '../TokenWarning.js';
+import { ProviderStatus } from './ProviderStatus.js';
 import { SourceUpdateProgress } from './SourceUpdateProgress.js';
 import { SandboxPromptFooterHint } from './SandboxPromptFooterHint.js';
 
@@ -321,6 +322,7 @@ function NotificationContent({
           </Text>
         </Box>}
       {!isBriefOnly && <TokenWarning tokenUsage={tokenUsage} model={mainLoopModel} />}
+      {!isBriefOnly && <ProviderStatus />}
       {shouldShowAutoUpdater && <AutoUpdaterWrapper verbose={verbose} onAutoUpdaterResult={onAutoUpdaterResult} autoUpdaterResult={autoUpdaterResult} isUpdating={isAutoUpdating} onChangeIsUpdating={onChangeIsUpdating} showSuccessMessage={!isShowingCompactMessage} />}
       {feature('VOICE_MODE') ? voiceEnabled && voiceError && <Box>
               <Text color="error" wrap="truncate">
