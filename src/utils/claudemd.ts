@@ -888,7 +888,7 @@ export const getMemoryFiles = memoize(
         pathInWorkingPath(dir, canonicalRoot) &&
         !pathInWorkingPath(dir, gitRoot)
 
-      // Try reading CLAUDE.md (Project) - only if projectSettings is enabled
+      // Try reading the project memory file (AXA.md) - only if projectSettings is enabled
       if (isSettingSourceEnabled('projectSettings') && !skipProject) {
         const projectPath = join(dir, MEMORY_FILE_NAME)
         result.push(
@@ -900,7 +900,7 @@ export const getMemoryFiles = memoize(
           )),
         )
 
-        // Try reading <config>/CLAUDE.md and <config>/rules/*.md (Project),
+        // Try reading <config>/memory file and <config>/rules/*.md (Project),
         // under both the current and the pre-rename directory name.
         // processedPaths dedupes, so a project holding both is read once.
         {
@@ -1450,17 +1450,18 @@ export async function shouldShowClaudeMdExternalIncludesWarning(): Promise<boole
 }
 
 /**
- * Check if a file path is a memory file (CLAUDE.md, CLAUDE.local.md, or .claude/rules/*.md)
+ * Check if a file path is a memory file (project memory file, its local
+ * counterpart, or a <config>/rules/*.md file).
  */
 export function isMemoryFilePath(filePath: string): boolean {
   const name = basename(filePath)
 
-  // CLAUDE.md or CLAUDE.local.md anywhere
+  // Project memory file or its local counterpart anywhere
   if (name === MEMORY_FILE_NAME || name === LOCAL_MEMORY_FILE_NAME) {
     return true
   }
 
-  // .md files in .claude/rules/ directories
+  // .md files in <config>/rules/ directories
   if (
     name.endsWith('.md') &&
     filePath.includes(`${sep}${CONFIG_DIR_NAME}${sep}rules${sep}`)

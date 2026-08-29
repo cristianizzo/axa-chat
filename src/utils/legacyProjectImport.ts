@@ -107,14 +107,12 @@ export async function findLegacyProjectFiles(
     legacyLocalMemory,
     ownLocalMemory,
     legacyDir,
-    ownDir,
   ] = await Promise.all([
     isFile(join(projectRoot, LEGACY_MEMORY_FILE_NAME)),
     isFile(join(projectRoot, MEMORY_FILE_NAME)),
     isFile(join(projectRoot, LEGACY_LOCAL_MEMORY_FILE_NAME)),
     isFile(join(projectRoot, LOCAL_MEMORY_FILE_NAME)),
     isDirectory(join(projectRoot, LEGACY_CONFIG_DIR_NAME)),
-    isDirectory(join(projectRoot, CONFIG_DIR_NAME)),
   ])
 
   return {

@@ -113,7 +113,7 @@ export function getClaudeSkillScope(
   const bases = [
     {
       dir: expandPath(join(getOriginalCwd(), CONFIG_DIR_NAME, 'skills')),
-      prefix: '/.claude/skills/',
+      prefix: `/${CONFIG_DIR_NAME}/skills/`,
     },
     {
       // Our config dir, not `~/.claude` — personal skills load from
