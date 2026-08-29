@@ -472,21 +472,24 @@ function ModeIndicator({
     return <ActiveAccount />
   }
 
-  // flexShrink=0 keeps mode + pill at natural width; the remaining parts
-  // truncate at the tail as one string inside the Text wrapper.
-  return <Box height={1} overflow="hidden">
-      <ActiveAccount separator={modePart !== null || tasksPart !== null || parts.length > 0} />
-      {modePart && <Box flexShrink={0}>
+  // The mode pill renders on its own line below the account pill. Row 1
+  // carries the account + any task/hint parts; row 2 (present only when a
+  // non-default mode is active) carries the mode pill. Same variable-height
+  // pattern as the teammate-pills branch above.
+  return <Box flexDirection="column" overflow="hidden">
+      <Box height={1} flexDirection="row">
+        <ActiveAccount separator={tasksPart !== null || parts.length > 0} />
+        {tasksPart && <Box flexShrink={0}>
+            {tasksPart}
+            {parts.length > 0 && <Text dimColor> · </Text>}
+          </Box>}
+        {parts.length > 0 && <Text wrap="truncate">
+            <Byline>{parts}</Byline>
+          </Text>}
+      </Box>
+      {modePart && <Box height={1} flexDirection="row">
           {modePart}
-          {(tasksPart || parts.length > 0) && <Text dimColor> · </Text>}
         </Box>}
-      {tasksPart && <Box flexShrink={0}>
-          {tasksPart}
-          {parts.length > 0 && <Text dimColor> · </Text>}
-        </Box>}
-      {parts.length > 0 && <Text wrap="truncate">
-          <Byline>{parts}</Byline>
-        </Text>}
     </Box>;
 }
 function getSpinnerHintParts(isLoading: boolean, escShortcut: string, todosShortcut: string, killAgentsShortcut: string, hasTaskItems: boolean, expandedView: 'none' | 'tasks' | 'teammates', hasTeammates: boolean, hasRunningAgentTasks: boolean, isKillAgentsConfirmShowing: boolean): React.ReactElement[] {
