@@ -13,7 +13,7 @@
  * would be a poor trade. It also makes declining safe and re-running harmless.
  */
 
-import { cp, mkdir, readFile, stat, writeFile } from 'fs/promises'
+import { cp, lstat, mkdir, readFile, writeFile } from 'fs/promises'
 import { join } from 'path'
 import {
   CONFIG_DIR_NAME,
@@ -64,9 +64,12 @@ export function hasAnything(findings: LegacyProjectFindings): boolean {
   return findings.memoryFile || findings.localMemoryFile || findings.configDir
 }
 
+// lstat, so a symlink counts as present and is not followed out of the project
+// root. A symlinked CLAUDE.md or .claude/ is left alone rather than copied from
+// wherever it points.
 async function isFile(path: string): Promise<boolean> {
   try {
-    return (await stat(path)).isFile()
+    return (await lstat(path)).isFile()
   } catch {
     return false
   }
@@ -74,7 +77,7 @@ async function isFile(path: string): Promise<boolean> {
 
 async function isDirectory(path: string): Promise<boolean> {
   try {
-    return (await stat(path)).isDirectory()
+    return (await lstat(path)).isDirectory()
   } catch {
     return false
   }
@@ -83,7 +86,6 @@ async function isDirectory(path: string): Promise<boolean> {
 /** lstat, so an existing symlink counts as present and is not copied over. */
 async function exists(path: string): Promise<boolean> {
   try {
-    const { lstat } = await import('fs/promises')
     await lstat(path)
     return true
   } catch {

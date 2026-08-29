@@ -195,7 +195,7 @@ export async function applySkillImprovement(
   const { join } = await import('path')
   const fs = await import('fs/promises')
 
-  // Skills live at .claude/skills/<name>/SKILL.md relative to CWD
+  // Skills live at <config>/skills/<name>/SKILL.md relative to CWD
   const filePath = join(getCwd(), CONFIG_DIR_NAME, 'skills', skillName, 'SKILL.md')
 
   let currentContent: string

@@ -3,6 +3,7 @@ import { appendFileSync } from 'fs';
 import React from 'react';
 import { logEvent } from 'src/services/analytics/index.js';
 import { gracefulShutdown, gracefulShutdownSync } from 'src/utils/gracefulShutdown.js';
+import type { LegacyProjectImportOutcome } from './components/LegacyProjectImportDialog.js';
 import { type ChannelEntry, getAllowedChannels, setAllowedChannels, setHasDevChannels, setSessionTrustAccepted, setStatsStore } from './bootstrap/state.js';
 import type { Command } from './commands.js';
 import { createStatsStore, type StatsStore } from './context/stats.js';
@@ -167,12 +168,23 @@ export async function showSetupScreens(root: Root, permissionMode: PermissionMod
         const {
           LegacyProjectImportDialog
         } = await import('./components/LegacyProjectImportDialog.js');
-        await showSetupDialog(root, done => <LegacyProjectImportDialog projectRoot={projectRoot} findings={findings} onDone={done} />);
-        // Recorded for accept and decline alike — see the field's comment.
-        saveCurrentProjectConfig(current => ({
-          ...current,
-          hasAnsweredLegacyProjectImport: true
-        }));
+        await showSetupDialog(root, done => (
+          <LegacyProjectImportDialog
+            projectRoot={projectRoot}
+            findings={findings}
+            onDone={(outcome: LegacyProjectImportOutcome) => {
+              // Recorded for accept and decline alike — but not for a failed
+              // import, so a transient failure can be retried on a later run.
+              if (outcome !== 'failed') {
+                saveCurrentProjectConfig(current => ({
+                  ...current,
+                  hasAnsweredLegacyProjectImport: true
+                }));
+              }
+              done();
+            }}
+          />
+        ));
       }
     }
 

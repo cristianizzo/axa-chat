@@ -18,10 +18,15 @@ import { logError } from '../utils/log.js'
 import { Select } from './CustomSelect/select.js'
 import { Pane } from './design-system/Pane.js'
 
+export type LegacyProjectImportOutcome =
+  | 'skipped'
+  | 'imported'
+  | 'failed'
+
 type Props = {
   projectRoot: string
   findings: LegacyProjectFindings
-  onDone: () => void
+  onDone: (outcome: LegacyProjectImportOutcome) => void
 }
 
 /** One line per thing the import would copy, so the user confirms specifics. */
@@ -46,12 +51,19 @@ export function LegacyProjectImportDialog({
 }: Props): React.ReactNode {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string[] | null>(null)
+  // What to report once the dialog closes, so a transient failure is retried.
+  const [outcome, setOutcome] = useState<LegacyProjectImportOutcome>('skipped')
 
   if (result) {
+    const failed = result.some(
+      line => line.startsWith('could not copy') || line.startsWith('Import failed'),
+    )
     return (
       <Pane>
         <Box marginBottom={1}>
-          <Text bold>Imported into {PRODUCT_NAME}</Text>
+          <Text bold>
+            {failed ? 'Import finished with errors' : `Imported into ${PRODUCT_NAME}`}
+          </Text>
         </Box>
         {result.map(line => (
           <Text key={line}>{line}</Text>
@@ -61,8 +73,8 @@ export function LegacyProjectImportDialog({
         </Box>
         <Select
           options={[{ label: 'Continue', value: 'continue' }]}
-          onChange={onDone}
-          onCancel={onDone}
+          onChange={() => onDone(outcome)}
+          onCancel={() => onDone(outcome)}
         />
       </Pane>
     )
@@ -104,39 +116,41 @@ export function LegacyProjectImportDialog({
           ]}
           onChange={value => {
             if (value !== 'import') {
-              onDone()
+              onDone('skipped')
               return
             }
             setBusy(true)
             void (async () => {
               try {
-                const outcome = await importLegacyProject(projectRoot, findings)
+                const result = await importLegacyProject(projectRoot, findings)
                 const lines: string[] = []
-                if (outcome.copiedMemoryFile) {
+                if (result.copiedMemoryFile) {
                   lines.push(`${MEMORY_FILE_NAME} created`)
                 }
-                if (outcome.copiedLocalMemoryFile) {
+                if (result.copiedLocalMemoryFile) {
                   lines.push(`${LOCAL_MEMORY_FILE_NAME} created`)
                 }
-                if (outcome.copiedFromConfigDir.length > 0) {
+                if (result.copiedFromConfigDir.length > 0) {
                   lines.push(
-                    `${CONFIG_DIR_NAME}/: ${outcome.copiedFromConfigDir.join(', ')}`,
+                    `${CONFIG_DIR_NAME}/: ${result.copiedFromConfigDir.join(', ')}`,
                   )
                 }
-                for (const failure of outcome.failures) {
+                for (const failure of result.failures) {
                   lines.push(`could not copy ${failure.path}: ${failure.error}`)
                 }
                 if (lines.length === 0) {
                   lines.push('Everything was already present. Nothing to do.')
                 }
+                setOutcome(result.failures.length > 0 ? 'failed' : 'imported')
                 setResult(lines)
               } catch (error) {
                 logError(error)
+                setOutcome('failed')
                 setResult([`Import failed: ${String(error)}`])
               }
             })()
           }}
-          onCancel={onDone}
+          onCancel={() => onDone('skipped')}
         />
       </Box>
     </Pane>

@@ -900,9 +900,10 @@ export const getMemoryFiles = memoize(
           )),
         )
 
-        // Try reading <config>/memory file and <config>/rules/*.md (Project),
-        // under both the current and the pre-rename directory name.
-        // processedPaths dedupes, so a project holding both is read once.
+        // Try reading <config>/memory file and <config>/rules/*.md (Project).
+        // Only CONFIG_DIR_NAME is read: a legacy .claude/ layout is brought
+        // over by the one-time import flow, not read from two spellings here.
+        // processedPaths dedupes, so a project with both is read once.
         {
           const configDir = CONFIG_DIR_NAME
           result.push(
@@ -1260,7 +1261,7 @@ export async function getMemoryFilesForNestedDirectory(
 ): Promise<MemoryFileInfo[]> {
   const result: MemoryFileInfo[] = []
 
-  // Process project memory files (CLAUDE.md and .claude/CLAUDE.md)
+  // Process project memory files (AXA.md and <config>/AXA.md)
   if (isSettingSourceEnabled('projectSettings')) {
     const projectPath = join(dir, MEMORY_FILE_NAME)
     result.push(
@@ -1284,7 +1285,7 @@ export async function getMemoryFilesForNestedDirectory(
     }
   }
 
-  // Process local memory file (CLAUDE.local.md)
+  // Process local memory file (AXA.local.md)
   if (isSettingSourceEnabled('localSettings')) {
     const localPath = join(dir, LOCAL_MEMORY_FILE_NAME)
     result.push(
