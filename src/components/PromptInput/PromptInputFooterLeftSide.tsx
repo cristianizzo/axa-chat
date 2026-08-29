@@ -462,24 +462,18 @@ function ModeIndicator({
   // part (e.g. the selection copy/native-select hints) grow the column
   // from 0→1 row. Always render 1 row in fullscreen; return a space when
   // empty so Yoga reserves the row without painting anything visible.
-  if (parts.length === 0 && !tasksPart && !modePart) {
-    // Fullscreen needs a reserved row (flexShrink:0 steals from ScrollBox);
-    // the empty Box keeps the height stable while ActiveAccount renders the
-    // account when active and nothing when it is not.
-    if (isFullscreenEnvEnabled()) {
-      return <Box height={1}><ActiveAccount /></Box>
-    }
-    return <ActiveAccount />
-  }
-
-  // flexShrink=0 keeps mode + pill at natural width; the remaining parts
-  // truncate at the tail as one string inside the Text wrapper.
-  return <Box height={1} overflow="hidden">
-      <ActiveAccount separator={modePart !== null || tasksPart !== null || parts.length > 0} />
-      {modePart && <Box flexShrink={0}>
-          {modePart}
-          {(tasksPart || parts.length > 0) && <Text dimColor> · </Text>}
-        </Box>}
+  // The mode pill renders on its own line below the account pill. Row 1
+  // carries the account + any task/hint parts; row 2 carries the mode pill
+  // when a non-default mode is active.
+  //
+  // In fullscreen the footer is flexShrink:0 — every row steals from the
+  // ScrollBox — so the height must not change when the mode toggles. The
+  // second row is therefore always reserved there (a space when no mode is
+  // active, same trick as the single-row empty state below), while outside
+  // fullscreen scrollback absorbs the 1→2 row change and no reservation is
+  // needed.
+  const accountRow = <Box height={1} flexDirection="row">
+      <ActiveAccount separator={tasksPart !== null || parts.length > 0} />
       {tasksPart && <Box flexShrink={0}>
           {tasksPart}
           {parts.length > 0 && <Text dimColor> · </Text>}
@@ -488,6 +482,21 @@ function ModeIndicator({
           <Byline>{parts}</Byline>
         </Text>}
     </Box>;
+
+  if (parts.length === 0 && !tasksPart && !modePart) {
+    if (isFullscreenEnvEnabled()) {
+      return <Box flexDirection="column">{accountRow}<Box height={1}><Text> </Text></Box></Box>;
+    }
+    return <ActiveAccount />
+  }
+
+  if (modePart || isFullscreenEnvEnabled()) {
+    return <Box flexDirection="column" overflow="hidden">
+        {accountRow}
+        <Box height={1} flexDirection="row">{modePart ?? <Text> </Text>}</Box>
+      </Box>;
+  }
+  return accountRow;
 }
 function getSpinnerHintParts(isLoading: boolean, escShortcut: string, todosShortcut: string, killAgentsShortcut: string, hasTaskItems: boolean, expandedView: 'none' | 'tasks' | 'teammates', hasTeammates: boolean, hasRunningAgentTasks: boolean, isKillAgentsConfirmShowing: boolean): React.ReactElement[] {
   let toggleAction: string;
