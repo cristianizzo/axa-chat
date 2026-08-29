@@ -1,5 +1,6 @@
 import {
   DEEPSEEK_CONTEXT_WINDOW,
+  DEEPSEEK_LEGACY_MODEL_IDS,
   DEEPSEEK_MAX_OUTPUT_TOKENS,
   DEEPSEEK_MODELS,
   DEEPSEEK_PROVIDER_ID,
@@ -40,7 +41,12 @@ export const DEEPSEEK_PROVIDER = {
     defaultModel: DEFAULT_DEEPSEEK_MODEL,
     contextWindow: DEEPSEEK_CONTEXT_WINDOW,
     maxOutputTokens: DEEPSEEK_MAX_OUTPUT_TOKENS,
-    acceptsModel: model => DEEPSEEK_MODELS.some(entry => entry.id === model),
+    // Legacy IDs count as ours even though `/model` no longer lists them: the
+    // API still serves them, so a session running one has to get DeepSeek's
+    // window rather than falling through to the generic 200k default.
+    acceptsModel: model =>
+      DEEPSEEK_MODELS.some(entry => entry.id === model) ||
+      (DEEPSEEK_LEGACY_MODEL_IDS as readonly string[]).includes(model),
     // The same mapping the fetch adapter already applies to any inbound
     // `*haiku*` ID; naming it here makes the adapter's rewrite a no-op rather
     // than the only thing standing between a background job and a 404.
