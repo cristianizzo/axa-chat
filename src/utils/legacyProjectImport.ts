@@ -64,8 +64,10 @@ export function hasAnything(findings: LegacyProjectFindings): boolean {
   return findings.memoryFile || findings.localMemoryFile || findings.configDir
 }
 
-// lstat, so a symlink counts as present and is not followed out of the project
-// root. A symlinked CLAUDE.md or .claude/ is left alone rather than copied from
+// lstat, so a symlink is not followed: lstat reports the link itself, and a
+// link is neither a regular file nor a directory, so isFile()/isDirectory()
+// return false for it. A symlinked CLAUDE.md or .claude/ therefore never counts
+// as a real file/directory to import and is left alone rather than copied from
 // wherever it points.
 async function isFile(path: string): Promise<boolean> {
   try {
@@ -83,7 +85,7 @@ async function isDirectory(path: string): Promise<boolean> {
   }
 }
 
-/** lstat, so an existing symlink counts as present and is not copied over. */
+/** lstat, so a symlink still counts as present (the link exists) but is not followed. */
 async function exists(path: string): Promise<boolean> {
   try {
     await lstat(path)

@@ -254,7 +254,7 @@ export function getProjectDirsUpToHome(
       break
     }
 
-    const claudeSubdir = join(current, CONFIG_DIR_NAME, subdir)
+    const configSubdir = join(current, CONFIG_DIR_NAME, subdir)
     // Filter to existing dirs. This is a perf filter (avoids spawning
     // ripgrep on non-existent dirs downstream) and the worktree fallback
     // in loadMarkdownFilesForSubdir relies on it. statSync + explicit error
@@ -262,8 +262,8 @@ export function getProjectDirsUpToHome(
     // than silently swallowing them. Downstream loadMarkdownFiles handles
     // the TOCTOU window (dir disappearing before read) gracefully.
     try {
-      statSync(claudeSubdir)
-      dirs.push(claudeSubdir)
+      statSync(configSubdir)
+      dirs.push(configSubdir)
     } catch (e: unknown) {
       if (!isFsInaccessible(e)) throw e
     }

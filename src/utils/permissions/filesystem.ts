@@ -98,11 +98,12 @@ export function normalizeCaseForComparison(path: string): string {
 }
 
 /**
- * If filePath is inside a .claude/skills/{name}/ directory (project or global),
- * return the skill name and a session-allow pattern scoped to just that skill.
- * Used to offer a narrower "allow edits to this skill only" option in the
- * permission dialog and SDK suggestions, so iterating on one skill doesn't
- * require granting session access to all of .claude/ (settings.json, hooks/, etc.).
+ * If filePath is inside a {CONFIG_DIR_NAME}/skills/{name}/ directory (project
+ * or global), return the skill name and a session-allow pattern scoped to just
+ * that skill. Used to offer a narrower "allow edits to this skill only" option
+ * in the permission dialog and SDK suggestions, so iterating on one skill
+ * doesn't require granting session access to all of {CONFIG_DIR_NAME}/
+ * (settings.json, hooks/, etc.).
  */
 export function getClaudeSkillScope(
   filePath: string,

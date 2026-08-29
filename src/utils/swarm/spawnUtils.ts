@@ -10,6 +10,7 @@ import {
   getSessionBypassPermissionsMode,
 } from '../../bootstrap/state.js'
 import { quote } from '../bash/shellQuote.js'
+import { isAgentSwarmsEnabled } from '../agentSwarmsEnabled.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
 import { getTeammateModeFromSnapshot } from './backends/teammateModeSnapshot.js'
 import { TEAMMATE_COMMAND_ENV_VAR } from './constants.js'
@@ -156,11 +157,17 @@ const TEAMMATE_ENV_VARS = [
 
 /**
  * Builds the `env KEY=VALUE ...` string for teammate spawn commands.
- * Always includes CLAUDECODE=1 and CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1,
- * plus any provider/config env vars that are set in the current process.
+ * Always includes CLAUDECODE=1. CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 is
+ * forced on for the spawned child only when the feature is currently enabled
+ * in this process — an explicit opt-out (setting it to 0) is respected rather
+ * than silently overridden. Plus any provider/config env vars that are set in
+ * the current process.
  */
 export function buildInheritedEnvVars(): string {
-  const envVars = ['CLAUDECODE=1', 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1']
+  const envVars = ['CLAUDECODE=1']
+  if (isAgentSwarmsEnabled()) {
+    envVars.push('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1')
+  }
 
   for (const key of TEAMMATE_ENV_VARS) {
     const value = process.env[key]
