@@ -11,7 +11,7 @@
  * - Tool definitions (Anthropic input_schema → OpenAI function parameters)
  * - Tool use (tool_use → function call, tool_result → tool role message)
  * - Streaming events translation (OpenAI SSE → Anthropic SSE)
- * - DeepSeek R1 reasoning_content → thinking content blocks
+ * - DeepSeek reasoning_content → thinking content blocks
  *
  * Endpoint: https://api.deepseek.com/v1/chat/completions
  */
@@ -209,8 +209,8 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
   }
 
   if (typeof anthropicBody.max_tokens === 'number') {
-    // Clamp to DeepSeek's hard cap to prevent immediate 400s when the SDK
-    // sends the Claude default (32k–64k), which exceeds DeepSeek's 8k limit.
+    // Clamp to DeepSeek's hard cap so an escalated Claude-sized request can
+    // never exceed what the API will accept.
     body.max_tokens = Math.min(anthropicBody.max_tokens, DEEPSEEK_MAX_OUTPUT_TOKENS.upperLimit)
   }
 
@@ -236,8 +236,9 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
 
 /**
  * Maps an Anthropic model name to the appropriate DeepSeek model.
- * Claude Opus/Sonnet → deepseek-reasoner (R1), Claude Haiku → deepseek-chat (V3).
- * Any already-valid DeepSeek model ID passes through untouched.
+ * Claude Opus → deepseek-v4-pro, Claude Sonnet/Haiku → deepseek-v4-flash.
+ * Any already-valid DeepSeek model ID passes through untouched — including the
+ * retired deepseek-chat/deepseek-reasoner aliases, which the API still serves.
  */
 function resolveModel(claudeModel: string | undefined): string {
   if (!claudeModel) return DEFAULT_DEEPSEEK_MODEL
@@ -248,9 +249,9 @@ function resolveModel(claudeModel: string | undefined): string {
   if (lower.startsWith('deepseek-')) return claudeModel
 
   // Map Claude families to DeepSeek equivalents
-  if (lower.includes('opus')) return 'deepseek-reasoner'
-  if (lower.includes('sonnet')) return 'deepseek-reasoner'
-  if (lower.includes('haiku')) return 'deepseek-chat'
+  if (lower.includes('opus')) return 'deepseek-v4-pro'
+  if (lower.includes('sonnet')) return 'deepseek-v4-flash'
+  if (lower.includes('haiku')) return 'deepseek-v4-flash'
 
   logForDebugging(`DeepSeek resolveModel: unrecognised model '${claudeModel}', falling back to '${DEFAULT_DEEPSEEK_MODEL}'`, { level: 'warn' })
   return DEFAULT_DEEPSEEK_MODEL

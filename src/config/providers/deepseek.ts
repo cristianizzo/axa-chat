@@ -12,7 +12,7 @@ export const DEEPSEEK_PROVIDER = {
   label: 'DeepSeek',
   // Both pickers render this as `<label> · <description>`, so it must not
   // repeat the label.
-  description: 'R1 / V3 via API key (pay-per-token)',
+  description: 'V4 Flash / Pro via API key (pay-per-token)',
   apiProvider: 'deepseek',
   aliases: [],
 
