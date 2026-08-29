@@ -1,7 +1,8 @@
 import * as React from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { DEEPSEEK_BASE_URL } from '../../config/deepseek.js'
 import { Text } from '../../ink.js'
+import { useAppState } from 'src/state/AppState.js'
 import { getDeepSeekAuth, isDeepSeekSubscriber } from '../../utils/auth.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
 
@@ -14,11 +15,12 @@ import { getProxyFetchOptions } from '../../utils/proxy.js'
  * has no per-call signal to anchor to. This fetches it directly with the stored
  * API key and refreshes it on a timer while the account is active.
  *
- * The fetch runs only while `isDeepSeekSubscriber()` is true — i.e. DeepSeek is
- * the active provider AND a key is stored. Switching away stops both the fetch
- * and the poll.
+ * The effect subscribes to AppState `authVersion`, which `/switch-account`
+ * bumps, so it tears down when DeepSeek stops being the active provider and
+ * restarts when it becomes active again.
  */
 const REFRESH_MS = 60_000
+const REQUEST_TIMEOUT_MS = 10_000
 
 // DeepSeek reports the currency as an ISO code; map the common ones to a
 // symbol so the pill stays short. Anything unmapped falls back to the code.
@@ -53,29 +55,27 @@ function formatEntry(entry: DeepSeekBalanceInfo): string {
 
 export function DeepSeekBalance(): React.ReactNode {
   const [label, setLabel] = useState<string | null>(null)
-  // Kept so the effect can tell a *new* provider switch from a re-render; the
-  // config read in isDeepSeekSubscriber() is not itself reactive.
-  const activeRef = useRef(isDeepSeekSubscriber())
+  // Re-run the effect when the account switches so polling starts/tears down
+  // with the active provider instead of staying frozen from mount.
+  const authVersion = useAppState(s => s.authVersion)
 
   useEffect(() => {
     const isActive = isDeepSeekSubscriber()
     if (!isActive) {
-      activeRef.current = false
       setLabel(null)
       return
     }
-    const switchedNow = !activeRef.current
-    activeRef.current = true
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 10_000)
-
-    const load = async (): Promise<void> => {
+    async function load(): Promise<void> {
       const auth = getDeepSeekAuth()
       if (!auth?.apiKey) {
         setLabel(null)
         return
       }
+      // A fresh controller per request: the timeout must abort only the
+      // in-flight call, never the ones that follow it.
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
       try {
         const response = await fetch(`${DEEPSEEK_BASE_URL}/user/balance`, {
           headers: { Authorization: `Bearer ${auth.apiKey}` },
@@ -93,26 +93,21 @@ export function DeepSeekBalance(): React.ReactNode {
         }
         setLabel(`DS ${body.balance_infos.map(formatEntry).join(' + ')}`)
       } catch {
-        // Network/proxy failure: stay silent and retry on the next tick rather
-        // than flashing an error in the footer.
+        // Network/proxy/timeout: stay silent and retry on the next tick
+        // rather than flashing an error in the footer.
         setLabel(null)
+      } finally {
+        clearTimeout(timeout)
       }
     }
 
     void load()
-    // Refresh immediately on an active-provider transition, then settle into a
-    // timer so the number tracks spend without a request per keystroke.
-    if (switchedNow) {
-      void load()
-    }
     const interval = setInterval(() => void load(), REFRESH_MS)
 
     return () => {
-      clearTimeout(timeout)
       clearInterval(interval)
-      controller.abort()
     }
-  }, [])
+  }, [authVersion])
 
   if (!label) return null
   return (
