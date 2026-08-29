@@ -68,10 +68,14 @@ function useDeepSeekBalance(): string | null {
       return
     }
 
+    // Stops a response resolving after the effect has torn down (account
+    // switched) from writing a stale balance into state.
+    let cancelled = false
+
     async function load(): Promise<void> {
       const auth = getDeepSeekAuth()
       if (!auth?.apiKey) {
-        setBalance(null)
+        if (!cancelled) setBalance(null)
         return
       }
       // A fresh controller per request: the timeout must abort only the
@@ -84,6 +88,12 @@ function useDeepSeekBalance(): string | null {
           signal: controller.signal,
           ...getProxyFetchOptions({ forAnthropicAPI: false }),
         })
+        // The provider may have changed while the request was in flight; only
+        // commit the response if DeepSeek is still the active subscriber.
+        if (cancelled || !isDeepSeekSubscriber()) {
+          setBalance(null)
+          return
+        }
         if (!response.ok) {
           setBalance(null)
           return
@@ -97,7 +107,7 @@ function useDeepSeekBalance(): string | null {
       } catch {
         // Network/proxy/timeout: stay silent and retry on the next tick
         // rather than flashing an error in the footer.
-        setBalance(null)
+        if (!cancelled) setBalance(null)
       } finally {
         clearTimeout(timeout)
       }
@@ -107,6 +117,7 @@ function useDeepSeekBalance(): string | null {
     const interval = setInterval(() => void load(), REFRESH_MS)
 
     return () => {
+      cancelled = true
       clearInterval(interval)
     }
   }, [authVersion])
@@ -117,7 +128,7 @@ function useDeepSeekBalance(): string | null {
 export function ActiveAccount({
   separator = false,
 }: {
-  /** Render a trailing ` ·` so the pill reads as part of a joined row. */
+  /** Render a trailing ` · ` so the pill reads as part of a joined row. */
   separator?: boolean
 }): React.ReactNode {
   useAppState(s => s.authVersion)
@@ -135,12 +146,15 @@ export function ActiveAccount({
   const label = provider.shortLabel ?? provider.label
 
   const parts = [label, model]
-  if (balance) parts.push(balance)
+  // Render-time guard on top of the hook's: a stale balance must not leak onto
+  // the pill after an account switch (the hook clears it, but never trust
+  // state a switch races against).
+  if (balance && isDeepSeekSubscriber()) parts.push(balance)
 
   return (
     <Text dimColor wrap="truncate">
       {parts.join(' - ')}
-      {separator ? ' ·' : ''}
+      {separator ? ' · ' : ''}
     </Text>
   )
 }
