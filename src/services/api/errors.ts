@@ -423,6 +423,27 @@ export function extractUnknownErrorFormat(value: unknown): string | undefined {
   return undefined
 }
 
+/**
+ * A 400 the API raises when the thinking blocks being replayed do not belong to
+ * the credentials sending them.
+ *
+ * Two wordings, one situation. The stale signature is rejected directly; or the
+ * pre-send strip in claude.ts has already removed a foreign turn's thinking
+ * while its tool_use stayed, which breaks the rule that thinking must survive a
+ * whole assistant trajectory (query.ts:161) and is reported as a *missing*
+ * thinking block instead. Both clear the same way, so both get the same message.
+ */
+function isThinkingBlockMismatchError(error: unknown): error is APIError {
+  if (!(error instanceof APIError) || error.status !== 400) {
+    return false
+  }
+  return (
+    (error.message.includes('signature') &&
+      error.message.includes('thinking')) ||
+    error.message.includes('Expected `thinking` or `redacted_thinking`')
+  )
+}
+
 export function getAssistantMessageFromError(
   error: unknown,
   model: string,
@@ -728,6 +749,21 @@ export function getAssistantMessageFromError(
       : ' Run /rewind to recover the conversation.'
     return createAssistantAPIErrorMessage({
       content: `API Error: 400 duplicate tool_use ID in conversation history.${rewindInstruction}`,
+      error: 'invalid_request',
+      errorDetails: error.message,
+    })
+  }
+
+  // Thinking blocks the current credentials cannot account for. Name the
+  // recovery instead of dumping the raw 400: every subsequent turn fails
+  // identically until the transcript is cleaned, and /login and /switch-account
+  // are the two commands that clean it.
+  if (isThinkingBlockMismatchError(error)) {
+    logEvent('tengu_stale_thinking_signature', {})
+    return createAssistantAPIErrorMessage({
+      content: getIsNonInteractiveSession()
+        ? 'The thinking blocks in this conversation do not match the credentials now serving it. Authenticate again to clear them, or start a new session.'
+        : 'The thinking blocks in this conversation do not match the account now serving it — a /login or /switch-account in another window repoints every running session. Run /login or /switch-account to clear them.',
       error: 'invalid_request',
       errorDetails: error.message,
     })
@@ -1087,6 +1123,10 @@ export function classifyAPIError(error: unknown): string {
     error.message.toLowerCase().includes('invalid model name')
   ) {
     return 'invalid_model'
+  }
+
+  if (isThinkingBlockMismatchError(error)) {
+    return 'stale_thinking_signature'
   }
 
   // Credit/billing errors

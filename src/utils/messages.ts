@@ -5065,9 +5065,28 @@ export function filterOrphanedThinkingOnlyMessages(
  * the API rejects them with a 400.
  */
 export function stripSignatureBlocks(messages: Message[]): Message[] {
+  return stripSignatureBlocksWhere(messages, () => true)
+}
+
+/**
+ * {@link stripSignatureBlocks}, restricted to the assistant messages
+ * `shouldStrip` selects.
+ *
+ * Exists so the pre-send pass in claude.ts can drop only the blocks the active
+ * account cannot have signed, leaving its own intact — stripping wholesale on
+ * every request would throw away the extended-thinking the model is still
+ * building on.
+ *
+ * @param shouldStrip - Called per assistant message; true to strip its blocks
+ */
+export function stripSignatureBlocksWhere<T extends Message>(
+  messages: T[],
+  shouldStrip: (message: AssistantMessage) => boolean,
+): T[] {
   let changed = false
   const result = messages.map(msg => {
     if (msg.type !== 'assistant') return msg
+    if (!shouldStrip(msg)) return msg
 
     const content = msg.message.content
     if (!Array.isArray(content)) return msg
