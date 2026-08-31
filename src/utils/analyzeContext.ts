@@ -903,7 +903,12 @@ async function approximateMessageTokens(
   // counting endpoints validate thinking signatures the same way, so an
   // account flip would otherwise 400 here and leave `/context` silently
   // falling back to the rough estimate. Counting what will actually be sent is
-  // also the only way the total stays honest.
+  // also the only way this total matches the window it is compared against.
+  //
+  // The per-category breakdown above does not strip, so on a flipped session
+  // the categories can sum above this total. They were never commensurable —
+  // those are rough estimates over pre-normalization messages — and only the
+  // total reaches the rendered panel.
   const approximateMessageTokens = await countTokensWithFallback(
     normalizeMessagesForAPI(
       stripForeignSignatureBlocks(microcompactResult.messages),

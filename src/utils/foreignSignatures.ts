@@ -1,12 +1,16 @@
 /**
  * Removing thinking blocks the account now serving the session did not sign.
  *
- * Kept in its own module for readability, not because the graph demands it: it
- * joins `utils/messages.ts` (which knows what a signature-bearing block is) to
- * `utils/model/model.ts` (which knows which account is live), and both of those
- * are already large enough that a caller looking for this logic would not think
- * to open either. They do not import each other directly, but transitively they
- * already do in both directions, so the split buys no acyclicity.
+ * Kept in its own module for readability: it joins `utils/messages.ts` (which
+ * knows what a signature-bearing block is) to `utils/model/model.ts` (which
+ * knows which account is live), and both are large enough that someone looking
+ * for this logic would not think to open either.
+ *
+ * Only one of those two could have hosted it. messages.ts already reaches
+ * model.ts transitively, so putting it there would cost nothing structurally;
+ * model.ts does not reach messages.ts except through a deliberately lazy
+ * `await import` in services/api/count-tokens-shim.ts, so putting it there
+ * would add a static edge and close a real cycle.
  */
 
 import type { Message } from '../types/message.js'
@@ -17,8 +21,13 @@ import {
 } from './model/model.js'
 
 /**
- * Whether an assistant message was produced by some account other than the one
- * now serving the session.
+ * Whether an assistant message was produced under a different provider than the
+ * one now serving the session.
+ *
+ * A provider, not an account: the only evidence is the recorded model ID, so
+ * re-logging into the *same* provider with a different key is invisible here.
+ * The blocks are kept, the API rejects them, and getAssistantMessageFromError
+ * names the recovery — an acknowledged limit, not an oversight.
  *
  * Acts only on positive evidence. `model` is typed as a string, but these
  * records are replayed from a transcript on disk — the very case this exists

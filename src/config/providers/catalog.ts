@@ -33,19 +33,26 @@ export type ProviderModelCatalog = {
   /**
    * Whether this provider *used to* serve the given model ID and no longer does.
    *
-   * Ownership without servability. It exists for attribution: deciding which
-   * account produced an assistant message in the transcript, so that thinking
-   * blocks carrying another account's credential-bound signature are dropped
-   * before they are replayed. Read in two places, both in that service of that
-   * one question — `isRetiredModelOfActiveProvider` (utils/model/model.ts) for
-   * "is this the active account's own retired model", and
-   * `isModelOwnedByACatalog` (./index.ts) for "does it belong to some catalog
-   * at all", which is how a provider with no catalog of its own recognises a
-   * foreign ID.
+   * Ownership without servability. The need for it is attribution: deciding
+   * which account produced an assistant message in the transcript, so that
+   * thinking blocks carrying another account's credential-bound signature are
+   * dropped before they are replayed. Two readers —
+   * `isRetiredModelOfActiveProvider` (utils/model/model.ts) for "is this the
+   * active account's own retired model", and `isModelOwnedByACatalog`
+   * (./index.ts) for "does it belong to some catalog at all", which is how a
+   * provider with no catalog of its own recognises a foreign ID.
    *
    * Both are needed. Miss the first and a session on the very provider that
    * retired the ID reads its own thinking as foreign; miss the second and an
    * Anthropic session reads a retired ID as unowned, hence its own.
+   *
+   * Do not read "attribution" as "harmless", though: `isModelOwnedByACatalog`
+   * also feeds `isServableByActiveProvider`, so listing an ID here makes every
+   * *other* provider refuse to adopt it from `ANTHROPIC_MODEL`, settings or a
+   * `/model` override, and stops `setStoredModelForProvider` recording it
+   * against them. That is the intent — the ID is somebody's, just not theirs —
+   * but it means adding this field to a provider changes model resolution, not
+   * only the strip.
    *
    * Kept out of {@link getProviderModelCatalogForModel} so a retired ID neither
    * becomes selectable nor inherits {@link contextWindow} — `moonshot-v1-8k`

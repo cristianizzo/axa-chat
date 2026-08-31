@@ -136,10 +136,11 @@ export function isServableByActiveProvider(model: string): boolean {
   if (activeCatalog) {
     return activeCatalog.acceptsModel(model)
   }
-  // The model belongs to a catalog provider but the active provider has no
-  // catalog — must be Anthropic/Ollama, which cannot serve it. Ownership, not
-  // servability: a retired ID is equally not ours, and answering "servable"
-  // for one would let its thinking blocks through to the wrong credentials.
+  // The active provider has no catalog — must be Anthropic/Ollama, which can
+  // serve anything except what demonstrably belongs to a catalog provider.
+  // Ownership rather than servability: an ID a catalog has retired is equally
+  // not ours, and calling it servable would let its thinking blocks through to
+  // the wrong credentials.
   return !isModelOwnedByACatalog(model)
 }
 

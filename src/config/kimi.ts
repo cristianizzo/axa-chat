@@ -74,15 +74,20 @@ export type KimiModelId = (typeof KIMI_MODELS)[number]['id']
  * stopped serving.
  *
  * Wired to the catalog's `wasRetiredModel`, never to `acceptsModel`: unlike
- * DeepSeek's legacy IDs, which the API still serves as aliases, these 404. The
- * only thing that needs them is attribution — deciding which account produced
- * a thinking block, whose signature is bound to the credentials that signed it.
+ * DeepSeek's legacy IDs, which the API still serves as aliases, these 404. What
+ * needs them is attribution — deciding which account produced a thinking block,
+ * whose signature is bound to the credentials that signed it.
  *
  * Without this list those IDs belong to nobody, and both readings of "nobody"
  * are wrong. A Kimi session would fail to recognise its own and strip the
  * extended thinking it is still reasoning from; an Anthropic session, which
  * decides foreignness by asking whether some other catalog owns the ID, would
  * fail to recognise it as Kimi's and replay signatures it cannot account for.
+ *
+ * Listing them here also stops every other provider adopting one from ambient
+ * config or a stored per-account model — see `wasRetiredModel` in
+ * providers/catalog.ts, which spells out that this field reaches model
+ * resolution and not only the strip.
  *
  * Prefixes rather than DeepSeek's exact IDs because both are families with
  * per-window variants (`moonshot-v1-8k` / `-32k` / `-128k`), and enumerating
