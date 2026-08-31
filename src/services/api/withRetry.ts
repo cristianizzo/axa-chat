@@ -47,7 +47,10 @@ import {
   checkMockRateLimitError,
   isMockRateLimitError,
 } from '../rateLimitMocking.js'
-import { REPEATED_529_ERROR_MESSAGE } from './errors.js'
+import {
+  isThinkingBlockMismatchError,
+  REPEATED_529_ERROR_MESSAGE,
+} from './errors.js'
 import { extractConnectionErrorDetails } from './errorUtils.js'
 
 const abortError = () => new APIUserAbortError()
@@ -130,6 +133,16 @@ export interface RetryContext {
   model: string
   thinkingConfig: ThinkingConfig
   fastMode?: boolean
+  /**
+   * Rebuild the request with every thinking/redacted_thinking/connector_text
+   * block dropped, not just the ones attributable to another account.
+   *
+   * Set only by the {@link isThinkingBlockMismatchError} branch below, and read
+   * by the `paramsFromContext` callback the caller supplies — claude.ts builds
+   * one that rebuilds its payload through `stripSignatureBlocks` when this is
+   * set. Never cleared, so it holds for the rest of this loop.
+   */
+  retryWithoutSignatureBlocks?: boolean
 }
 
 interface RetryOptions {
@@ -275,7 +288,18 @@ export async function* withRetry<T>(
         client = await getClient()
       }
 
-      return await operation(client, attempt, retryContext)
+      const result = await operation(client, attempt, retryContext)
+      if (retryContext.retryWithoutSignatureBlocks) {
+        // The counterpart to the retry event below. Without it the two
+        // outcomes — the strip fixed the turn, or it did not and the user got
+        // the recovery message — are indistinguishable in telemetry, and so is
+        // "fired once" from "fires on every turn of a session".
+        logEvent('tengu_stale_thinking_signature_retry_recovered', {
+          attempt,
+          provider: getAPIProviderForStatsig(),
+        })
+      }
+      return result
     } catch (error) {
       lastError = error
       logForDebugging(
@@ -335,6 +359,56 @@ export async function* withRetry<T>(
       if (wasFastModeActive && isFastModeNotEnabledError(error)) {
         handleFastModeRejectedByAPI()
         retryContext.fastMode = false
+        continue
+      }
+
+      // Thinking signatures the live credentials cannot account for. The
+      // pre-send strip (utils/foreignSignatures.ts) keys on the recorded model
+      // ID, which names a *provider*, not an account — so re-authenticating
+      // against the same provider with a different key gets past it, as does a
+      // transcript whose messages carry no model at all. The API is the only
+      // thing that actually knows, so take its word for it and resend the turn
+      // with every signed block gone.
+      //
+      // Placed ahead of the shouldRetry gate below, which declines a plain 400
+      // — the point here is to fix the request, not to repeat it. That does not
+      // exempt it from the attempt budget: `continue` advances the loop counter
+      // like any other, and the loop runs while `attempt <= maxRetries + 1`, so
+      // the resend only happens when `attempt <= maxRetries`. Checked rather
+      // than assumed, because otherwise a 400 on the last permitted attempt
+      // would set the flag, fall out of the loop and log a retry that never
+      // ran — and telemetry that counts retries which did not happen cannot
+      // answer the question it was added for.
+      //
+      // One shot. If the flag is already set the strip did not help — either
+      // the other wording of this 400, where removing a turn's thinking
+      // orphaned its tool_use, or a transcript that had no signed block left to
+      // remove, in which case the resend was byte-identical. Retrying again
+      // would only spend the budget to fail the same way. Falling through gets
+      // the user the recovery message getAssistantMessageFromError writes for
+      // this case.
+      if (
+        isThinkingBlockMismatchError(error) &&
+        !retryContext.retryWithoutSignatureBlocks &&
+        attempt <= maxRetries
+      ) {
+        // Deliberately detailed: the second wording this classifier matches is
+        // also what a client-side transcript bug produces, so without the
+        // message and model there is no way to tell a rotated key from a
+        // regression in our own message assembly. Paired with the recovered
+        // event on the success path, which is what says the retry worked
+        // rather than merely fired.
+        logEvent('tengu_stale_thinking_signature_retry', {
+          attempt,
+          model:
+            retryContext.model as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          error:
+            error.message as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          query_source:
+            options.querySource as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          provider: getAPIProviderForStatsig(),
+        })
+        retryContext.retryWithoutSignatureBlocks = true
         continue
       }
 
