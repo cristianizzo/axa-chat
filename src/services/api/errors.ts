@@ -432,8 +432,13 @@ export function extractUnknownErrorFormat(value: unknown): string | undefined {
  * while its tool_use stayed, which breaks the rule that thinking must survive a
  * whole assistant trajectory (query.ts:161) and is reported as a *missing*
  * thinking block instead. Both clear the same way, so both get the same message.
+ *
+ * Exported for withRetry.ts, which retries the turn once with every signed
+ * block removed before this ever becomes a message the user sees.
  */
-function isThinkingBlockMismatchError(error: unknown): error is APIError {
+export function isThinkingBlockMismatchError(
+  error: unknown,
+): error is APIError {
   if (!(error instanceof APIError) || error.status !== 400) {
     return false
   }

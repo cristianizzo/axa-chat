@@ -81,6 +81,7 @@ import {
   normalizeMessagesForAPI,
   stripAdvisorBlocks,
   stripCallerFieldFromAssistantMessage,
+  stripSignatureBlocks,
   stripToolReferenceBlocksFromUserMessage,
 } from '../../utils/messages.js'
 import {
@@ -1282,60 +1283,105 @@ async function* queryModel(
   // See stripForeignSignatureBlocks for why it is keyed on message.model.
   const messagesFromActiveAccount = stripForeignSignatureBlocks(messages)
 
+  /**
+   * Everything between a transcript and the `messages` field of the request,
+   * up to but not including the deferred-tools prefix.
+   *
+   * A function rather than the straight-line block it used to be because
+   * withRetry can ask for the payload a second time with every signed block
+   * removed — see RetryContext.retryWithoutSignatureBlocks. That wider strip
+   * has to run on the way *in*, ahead of normalizeMessagesForAPI: taking the
+   * blocks out can leave an assistant message with no content at all, and
+   * normalize is what puts a placeholder there. Applying it to the normalized
+   * array instead would send empty content and trade one 400 for another.
+   */
+  const buildMessagesForAPI = (
+    source: Message[],
+  ): (UserMessage | AssistantMessage)[] => {
+    let built = normalizeMessagesForAPI(source, filteredTools)
+
+    // Model-specific post-processing: strip tool-search-specific fields if the
+    // selected model doesn't support tool search.
+    //
+    // Why is this needed in addition to normalizeMessagesForAPI?
+    // - normalizeMessagesForAPI uses isToolSearchEnabledNoModelCheck() because it's
+    //   called from ~20 places (analytics, feedback, sharing, etc.), many of which
+    //   don't have model context. Adding model to its signature would be a large refactor.
+    // - This post-processing uses the model-aware isToolSearchEnabled() check
+    // - This handles mid-conversation model switching (e.g., Sonnet → Haiku) where
+    //   stale tool-search fields from the previous model would cause 400 errors
+    //
+    // Note: For assistant messages, normalizeMessagesForAPI already normalized the
+    // tool inputs, so stripCallerFieldFromAssistantMessage only needs to remove the
+    // 'caller' field (not re-normalize inputs).
+    if (!useToolSearch) {
+      built = built.map(msg => {
+        switch (msg.type) {
+          case 'user':
+            // Strip tool_reference blocks from tool_result content
+            return stripToolReferenceBlocksFromUserMessage(msg)
+          case 'assistant':
+            // Strip 'caller' field from tool_use blocks
+            return stripCallerFieldFromAssistantMessage(msg)
+          default:
+            return msg
+        }
+      })
+    }
+
+    // Repair tool_use/tool_result pairing mismatches that can occur when resuming
+    // remote/teleport sessions. Inserts synthetic error tool_results for orphaned
+    // tool_uses and strips orphaned tool_results referencing non-existent tool_uses.
+    built = ensureToolResultPairing(built)
+
+    // Strip advisor blocks — the API rejects them without the beta header.
+    if (!betas.includes(ADVISOR_BETA_HEADER)) {
+      built = stripAdvisorBlocks(built)
+    }
+
+    // Strip excess media items before making the API call.
+    // The API rejects requests with >100 media items but returns a confusing error.
+    // Rather than erroring (which is hard to recover from in Cowork/CCD), we
+    // silently drop the oldest media items to stay within the limit.
+    return stripExcessMediaItems(built, API_MAX_MEDIA_PER_REQUEST)
+  }
+
+  /**
+   * The ephemeral `<available-deferred-tools>` prefix.
+   *
+   * Split out of {@link buildMessagesForAPI} rather than folded into it because
+   * the fingerprint below has to be taken before it is applied, and a retried
+   * payload still needs it.
+   */
+  const withDeferredToolsPrefix = (
+    built: (UserMessage | AssistantMessage)[],
+  ): (UserMessage | AssistantMessage)[] => {
+    // When the delta attachment is enabled, deferred tools are announced
+    // via persisted deferred_tools_delta attachments instead of this
+    // ephemeral prepend (which busts cache whenever the pool changes).
+    if (!useToolSearch || isDeferredToolsDeltaEnabled()) {
+      return built
+    }
+    const deferredToolList = tools
+      .filter(t => deferredToolNames.has(t.name))
+      .map(formatDeferredToolLine)
+      .sort()
+      .join('\n')
+    if (!deferredToolList) {
+      return built
+    }
+    return [
+      createUserMessage({
+        content: `<available-deferred-tools>\n${deferredToolList}\n</available-deferred-tools>`,
+        isMeta: true,
+      }),
+      ...built,
+    ]
+  }
+
   queryCheckpoint('query_message_normalization_start')
-  let messagesForAPI = normalizeMessagesForAPI(
-    messagesFromActiveAccount,
-    filteredTools,
-  )
+  let messagesForAPI = buildMessagesForAPI(messagesFromActiveAccount)
   queryCheckpoint('query_message_normalization_end')
-
-  // Model-specific post-processing: strip tool-search-specific fields if the
-  // selected model doesn't support tool search.
-  //
-  // Why is this needed in addition to normalizeMessagesForAPI?
-  // - normalizeMessagesForAPI uses isToolSearchEnabledNoModelCheck() because it's
-  //   called from ~20 places (analytics, feedback, sharing, etc.), many of which
-  //   don't have model context. Adding model to its signature would be a large refactor.
-  // - This post-processing uses the model-aware isToolSearchEnabled() check
-  // - This handles mid-conversation model switching (e.g., Sonnet → Haiku) where
-  //   stale tool-search fields from the previous model would cause 400 errors
-  //
-  // Note: For assistant messages, normalizeMessagesForAPI already normalized the
-  // tool inputs, so stripCallerFieldFromAssistantMessage only needs to remove the
-  // 'caller' field (not re-normalize inputs).
-  if (!useToolSearch) {
-    messagesForAPI = messagesForAPI.map(msg => {
-      switch (msg.type) {
-        case 'user':
-          // Strip tool_reference blocks from tool_result content
-          return stripToolReferenceBlocksFromUserMessage(msg)
-        case 'assistant':
-          // Strip 'caller' field from tool_use blocks
-          return stripCallerFieldFromAssistantMessage(msg)
-        default:
-          return msg
-      }
-    })
-  }
-
-  // Repair tool_use/tool_result pairing mismatches that can occur when resuming
-  // remote/teleport sessions. Inserts synthetic error tool_results for orphaned
-  // tool_uses and strips orphaned tool_results referencing non-existent tool_uses.
-  messagesForAPI = ensureToolResultPairing(messagesForAPI)
-
-  // Strip advisor blocks — the API rejects them without the beta header.
-  if (!betas.includes(ADVISOR_BETA_HEADER)) {
-    messagesForAPI = stripAdvisorBlocks(messagesForAPI)
-  }
-
-  // Strip excess media items before making the API call.
-  // The API rejects requests with >100 media items but returns a confusing error.
-  // Rather than erroring (which is hard to recover from in Cowork/CCD), we
-  // silently drop the oldest media items to stay within the limit.
-  messagesForAPI = stripExcessMediaItems(
-    messagesForAPI,
-    API_MAX_MEDIA_PER_REQUEST,
-  )
 
   // Instrumentation: Track message count after normalization
   logEvent('tengu_api_after_normalize', {
@@ -1347,25 +1393,7 @@ async function* queryModel(
   // so the fingerprint reflects the actual user input.
   const fingerprint = computeFingerprintFromMessages(messagesForAPI)
 
-  // When the delta attachment is enabled, deferred tools are announced
-  // via persisted deferred_tools_delta attachments instead of this
-  // ephemeral prepend (which busts cache whenever the pool changes).
-  if (useToolSearch && !isDeferredToolsDeltaEnabled()) {
-    const deferredToolList = tools
-      .filter(t => deferredToolNames.has(t.name))
-      .map(formatDeferredToolLine)
-      .sort()
-      .join('\n')
-    if (deferredToolList) {
-      messagesForAPI = [
-        createUserMessage({
-          content: `<available-deferred-tools>\n${deferredToolList}\n</available-deferred-tools>`,
-          isMeta: true,
-        }),
-        ...messagesForAPI,
-      ]
-    }
-  }
+  messagesForAPI = withDeferredToolsPrefix(messagesForAPI)
 
   // Chrome tool-search instructions: when the delta attachment is enabled,
   // these are carried as a client-side block in mcp_instructions_delta
@@ -1733,10 +1761,21 @@ async function* queryModel(
 
     lastRequestBetas = betasParams
 
+    // A previous attempt hit a signature the live credentials could not
+    // account for, so rebuild without any signed block at all rather than
+    // trusting the model-ID attribution that already let this one through.
+    // Rebuilt per attempt: it only happens once per turn, and caching it would
+    // pin a second copy of the transcript for the whole request.
+    const requestMessages = retryContext.retryWithoutSignatureBlocks
+      ? withDeferredToolsPrefix(
+          buildMessagesForAPI(stripSignatureBlocks(messages)),
+        )
+      : messagesForAPI
+
     return {
       model: normalizeModelStringForAPI(options.model),
       messages: addCacheBreakpoints(
-        messagesForAPI,
+        requestMessages,
         enablePromptCaching,
         options.querySource,
         useCachedMC,

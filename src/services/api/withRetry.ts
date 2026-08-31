@@ -47,7 +47,10 @@ import {
   checkMockRateLimitError,
   isMockRateLimitError,
 } from '../rateLimitMocking.js'
-import { REPEATED_529_ERROR_MESSAGE } from './errors.js'
+import {
+  isThinkingBlockMismatchError,
+  REPEATED_529_ERROR_MESSAGE,
+} from './errors.js'
 import { extractConnectionErrorDetails } from './errorUtils.js'
 
 const abortError = () => new APIUserAbortError()
@@ -130,6 +133,14 @@ export interface RetryContext {
   model: string
   thinkingConfig: ThinkingConfig
   fastMode?: boolean
+  /**
+   * Rebuild the request with every thinking/redacted_thinking/connector_text
+   * block dropped, not just the ones attributable to another account.
+   *
+   * Set only by the {@link isThinkingBlockMismatchError} branch below, and read
+   * by the `paramsFromContext` the caller supplies (claude.ts:1561).
+   */
+  retryWithoutSignatureBlocks?: boolean
 }
 
 interface RetryOptions {
@@ -335,6 +346,32 @@ export async function* withRetry<T>(
       if (wasFastModeActive && isFastModeNotEnabledError(error)) {
         handleFastModeRejectedByAPI()
         retryContext.fastMode = false
+        continue
+      }
+
+      // Thinking signatures the live credentials cannot account for. The
+      // pre-send strip (utils/foreignSignatures.ts) keys on the recorded model
+      // ID, which names a *provider*, not an account — so re-authenticating
+      // against the same provider with a different key gets past it, as does a
+      // transcript whose messages carry no model at all. The API is the only
+      // thing that actually knows, so take its word for it and resend the turn
+      // with every signed block gone.
+      //
+      // Deliberately ahead of the maxRetries and shouldRetry gates below: this
+      // is a 400, which shouldRetry declines, and the point is to fix the
+      // request rather than repeat it.
+      //
+      // One shot. If the flag is already set the strip did not help — most
+      // likely the other wording of this 400, where removing a turn's thinking
+      // orphaned its tool_use — and retrying again would only spend the budget
+      // to fail identically. Falling through gets the user the recovery message
+      // getAssistantMessageFromError already writes for this case.
+      if (
+        isThinkingBlockMismatchError(error) &&
+        !retryContext.retryWithoutSignatureBlocks
+      ) {
+        logEvent('tengu_stale_thinking_signature_retry', {})
+        retryContext.retryWithoutSignatureBlocks = true
         continue
       }
 
