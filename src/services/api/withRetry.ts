@@ -138,7 +138,8 @@ export interface RetryContext {
    * block dropped, not just the ones attributable to another account.
    *
    * Set only by the {@link isThinkingBlockMismatchError} branch below, and read
-   * by the `paramsFromContext` the caller supplies (claude.ts:1561).
+   * by the `paramsFromContext` the caller supplies (claude.ts:1589, read at
+   * 1769). Never cleared, so it holds for the rest of this loop.
    */
   retryWithoutSignatureBlocks?: boolean
 }
@@ -286,7 +287,18 @@ export async function* withRetry<T>(
         client = await getClient()
       }
 
-      return await operation(client, attempt, retryContext)
+      const result = await operation(client, attempt, retryContext)
+      if (retryContext.retryWithoutSignatureBlocks) {
+        // The counterpart to the retry event below. Without it the two
+        // outcomes — the strip fixed the turn, or it did not and the user got
+        // the recovery message — are indistinguishable in telemetry, and so is
+        // "fired once" from "fires on every turn of a session".
+        logEvent('tengu_stale_thinking_signature_retry_recovered', {
+          attempt,
+          provider: getAPIProviderForStatsig(),
+        })
+      }
+      return result
     } catch (error) {
       lastError = error
       logForDebugging(
@@ -357,20 +369,40 @@ export async function* withRetry<T>(
       // thing that actually knows, so take its word for it and resend the turn
       // with every signed block gone.
       //
-      // Deliberately ahead of the maxRetries and shouldRetry gates below: this
-      // is a 400, which shouldRetry declines, and the point is to fix the
-      // request rather than repeat it.
+      // Placed ahead of the shouldRetry gate below, which declines a plain 400
+      // — the point here is to fix the request, not to repeat it. It is not
+      // exempt from the attempt budget, though: `continue` still advances the
+      // loop counter, so a 400 arriving on the last permitted attempt sets the
+      // flag and then falls out of the loop without ever using it. Rare, and
+      // the outcome is the recovery message the user would have got anyway.
       //
-      // One shot. If the flag is already set the strip did not help — most
-      // likely the other wording of this 400, where removing a turn's thinking
-      // orphaned its tool_use — and retrying again would only spend the budget
-      // to fail identically. Falling through gets the user the recovery message
-      // getAssistantMessageFromError already writes for this case.
+      // One shot. If the flag is already set the strip did not help — either
+      // the other wording of this 400, where removing a turn's thinking
+      // orphaned its tool_use, or a transcript that had no signed block left to
+      // remove, in which case the resend was byte-identical. Retrying again
+      // would only spend the budget to fail the same way. Falling through gets
+      // the user the recovery message getAssistantMessageFromError writes for
+      // this case.
       if (
         isThinkingBlockMismatchError(error) &&
         !retryContext.retryWithoutSignatureBlocks
       ) {
-        logEvent('tengu_stale_thinking_signature_retry', {})
+        // Deliberately detailed: the second wording this classifier matches is
+        // also what a client-side transcript bug produces, so without the
+        // message and model there is no way to tell a rotated key from a
+        // regression in our own message assembly. Paired with the recovered
+        // event on the success path, which is what says the retry worked
+        // rather than merely fired.
+        logEvent('tengu_stale_thinking_signature_retry', {
+          attempt,
+          model:
+            retryContext.model as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          error:
+            error.message as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          query_source:
+            options.querySource as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          provider: getAPIProviderForStatsig(),
+        })
         retryContext.retryWithoutSignatureBlocks = true
         continue
       }

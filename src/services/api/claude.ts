@@ -1764,8 +1764,13 @@ async function* queryModel(
     // A previous attempt hit a signature the live credentials could not
     // account for, so rebuild without any signed block at all rather than
     // trusting the model-ID attribution that already let this one through.
-    // Rebuilt per attempt: it only happens once per turn, and caching it would
-    // pin a second copy of the transcript for the whole request.
+    //
+    // Rebuilt inline rather than memoised. The flag is never cleared, so every
+    // later attempt in this loop rebuilds too — in practice one, since the
+    // retry either succeeds or the turn ends, but a 429 or a dropped
+    // connection after the strip would repeat it. Cheap next to the round trip
+    // it is part of, and a cached copy would pin a second whole transcript for
+    // the lifetime of the request.
     const requestMessages = retryContext.retryWithoutSignatureBlocks
       ? withDeferredToolsPrefix(
           buildMessagesForAPI(stripSignatureBlocks(messages)),
