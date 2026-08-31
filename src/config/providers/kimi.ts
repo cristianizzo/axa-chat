@@ -1,6 +1,7 @@
 import {
   DEFAULT_KIMI_MODEL,
   KIMI_CONTEXT_WINDOW,
+  KIMI_LEGACY_MODEL_ID_PREFIXES,
   KIMI_MAX_CONCURRENT_REQUESTS,
   KIMI_MAX_OUTPUT_TOKENS,
   KIMI_MODELS,
@@ -40,7 +41,12 @@ export const KIMI_PROVIDER = {
     defaultModel: DEFAULT_KIMI_MODEL,
     contextWindow: KIMI_CONTEXT_WINDOW,
     maxOutputTokens: KIMI_MAX_OUTPUT_TOKENS,
-    acceptsModel: model => KIMI_MODELS.some(entry => entry.id === model),
+    // Retired families count as ours even though `/model` no longer lists them:
+    // a session that recorded one has to keep Kimi's window and its own
+    // thinking blocks rather than being read as another account's.
+    acceptsModel: model =>
+      KIMI_MODELS.some(entry => entry.id === model) ||
+      KIMI_LEGACY_MODEL_ID_PREFIXES.some(prefix => model.startsWith(prefix)),
     smallFastModel: KIMI_SMALL_FAST_MODEL,
     // Moonshot's shim implements the Messages API, not the beta surface around
     // it. `tool_reference` blocks are part of that surface, and the gate in

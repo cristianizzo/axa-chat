@@ -33,6 +33,8 @@ export const KIMI_BASE_URL = 'https://api.moonshot.ai/anthropic'
  * of their 2026-08-31 retirement, so there is nothing else to list.
  *
  * Adding an entry here surfaces it in the `/model` picker for Kimi accounts.
+ * Retired IDs belong in {@link KIMI_LEGACY_MODEL_ID_PREFIXES} instead, so a
+ * session that recorded one is still recognised as ours.
  */
 export const KIMI_MODELS = [
   {
@@ -66,6 +68,28 @@ export const KIMI_MODELS = [
 ] as const satisfies readonly { id: string; label: string; description: string }[]
 
 export type KimiModelId = (typeof KIMI_MODELS)[number]['id']
+
+/**
+ * Retired Moonshot model families the catalog must still claim as its own.
+ *
+ * Prefixes rather than exact IDs, unlike DeepSeek's list: both are families with
+ * per-window variants (`moonshot-v1-8k` / `-32k` / `-128k`), and enumerating
+ * them would mean guessing at IDs no endpoint reports any more. None of the
+ * current IDs collide — `kimi-k2.6` and `kimi-k2.7-*` do not start with
+ * `kimi-k2.5`.
+ *
+ * Recognition matters for two things, neither cosmetic. A model no catalog
+ * claims falls through to the generic 200k context default, so a session on one
+ * would autocompact far too early. Worse, the pre-send pass in
+ * `services/api/claude.ts` reads "the active provider cannot serve this model"
+ * as "another account signed these thinking blocks" and strips them — so a Kimi
+ * session running a retired ID would silently throw away its own extended
+ * thinking on every turn, with no error to explain it.
+ */
+export const KIMI_LEGACY_MODEL_ID_PREFIXES = [
+  'kimi-k2.5',
+  'moonshot-v1',
+] as const satisfies readonly string[]
 
 /** The model used when an account is first set up or no preference is stored. */
 export const DEFAULT_KIMI_MODEL: KimiModelId = 'kimi-k3'

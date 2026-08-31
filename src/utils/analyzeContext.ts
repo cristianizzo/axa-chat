@@ -53,6 +53,7 @@ import { getCwd } from './cwd.js'
 import { logForDebugging } from './debug.js'
 import { isEnvTruthy } from './envUtils.js'
 import { errorMessage, toError } from './errors.js'
+import { stripForeignSignatureBlocks } from './foreignSignatures.js'
 import { logError } from './log.js'
 import { normalizeMessagesForAPI } from './messages.js'
 import { getRuntimeMainLoopModel } from './model/model.js'
@@ -897,8 +898,16 @@ async function approximateMessageTokens(
   }
 
   // Calculate total tokens using the API for accuracy
+  //
+  // The strip mirrors what queryModel does before every real request: the
+  // counting endpoints validate thinking signatures the same way, so an
+  // account flip would otherwise 400 here and leave `/context` silently
+  // falling back to the rough estimate. Counting what will actually be sent is
+  // also the only way the total stays honest.
   const approximateMessageTokens = await countTokensWithFallback(
-    normalizeMessagesForAPI(microcompactResult.messages).map(_ => {
+    normalizeMessagesForAPI(
+      stripForeignSignatureBlocks(microcompactResult.messages),
+    ).map(_ => {
       if (_.type === 'assistant') {
         return {
           // Important: strip out fields like id, etc. -- the counting API errors if they're present
