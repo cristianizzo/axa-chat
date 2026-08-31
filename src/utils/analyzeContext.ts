@@ -53,6 +53,7 @@ import { getCwd } from './cwd.js'
 import { logForDebugging } from './debug.js'
 import { isEnvTruthy } from './envUtils.js'
 import { errorMessage, toError } from './errors.js'
+import { stripForeignSignatureBlocks } from './foreignSignatures.js'
 import { logError } from './log.js'
 import { normalizeMessagesForAPI } from './messages.js'
 import { getRuntimeMainLoopModel } from './model/model.js'
@@ -897,8 +898,31 @@ async function approximateMessageTokens(
   }
 
   // Calculate total tokens using the API for accuracy
+  //
+  // The strip mirrors what queryModel does before every real request. The
+  // counting endpoints validate thinking signatures the same way the Messages
+  // API does, so without it a flipped session 400s here — and there is no
+  // graceful degradation waiting: countTokensViaHaikuFallback re-sends the
+  // same messages under the same credentials (tokenEstimation.ts:302) and
+  // fails identically, so the result is null, totalTokens is 0, and the
+  // "Messages" category disappears from the panel rather than reading low.
+  //
+  // That premise is load-bearing. Were the count endpoints ever to stop
+  // validating signatures, stripping here would become a net negative: it can
+  // remove a foreign turn's thinking while its tool_use survives, which is the
+  // `Expected `thinking` or `redacted_thinking`` 400 errors.ts documents — a
+  // failure this call does not have today.
+  //
+  // The per-category breakdown above does not strip, so on a flipped session
+  // the categories can sum above this total; they were never commensurable
+  // anyway, being rough estimates over pre-normalization messages. Nothing
+  // rendered is affected: the strip only removes thinking/connector_text,
+  // which land in assistantMessageTokens, and the categories that reach the
+  // panel come from toolCallsByType.
   const approximateMessageTokens = await countTokensWithFallback(
-    normalizeMessagesForAPI(microcompactResult.messages).map(_ => {
+    normalizeMessagesForAPI(
+      stripForeignSignatureBlocks(microcompactResult.messages),
+    ).map(_ => {
       if (_.type === 'assistant') {
         return {
           // Important: strip out fields like id, etc. -- the counting API errors if they're present

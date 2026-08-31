@@ -19,7 +19,52 @@ export type ProviderModelCatalog = {
   defaultModel: string
   contextWindow: number
   maxOutputTokens: { default: number; upperLimit: number }
+  /**
+   * Whether this provider can serve the given model ID *now*.
+   *
+   * Answers a question about the present, not about ownership: callers use it
+   * to decide whether a `/model` choice, `ANTHROPIC_MODEL` or a stored
+   * per-account model is still usable, and to size the context window. Claiming
+   * an ID the endpoint would 404 therefore does real harm — model.ts's
+   * resolution path would adopt it instead of healing to {@link defaultModel}.
+   * IDs the API no longer serves belong in {@link wasRetiredModel}.
+   */
   acceptsModel: (model: string) => boolean
+  /**
+   * Whether this provider *used to* serve the given model ID and no longer does.
+   *
+   * Ownership without servability. The need for it is attribution: deciding
+   * which account produced an assistant message in the transcript, so that
+   * thinking blocks carrying another account's credential-bound signature are
+   * dropped before they are replayed. Two readers —
+   * `isRetiredModelOfActiveProvider` (utils/model/model.ts) for "is this the
+   * active account's own retired model", and `isModelOwnedByACatalog`
+   * (./index.ts) for "does it belong to some catalog at all", which is how a
+   * provider with no catalog of its own recognises a foreign ID.
+   *
+   * Both are needed. Miss the first and a session on the very provider that
+   * retired the ID reads its own thinking as foreign; miss the second and an
+   * Anthropic session reads a retired ID as unowned, hence its own.
+   *
+   * Do not read "attribution" as "harmless", though: `isModelOwnedByACatalog`
+   * also feeds `isServableByActiveProvider`, so listing an ID here makes an
+   * *Anthropic* session refuse to adopt it from `ANTHROPIC_MODEL`, settings or
+   * a `/model` override, and stops `setStoredModelForProvider` recording it
+   * against Anthropic. Anthropic only: every other provider either has a
+   * catalog and already rejected the ID through its own `acceptsModel`, or
+   * (Ollama) pins one model and returns before either check. That is the
+   * intent — the ID is somebody's, just not theirs — but it means adding this
+   * field changes model resolution, not only the strip.
+   *
+   * Kept out of {@link getProviderModelCatalogForModel} so a retired ID neither
+   * becomes selectable nor inherits {@link contextWindow} — `moonshot-v1-8k`
+   * names a window nothing here can honour. That is why the ownership question
+   * needs its own lookup rather than reusing that one.
+   *
+   * Omit it when a provider's retired IDs are still served as aliases: those
+   * are servable, so they belong in {@link acceptsModel} (see deepseek.ts).
+   */
+  wasRetiredModel?: (model: string) => boolean
   /**
    * What this provider serves in place of Haiku for background work — session
    * titles, away summaries, WebFetch extraction, token estimation.

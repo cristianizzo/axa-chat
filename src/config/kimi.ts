@@ -33,6 +33,8 @@ export const KIMI_BASE_URL = 'https://api.moonshot.ai/anthropic'
  * of their 2026-08-31 retirement, so there is nothing else to list.
  *
  * Adding an entry here surfaces it in the `/model` picker for Kimi accounts.
+ * Retired IDs belong in {@link KIMI_LEGACY_MODEL_ID_PREFIXES} instead, which
+ * recognises them as ours without offering or requesting them.
  */
 export const KIMI_MODELS = [
   {
@@ -66,6 +68,38 @@ export const KIMI_MODELS = [
 ] as const satisfies readonly { id: string; label: string; description: string }[]
 
 export type KimiModelId = (typeof KIMI_MODELS)[number]['id']
+
+/**
+ * Retired Moonshot model families — IDs that were ours, but that the API has
+ * stopped serving.
+ *
+ * Wired to the catalog's `wasRetiredModel`, never to `acceptsModel`: unlike
+ * DeepSeek's legacy IDs, which the API still serves as aliases, these 404. What
+ * needs them is attribution — deciding which account produced a thinking block,
+ * whose signature is bound to the credentials that signed it.
+ *
+ * Without this list those IDs belong to nobody, and both readings of "nobody"
+ * are wrong. A Kimi session would fail to recognise its own and strip the
+ * extended thinking it is still reasoning from; an Anthropic session, which
+ * decides foreignness by asking whether some other catalog owns the ID, would
+ * fail to recognise it as Kimi's and replay signatures it cannot account for.
+ *
+ * Listing them here also stops an Anthropic session adopting one from ambient
+ * config or a stored per-account model — see `wasRetiredModel` in
+ * providers/catalog.ts, which spells out that this field reaches model
+ * resolution and not only the strip.
+ *
+ * Prefixes rather than DeepSeek's exact IDs because both are families with
+ * per-window variants (`moonshot-v1-8k` / `-32k` / `-128k`), and enumerating
+ * them would mean guessing at IDs no endpoint reports any more. No current ID
+ * collides — `kimi-k2.6` and `kimi-k2.7-*` do not start with `kimi-k2.5` — and
+ * an over-claim could only ever catch another Moonshot ID, which is the right
+ * owner regardless.
+ */
+export const KIMI_LEGACY_MODEL_ID_PREFIXES = [
+  'kimi-k2.5',
+  'moonshot-v1',
+] as const satisfies readonly string[]
 
 /** The model used when an account is first set up or no preference is stored. */
 export const DEFAULT_KIMI_MODEL: KimiModelId = 'kimi-k3'

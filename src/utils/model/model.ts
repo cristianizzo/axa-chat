@@ -24,6 +24,7 @@ import { findCodexModelId } from 'src/config/codex.js'
 import {
   getProviderModelCatalog,
   getProviderModelCatalogForModel,
+  isModelOwnedByACatalog,
 } from 'src/config/providers/index.js'
 import { getModelDescriptor } from './registry.js'
 import {
@@ -135,13 +136,32 @@ export function isServableByActiveProvider(model: string): boolean {
   if (activeCatalog) {
     return activeCatalog.acceptsModel(model)
   }
-  const modelCatalog = getProviderModelCatalogForModel(model)
-  if (modelCatalog) {
-    // The model belongs to a catalog provider but the active provider has no
-    // catalog — must be Anthropic/Ollama, which cannot serve it.
-    return false
-  }
-  return true
+  // The active provider has no catalog — must be Anthropic/Ollama, which can
+  // serve anything except what demonstrably belongs to a catalog provider.
+  // Ownership rather than servability: an ID a catalog has retired is equally
+  // not ours, and calling it servable would let its thinking blocks through to
+  // the wrong credentials.
+  return !isModelOwnedByACatalog(model)
+}
+
+/**
+ * Whether the active provider once served this model but no longer does.
+ *
+ * Ownership, not servability — {@link isServableByActiveProvider} answers the
+ * latter and deliberately says no to these IDs, so that a session pinned to one
+ * heals to the provider's default instead of 404ing every turn. The gap between
+ * the two answers is exactly the set this reports.
+ *
+ * Exists for utils/foreignSignatures.ts, which cannot tell "a model this
+ * account retired" apart from "a model another account owns" without it, and
+ * would strip the session's own thinking blocks in the first case.
+ *
+ * @param model - A concrete model ID, typically read off a transcript record
+ * @returns Whether the active provider's catalog recognises it as retired
+ */
+export function isRetiredModelOfActiveProvider(model: string): boolean {
+  const activeCatalog = getProviderModelCatalog(getActiveAuthProvider())
+  return activeCatalog?.wasRetiredModel?.(model) ?? false
 }
 
 /**
