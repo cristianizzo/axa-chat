@@ -33,8 +33,8 @@ export const KIMI_BASE_URL = 'https://api.moonshot.ai/anthropic'
  * of their 2026-08-31 retirement, so there is nothing else to list.
  *
  * Adding an entry here surfaces it in the `/model` picker for Kimi accounts.
- * Retired IDs belong in {@link KIMI_LEGACY_MODEL_ID_PREFIXES} instead, so a
- * session that recorded one is still recognised as ours.
+ * Retired IDs belong in {@link KIMI_LEGACY_MODEL_ID_PREFIXES} instead, which
+ * recognises them as ours without offering or requesting them.
  */
 export const KIMI_MODELS = [
   {
@@ -70,21 +70,22 @@ export const KIMI_MODELS = [
 export type KimiModelId = (typeof KIMI_MODELS)[number]['id']
 
 /**
- * Retired Moonshot model families the catalog must still claim as its own.
+ * Retired Moonshot model families — IDs that were ours, but that the API has
+ * stopped serving.
  *
- * Prefixes rather than exact IDs, unlike DeepSeek's list: both are families with
+ * Wired to the catalog's `wasRetiredModel`, never to `acceptsModel`: unlike
+ * DeepSeek's legacy IDs, which the API still serves as aliases, these 404. The
+ * only thing that needs them is attribution. `utils/foreignSignatures.ts` reads
+ * "no catalog claims this model" as "another account signed these thinking
+ * blocks" and strips them, so without this list a Kimi session that recorded a
+ * retired ID would silently throw away its own extended thinking on every turn.
+ *
+ * Prefixes rather than DeepSeek's exact IDs because both are families with
  * per-window variants (`moonshot-v1-8k` / `-32k` / `-128k`), and enumerating
- * them would mean guessing at IDs no endpoint reports any more. None of the
- * current IDs collide — `kimi-k2.6` and `kimi-k2.7-*` do not start with
- * `kimi-k2.5`.
- *
- * Recognition matters for two things, neither cosmetic. A model no catalog
- * claims falls through to the generic 200k context default, so a session on one
- * would autocompact far too early. Worse, the pre-send pass in
- * `services/api/claude.ts` reads "the active provider cannot serve this model"
- * as "another account signed these thinking blocks" and strips them — so a Kimi
- * session running a retired ID would silently throw away its own extended
- * thinking on every turn, with no error to explain it.
+ * them would mean guessing at IDs no endpoint reports any more. No current ID
+ * collides — `kimi-k2.6` and `kimi-k2.7-*` do not start with `kimi-k2.5` — and
+ * an over-claim could only ever catch another Moonshot ID, which is the right
+ * owner regardless.
  */
 export const KIMI_LEGACY_MODEL_ID_PREFIXES = [
   'kimi-k2.5',

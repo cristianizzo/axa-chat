@@ -19,7 +19,35 @@ export type ProviderModelCatalog = {
   defaultModel: string
   contextWindow: number
   maxOutputTokens: { default: number; upperLimit: number }
+  /**
+   * Whether this provider can serve the given model ID *now*.
+   *
+   * Answers a question about the present, not about ownership: callers use it
+   * to decide whether a `/model` choice, `ANTHROPIC_MODEL` or a stored
+   * per-account model is still usable, and to size the context window. Claiming
+   * an ID the endpoint would 404 therefore does real harm — model.ts's
+   * resolution path would adopt it instead of healing to {@link defaultModel}.
+   * IDs the API no longer serves belong in {@link wasRetiredModel}.
+   */
   acceptsModel: (model: string) => boolean
+  /**
+   * Whether this provider *used to* serve the given model ID and no longer does.
+   *
+   * Ownership without servability, and read by exactly one caller:
+   * utils/foreignSignatures.ts, which decides whether an assistant message in
+   * the transcript was produced by some other account and must have its
+   * credential-bound thinking signatures dropped. Without this, a retired ID is
+   * claimed by no catalog, so a session on the very provider that produced it
+   * would read its own thinking as foreign and strip it on every turn.
+   *
+   * Deliberately not consulted by {@link getProviderModelCatalogForModel}, so a
+   * retired ID neither becomes selectable nor inherits {@link contextWindow} —
+   * an ID like `moonshot-v1-8k` names a window nothing here can honour.
+   *
+   * Omit it when a provider's retired IDs are still served as aliases: those
+   * are servable, so they belong in {@link acceptsModel} (see deepseek.ts).
+   */
+  wasRetiredModel?: (model: string) => boolean
   /**
    * What this provider serves in place of Haiku for background work — session
    * titles, away summaries, WebFetch extraction, token estimation.

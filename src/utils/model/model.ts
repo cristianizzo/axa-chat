@@ -145,6 +145,26 @@ export function isServableByActiveProvider(model: string): boolean {
 }
 
 /**
+ * Whether the active provider once served this model but no longer does.
+ *
+ * Ownership, not servability — {@link isServableByActiveProvider} answers the
+ * latter and deliberately says no to these IDs, so that a session pinned to one
+ * heals to the provider's default instead of 404ing every turn. The gap between
+ * the two answers is exactly the set this reports.
+ *
+ * Exists for utils/foreignSignatures.ts, which cannot tell "a model this
+ * account retired" apart from "a model another account owns" without it, and
+ * would strip the session's own thinking blocks in the first case.
+ *
+ * @param model - A concrete model ID, typically read off a transcript record
+ * @returns Whether the active provider's catalog recognises it as retired
+ */
+export function isRetiredModelOfActiveProvider(model: string): boolean {
+  const activeCatalog = getProviderModelCatalog(getActiveAuthProvider())
+  return activeCatalog?.wasRetiredModel?.(model) ?? false
+}
+
+/**
  * Helper to get the model from /model (including via /config), the --model flag, environment variable,
  * or the saved settings. The returned value can be a model alias if that's what the user specified.
  * Undefined if the user didn't configure anything, in which case we fall back to

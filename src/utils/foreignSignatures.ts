@@ -1,15 +1,37 @@
 /**
  * Removing thinking blocks the account now serving the session did not sign.
  *
- * A leaf module on purpose: it is the one place that joins `utils/messages.ts`
- * (which knows what a signature-bearing block is) to `utils/model/model.ts`
- * (which knows which account is live). Neither may import the other, so the
- * join cannot live in either of them.
+ * Kept in its own module because it is the one place that joins
+ * `utils/messages.ts` (which knows what a signature-bearing block is) to
+ * `utils/model/model.ts` (which knows which account is live). Neither imports
+ * the other, so the join cannot live in either of them.
  */
 
 import type { Message } from '../types/message.js'
 import { stripSignatureBlocksWhere } from './messages.js'
-import { isServableByActiveProvider } from './model/model.js'
+import {
+  isRetiredModelOfActiveProvider,
+  isServableByActiveProvider,
+} from './model/model.js'
+
+/**
+ * Whether an assistant message was produced by some account other than the one
+ * now serving the session.
+ *
+ * Acts only on positive evidence. `model` is typed as a string, but these
+ * records are replayed from a transcript on disk — the very case this exists
+ * for — so an old or SDK-authored one can arrive without it, and
+ * isServableByActiveProvider throws on a non-string.
+ *
+ * "Cannot serve it" is the test, with one exception: an ID the active provider
+ * itself retired is unservable but not foreign, and stripping it would throw
+ * away the session's own thinking.
+ */
+function isFromAnotherAccount(model: unknown): boolean {
+  if (typeof model !== 'string') return false
+  if (isServableByActiveProvider(model)) return false
+  return !isRetiredModelOfActiveProvider(model)
+}
 
 /**
  * Drops thinking/redacted_thinking/connector_text left by an account that is no
@@ -28,14 +50,9 @@ import { isServableByActiveProvider } from './model/model.js'
  *
  * Keyed on `message.model` so the current account keeps its own blocks:
  * stripping unconditionally would discard the extended thinking the model is
- * still reasoning from.
- *
- * Acts only on positive evidence of a foreign model. `model` is typed as a
- * string, but these records are replayed from a transcript on disk — the very
- * case this exists for — so an old or SDK-authored one can arrive without it,
- * and isServableByActiveProvider throws on a non-string. An unattributable
- * message keeps its blocks: that is exactly today's behaviour, and
- * getAssistantMessageFromError names the recovery if the API then rejects it.
+ * still reasoning from. A message whose origin cannot be established keeps its
+ * blocks — that is today's behaviour, and getAssistantMessageFromError names
+ * the recovery if the API then rejects them.
  *
  * @returns The input untouched when nothing is foreign, so a single-account
  * session keeps a byte-identical prefix and its prompt cache.
@@ -43,10 +60,7 @@ import { isServableByActiveProvider } from './model/model.js'
 export function stripForeignSignatureBlocks<T extends Message>(
   messages: T[],
 ): T[] {
-  return stripSignatureBlocksWhere(
-    messages,
-    msg =>
-      typeof msg.message.model === 'string' &&
-      !isServableByActiveProvider(msg.message.model),
+  return stripSignatureBlocksWhere(messages, msg =>
+    isFromAnotherAccount(msg.message.model),
   )
 }
