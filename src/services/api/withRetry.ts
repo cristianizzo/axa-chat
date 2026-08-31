@@ -371,11 +371,14 @@ export async function* withRetry<T>(
       // with every signed block gone.
       //
       // Placed ahead of the shouldRetry gate below, which declines a plain 400
-      // — the point here is to fix the request, not to repeat it. It is not
-      // exempt from the attempt budget, though: `continue` still advances the
-      // loop counter, so a 400 arriving on the last permitted attempt sets the
-      // flag and then falls out of the loop without ever using it. Rare, and
-      // the outcome is the recovery message the user would have got anyway.
+      // — the point here is to fix the request, not to repeat it. That does not
+      // exempt it from the attempt budget: `continue` advances the loop counter
+      // like any other, and the loop runs while `attempt <= maxRetries + 1`, so
+      // the resend only happens when `attempt <= maxRetries`. Checked rather
+      // than assumed, because otherwise a 400 on the last permitted attempt
+      // would set the flag, fall out of the loop and log a retry that never
+      // ran — and telemetry that counts retries which did not happen cannot
+      // answer the question it was added for.
       //
       // One shot. If the flag is already set the strip did not help — either
       // the other wording of this 400, where removing a turn's thinking
@@ -386,7 +389,8 @@ export async function* withRetry<T>(
       // this case.
       if (
         isThinkingBlockMismatchError(error) &&
-        !retryContext.retryWithoutSignatureBlocks
+        !retryContext.retryWithoutSignatureBlocks &&
+        attempt <= maxRetries
       ) {
         // Deliberately detailed: the second wording this classifier matches is
         // also what a client-side transcript bug produces, so without the
