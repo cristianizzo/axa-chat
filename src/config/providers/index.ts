@@ -222,10 +222,15 @@ export function getMaxConcurrentRequests(
 }
 
 /**
- * The catalog that claims a given model ID.
+ * The catalog that can currently serve a given model ID.
+ *
+ * Answers only about models that still work: callers size context windows and
+ * output limits from the result, so an ID a provider has retired must not
+ * resolve here. Use {@link isModelOwnedByACatalog} to ask who a model *belonged*
+ * to.
  *
  * @param model - A model ID
- * @returns The owning catalog, or undefined if no local catalog accepts it
+ * @returns The serving catalog, or undefined if no local catalog accepts it
  */
 export function getProviderModelCatalogForModel(
   model: string,
@@ -233,4 +238,29 @@ export function getProviderModelCatalogForModel(
   return ALL_PROVIDERS.find(provider =>
     provider.catalog?.acceptsModel(model),
   )?.catalog
+}
+
+/**
+ * Whether any local catalog claims a model ID, including one it has retired.
+ *
+ * The ownership half of {@link getProviderModelCatalogForModel}, which is
+ * deliberately blind to retired IDs so nothing sizes a window from one. That
+ * blindness would otherwise make a retired ID look unowned, and "unowned" is
+ * what tells a provider without a catalog of its own — Anthropic — that a model
+ * is not somebody else's. Without this, an Anthropic session would treat a
+ * retired Kimi ID as its own and replay its credential-bound thinking blocks.
+ *
+ * Returns a boolean rather than the catalog on purpose: the retired half of the
+ * answer carries no usable window or model list, so handing back a catalog
+ * would invite exactly the misuse the split exists to prevent.
+ *
+ * @param model - A model ID
+ * @returns Whether some provider's catalog serves it, or used to
+ */
+export function isModelOwnedByACatalog(model: string): boolean {
+  return ALL_PROVIDERS.some(
+    provider =>
+      provider.catalog?.acceptsModel(model) ||
+      provider.catalog?.wasRetiredModel?.(model),
+  )
 }

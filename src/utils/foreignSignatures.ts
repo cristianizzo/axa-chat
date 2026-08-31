@@ -1,10 +1,12 @@
 /**
  * Removing thinking blocks the account now serving the session did not sign.
  *
- * Kept in its own module because it is the one place that joins
- * `utils/messages.ts` (which knows what a signature-bearing block is) to
- * `utils/model/model.ts` (which knows which account is live). Neither imports
- * the other, so the join cannot live in either of them.
+ * Kept in its own module for readability, not because the graph demands it: it
+ * joins `utils/messages.ts` (which knows what a signature-bearing block is) to
+ * `utils/model/model.ts` (which knows which account is live), and both of those
+ * are already large enough that a caller looking for this logic would not think
+ * to open either. They do not import each other directly, but transitively they
+ * already do in both directions, so the split buys no acyclicity.
  */
 
 import type { Message } from '../types/message.js'

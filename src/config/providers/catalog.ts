@@ -33,16 +33,24 @@ export type ProviderModelCatalog = {
   /**
    * Whether this provider *used to* serve the given model ID and no longer does.
    *
-   * Ownership without servability, and read by exactly one caller:
-   * utils/foreignSignatures.ts, which decides whether an assistant message in
-   * the transcript was produced by some other account and must have its
-   * credential-bound thinking signatures dropped. Without this, a retired ID is
-   * claimed by no catalog, so a session on the very provider that produced it
-   * would read its own thinking as foreign and strip it on every turn.
+   * Ownership without servability. It exists for attribution: deciding which
+   * account produced an assistant message in the transcript, so that thinking
+   * blocks carrying another account's credential-bound signature are dropped
+   * before they are replayed. Read in two places, both in that service of that
+   * one question — `isRetiredModelOfActiveProvider` (utils/model/model.ts) for
+   * "is this the active account's own retired model", and
+   * `isModelOwnedByACatalog` (./index.ts) for "does it belong to some catalog
+   * at all", which is how a provider with no catalog of its own recognises a
+   * foreign ID.
    *
-   * Deliberately not consulted by {@link getProviderModelCatalogForModel}, so a
-   * retired ID neither becomes selectable nor inherits {@link contextWindow} —
-   * an ID like `moonshot-v1-8k` names a window nothing here can honour.
+   * Both are needed. Miss the first and a session on the very provider that
+   * retired the ID reads its own thinking as foreign; miss the second and an
+   * Anthropic session reads a retired ID as unowned, hence its own.
+   *
+   * Kept out of {@link getProviderModelCatalogForModel} so a retired ID neither
+   * becomes selectable nor inherits {@link contextWindow} — `moonshot-v1-8k`
+   * names a window nothing here can honour. That is why the ownership question
+   * needs its own lookup rather than reusing that one.
    *
    * Omit it when a provider's retired IDs are still served as aliases: those
    * are servable, so they belong in {@link acceptsModel} (see deepseek.ts).

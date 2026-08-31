@@ -16,9 +16,9 @@ import {
   DEFAULT_AUTH_PROVIDER,
   getProvider,
   getProviderModelCatalog,
-  getProviderModelCatalogForModel,
   inferProviderFromCredentials,
   isAuthProviderId,
+  isModelOwnedByACatalog,
 } from '../config/providers/index.js'
 import { getGlobalConfig, saveGlobalConfig } from './config.js'
 import { isModelAlias } from './model/aliases.js'
@@ -50,7 +50,9 @@ function isModelServableByProvider(id: AuthProviderId, model: string): boolean {
   // demonstrably belongs to another provider's catalog. A provider that pins
   // one exact model instead of listing a catalog (Ollama) never reaches here —
   // ownedModel returns above — so this stays a question about catalogs only.
-  return !getProviderModelCatalogForModel(model)
+  // Ownership rather than servability, so an ID another provider has retired
+  // still counts as theirs and is not recorded against this one.
+  return !isModelOwnedByACatalog(model)
 }
 
 /**

@@ -75,10 +75,14 @@ export type KimiModelId = (typeof KIMI_MODELS)[number]['id']
  *
  * Wired to the catalog's `wasRetiredModel`, never to `acceptsModel`: unlike
  * DeepSeek's legacy IDs, which the API still serves as aliases, these 404. The
- * only thing that needs them is attribution. `utils/foreignSignatures.ts` reads
- * "no catalog claims this model" as "another account signed these thinking
- * blocks" and strips them, so without this list a Kimi session that recorded a
- * retired ID would silently throw away its own extended thinking on every turn.
+ * only thing that needs them is attribution — deciding which account produced
+ * a thinking block, whose signature is bound to the credentials that signed it.
+ *
+ * Without this list those IDs belong to nobody, and both readings of "nobody"
+ * are wrong. A Kimi session would fail to recognise its own and strip the
+ * extended thinking it is still reasoning from; an Anthropic session, which
+ * decides foreignness by asking whether some other catalog owns the ID, would
+ * fail to recognise it as Kimi's and replay signatures it cannot account for.
  *
  * Prefixes rather than DeepSeek's exact IDs because both are families with
  * per-window variants (`moonshot-v1-8k` / `-32k` / `-128k`), and enumerating

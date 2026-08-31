@@ -24,6 +24,7 @@ import { findCodexModelId } from 'src/config/codex.js'
 import {
   getProviderModelCatalog,
   getProviderModelCatalogForModel,
+  isModelOwnedByACatalog,
 } from 'src/config/providers/index.js'
 import { getModelDescriptor } from './registry.js'
 import {
@@ -135,13 +136,11 @@ export function isServableByActiveProvider(model: string): boolean {
   if (activeCatalog) {
     return activeCatalog.acceptsModel(model)
   }
-  const modelCatalog = getProviderModelCatalogForModel(model)
-  if (modelCatalog) {
-    // The model belongs to a catalog provider but the active provider has no
-    // catalog — must be Anthropic/Ollama, which cannot serve it.
-    return false
-  }
-  return true
+  // The model belongs to a catalog provider but the active provider has no
+  // catalog — must be Anthropic/Ollama, which cannot serve it. Ownership, not
+  // servability: a retired ID is equally not ours, and answering "servable"
+  // for one would let its thinking blocks through to the wrong credentials.
+  return !isModelOwnedByACatalog(model)
 }
 
 /**
