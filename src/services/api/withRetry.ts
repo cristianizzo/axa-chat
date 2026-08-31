@@ -138,8 +138,9 @@ export interface RetryContext {
    * block dropped, not just the ones attributable to another account.
    *
    * Set only by the {@link isThinkingBlockMismatchError} branch below, and read
-   * by the `paramsFromContext` the caller supplies (claude.ts:1589, read at
-   * 1769). Never cleared, so it holds for the rest of this loop.
+   * by the `paramsFromContext` callback the caller supplies — claude.ts builds
+   * one that rebuilds its payload through `stripSignatureBlocks` when this is
+   * set. Never cleared, so it holds for the rest of this loop.
    */
   retryWithoutSignatureBlocks?: boolean
 }
