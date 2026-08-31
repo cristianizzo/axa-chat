@@ -47,12 +47,14 @@ export type ProviderModelCatalog = {
    * Anthropic session reads a retired ID as unowned, hence its own.
    *
    * Do not read "attribution" as "harmless", though: `isModelOwnedByACatalog`
-   * also feeds `isServableByActiveProvider`, so listing an ID here makes every
-   * *other* provider refuse to adopt it from `ANTHROPIC_MODEL`, settings or a
-   * `/model` override, and stops `setStoredModelForProvider` recording it
-   * against them. That is the intent — the ID is somebody's, just not theirs —
-   * but it means adding this field to a provider changes model resolution, not
-   * only the strip.
+   * also feeds `isServableByActiveProvider`, so listing an ID here makes an
+   * *Anthropic* session refuse to adopt it from `ANTHROPIC_MODEL`, settings or
+   * a `/model` override, and stops `setStoredModelForProvider` recording it
+   * against Anthropic. Anthropic only: every other provider either has a
+   * catalog and already rejected the ID through its own `acceptsModel`, or
+   * (Ollama) pins one model and returns before either check. That is the
+   * intent — the ID is somebody's, just not theirs — but it means adding this
+   * field changes model resolution, not only the strip.
    *
    * Kept out of {@link getProviderModelCatalogForModel} so a retired ID neither
    * becomes selectable nor inherits {@link contextWindow} — `moonshot-v1-8k`

@@ -84,7 +84,7 @@ export type KimiModelId = (typeof KIMI_MODELS)[number]['id']
  * decides foreignness by asking whether some other catalog owns the ID, would
  * fail to recognise it as Kimi's and replay signatures it cannot account for.
  *
- * Listing them here also stops every other provider adopting one from ambient
+ * Listing them here also stops an Anthropic session adopting one from ambient
  * config or a stored per-account model — see `wasRetiredModel` in
  * providers/catalog.ts, which spells out that this field reaches model
  * resolution and not only the strip.
