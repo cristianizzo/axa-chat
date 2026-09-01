@@ -95,7 +95,7 @@ export type LegacyProjectImportOutcome =
  * Symlinks are not followed on either side, so nothing outside the project is
  * ever inspected and there is no cycle to guard against. Source-side that falls
  * out of `Dirent.isDirectory()` being false for a link; destination-side it
- * takes the `isDirectory()` test on `targetStat` below, because `lstat` only
+ * takes the `targetIsDirectory` test below, because `lstat` only
  * declines to follow the *last* path component — descending into a symlinked
  * `.axa/agents` would resolve that link on the way to every child. That case is
  * reported as nothing to copy: `cp` refuses to merge a directory onto a
@@ -120,11 +120,20 @@ async function hasUncopiedEntries(
   for (const entry of entries) {
     if (topLevel && NOT_WORTH_IMPORTING.has(entry.name)) continue
     const target = join(to, entry.name)
-    const targetStat = await lstat(target).catch(() => null)
-    if (!targetStat) return true
+    let targetIsDirectory: boolean
+    try {
+      targetIsDirectory = (await lstat(target)).isDirectory()
+    } catch (error) {
+      // Absent is the only answer that means "there is something to copy".
+      // Anything else — EACCES on the destination, ENOTDIR from a file in the
+      // path — is a destination the import could not write to either, so this
+      // takes the same line as the `readdir` catch above and does not offer it.
+      if (isENOENT(error)) return true
+      continue
+    }
     if (
       entry.isDirectory() &&
-      targetStat.isDirectory() &&
+      targetIsDirectory &&
       (await hasUncopiedEntries(join(from, entry.name), target, false))
     ) {
       return true
@@ -275,7 +284,14 @@ async function copyFileIfAbsent(
  * of subdirectories, so anything either product adds later is carried across
  * without this function needing to learn about it. `force: false` means that
  * where both projects have a file, axa's wins and the legacy one is left alone.
- * It does not extend to symlinks: Node replaces a destination *link* even so.
+ *
+ * One narrow exception, measured rather than assumed: when *both* sides of an
+ * entry are symlinks, `cp` repoints axa's link at the legacy link's target. No
+ * content is lost — whatever the old link pointed at is untouched. A legacy
+ * *file* or *directory* landing on an axa symlink does not overwrite it: the
+ * file is skipped by `force: false`, and the directory fails with "cannot
+ * overwrite directory with non-directory", which is why `hasUncopiedEntries`
+ * declines to offer that case at all.
  */
 export async function importLegacyProject(
   projectRoot: string,
