@@ -20,7 +20,7 @@ import { AppStateProvider } from './state/AppState.js';
 import { onChangeAppState } from './state/onChangeAppState.js';
 import { normalizeApiKeyForConfig } from './utils/authPortable.js';
 import { getExternalClaudeMdIncludes, getMemoryFiles, shouldShowClaudeMdExternalIncludesWarning } from './utils/claudemd.js';
-import { checkHasTrustDialogAccepted, getCurrentProjectConfig, getCustomApiKeyStatus, getGlobalConfig, saveCurrentProjectConfig, saveGlobalConfig } from './utils/config.js';
+import { checkHasTrustDialogAccepted, getCurrentProjectConfig, getCustomApiKeyStatus, getGlobalConfig, saveGlobalConfig } from './utils/config.js';
 import { findCanonicalGitRoot } from './utils/git.js';
 import { updateDeepLinkTerminalPreference } from './utils/deepLink/terminalPreference.js';
 import { isEnvTruthy, isRunningOnHomespace } from './utils/envUtils.js';
@@ -157,7 +157,7 @@ export async function showSetupScreens(root: Root, permissionMode: PermissionMod
     // must not run anywhere the user has not said they trust it. Before the
     // memory files are read below, so an accepted import takes effect on this
     // run rather than the next one.
-    if (!getCurrentProjectConfig().hasAnsweredLegacyProjectImport) {
+    if (!getCurrentProjectConfig().hasAnsweredLegacyProjectImport && !getGlobalConfig().hasDeclinedLegacyProjectImportEverywhere) {
       // The "once per project" flag is keyed off the canonical git root, so the
       // import scans that same root — a launch from a subdirectory or a worktree
       // must not look for legacy files in the wrong place while still marking
@@ -165,7 +165,8 @@ export async function showSetupScreens(root: Root, permissionMode: PermissionMod
       const projectRoot = findCanonicalGitRoot(getOriginalCwd()) ?? getOriginalCwd();
       const {
         findLegacyProjectFiles,
-        hasAnything
+        hasAnything,
+        recordLegacyImportAnswer
       } = await import('./utils/legacyProjectImport.js');
       const findings = await findLegacyProjectFiles(projectRoot);
       if (hasAnything(findings)) {
@@ -177,14 +178,9 @@ export async function showSetupScreens(root: Root, permissionMode: PermissionMod
             projectRoot={projectRoot}
             findings={findings}
             onDone={(outcome: LegacyProjectImportOutcome) => {
-              // Recorded for accept and decline alike — but not for a failed
-              // import, so a transient failure can be retried on a later run.
-              if (outcome !== 'failed') {
-                saveCurrentProjectConfig(current => ({
-                  ...current,
-                  hasAnsweredLegacyProjectImport: true
-                }));
-              }
+              // Shared with /import-project rather than inlined, so a decline
+              // means the same thing whichever screen the user answered on.
+              recordLegacyImportAnswer(outcome);
               done();
             }}
           />
