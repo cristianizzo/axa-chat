@@ -92,12 +92,15 @@ export type LegacyProjectImportOutcome =
  * A full traversal only happens once `.axa/` already mirrors `.claude/`, and
  * only on launches where the offer has not yet been answered.
  *
- * Symlinks are not followed — `Dirent.isDirectory()` is false for a link and
- * `exists` uses `lstat` — so there is no cycle to guard against and nothing is
- * inspected outside the project. The one place this is laxer than the import:
- * `cp` will replace a *destination* symlink even with `force: false`, and this
- * reports such an entry as already present. Under-offering a clobber is the
- * right direction to be wrong in.
+ * Symlinks are not followed on either side, so nothing outside the project is
+ * ever inspected and there is no cycle to guard against. Source-side that falls
+ * out of `Dirent.isDirectory()` being false for a link; destination-side it
+ * takes the `isDirectory()` test on `targetStat` below, because `lstat` only
+ * declines to follow the *last* path component — descending into a symlinked
+ * `.axa/agents` would resolve that link on the way to every child. That case is
+ * reported as nothing to copy: `cp` refuses to merge a directory onto a
+ * symlink, so the import cannot do anything with it either, and offering work
+ * that is guaranteed to fail is what this whole change exists to stop.
  */
 async function hasUncopiedEntries(
   from: string,
@@ -117,9 +120,11 @@ async function hasUncopiedEntries(
   for (const entry of entries) {
     if (topLevel && NOT_WORTH_IMPORTING.has(entry.name)) continue
     const target = join(to, entry.name)
-    if (!(await exists(target))) return true
+    const targetStat = await lstat(target).catch(() => null)
+    if (!targetStat) return true
     if (
       entry.isDirectory() &&
+      targetStat.isDirectory() &&
       (await hasUncopiedEntries(join(from, entry.name), target, false))
     ) {
       return true
