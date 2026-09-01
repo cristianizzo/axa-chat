@@ -47,10 +47,19 @@ function ImportProjectScreen({
 }): React.ReactNode {
   const [stage, setStage] = useState<Stage>({ status: 'scanning' })
 
-  // Registered for every stage, not left to the dialog's own Select: three of
-  // the four stages below render no Select at all, and two of them tell the
-  // user to press esc.
-  useKeybinding('confirm:no', onDone, { context: 'Confirmation' })
+  // Local-jsx commands are modal — the REPL disables its ambient handlers while
+  // one is mounted — and three of the four stages render no Select at all, two
+  // of them telling the user to press esc. So this is the only way out of them.
+  //
+  // Off during `offering`, where the dialog owns every exit: it records the
+  // outcome on its Selects' onCancel, including on the result screen, where esc
+  // has to persist 'imported'. `useKeybinding` calls stopImmediatePropagation()
+  // on a match, so leaving this on there could swallow that and skip the write
+  // — reinstating the nag this command exists to end.
+  useKeybinding('confirm:no', onDone, {
+    context: 'Confirmation',
+    isActive: stage.status !== 'offering',
+  })
 
   useEffect(() => {
     let cancelled = false
