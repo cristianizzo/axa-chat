@@ -261,6 +261,18 @@ export type GlobalConfig = {
     rejected?: string[]
   }
   primaryApiKey?: string // Primary API key for the user when no environment variable is set, set via oauth (TODO: rename)
+  /**
+   * The user declined the legacy-project import offer for every project at once.
+   *
+   * The per-project flag is right for someone with one or two repos, but a repo
+   * set up for Claude Code is the common case, not the exception: answering the
+   * same question once per checkout is the nagging the per-project flag was
+   * meant to prevent. Nothing is lost by saying yes to this — `/import-project`
+   * runs the same import on demand, in any project, ignoring both this flag and
+   * the per-project one. (Not `/import-conversations`, which reads `~/.claude`
+   * for conversations and credentials and never looks at a project's own files.)
+   */
+  hasDeclinedLegacyProjectImportEverywhere?: boolean
   hasAcknowledgedCostThreshold?: boolean
   hasSeenUndercoverAutoNotice?: boolean // ant-only: whether the one-time auto-undercover explainer has been shown
   hasSeenUltraplanTerms?: boolean // ant-only: whether the one-time CCR terms notice has been shown in the ultraplan launch dialog
