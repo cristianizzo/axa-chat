@@ -7,7 +7,6 @@ import type { LocalJSXCommandCall } from '../../types/command.js'
 import {
   CONFIG_DIR_NAME,
   LEGACY_CONFIG_DIR_NAME,
-  LEGACY_MEMORY_FILE_NAME,
   MEMORY_FILE_NAME,
 } from '../../constants/product.js'
 import { getOriginalCwd } from '../../bootstrap/state.js'
@@ -100,7 +99,7 @@ function ImportProjectScreen({
         <Pane>
           <Text>Nothing to import.</Text>
           <Text dimColor>
-            {stage.projectRoot} has no {LEGACY_MEMORY_FILE_NAME} or{' '}
+            {stage.projectRoot} has no Claude Code memory files, and no{' '}
             {LEGACY_CONFIG_DIR_NAME}/ holding anything {MEMORY_FILE_NAME} and{' '}
             {CONFIG_DIR_NAME}/ do not already have.
           </Text>
