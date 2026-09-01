@@ -106,7 +106,8 @@ export function LegacyProjectImportDialog({
         <Text dimColor>
           Copied, never moved: the originals stay exactly as they are, so this
           repo keeps working with Claude Code. Nothing in {CONFIG_DIR_NAME}/ is
-          deleted, and files it already has are kept as they are.
+          deleted, and the files it already has are kept — only a symlink can be
+          repointed, never the file it leads to.
         </Text>
       </Box>
       <Box marginTop={1}>
