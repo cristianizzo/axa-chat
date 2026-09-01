@@ -108,8 +108,8 @@ function ImportProjectScreen({
         <Pane>
           <Text>Nothing to import.</Text>
           <Text dimColor>
-            {stage.projectRoot} has no Claude Code memory files, and no{' '}
-            {LEGACY_CONFIG_DIR_NAME}/ holding anything {MEMORY_FILE_NAME} and{' '}
+            {stage.projectRoot} has no Claude Code memory files, and nothing
+            readable in {LEGACY_CONFIG_DIR_NAME}/ that {MEMORY_FILE_NAME} and{' '}
             {CONFIG_DIR_NAME}/ do not already have.
           </Text>
           <Box marginTop={1}>
