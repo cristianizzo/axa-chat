@@ -92,15 +92,21 @@ export type LegacyProjectImportOutcome =
  * A full traversal only happens once `.axa/` already mirrors `.claude/`, and
  * only on launches where the offer has not yet been answered.
  *
- * Symlinks are not followed on either side, so nothing outside the project is
- * ever inspected and there is no cycle to guard against. Source-side that falls
- * out of `Dirent.isDirectory()` being false for a link; destination-side it
- * takes the `targetIsDirectory` test below, because `lstat` only
- * declines to follow the *last* path component — descending into a symlinked
- * `.axa/agents` would resolve that link on the way to every child. That case is
- * reported as nothing to copy: `cp` refuses to merge a directory onto a
- * symlink, so the import cannot do anything with it either, and offering work
- * that is guaranteed to fail is what this whole change exists to stop.
+ * A legacy directory is only descended into when the axa side is a directory
+ * too. Where it is anything else — a file, a symlink — `cp` refuses the entry
+ * outright ("cannot overwrite directory with non-directory", measured, and the
+ * destination is left as it was), so there is no copy to offer however much the
+ * legacy tree holds. Offering work that is guaranteed to fail is what this
+ * whole change exists to stop. Note that the import still *attempts* such an
+ * entry and reports the failure, which is the more useful behaviour for someone
+ * who reached it deliberately through `/import-project`.
+ *
+ * That test doubles as the reason symlinks are never followed on either side,
+ * so nothing outside the project is inspected and there is no cycle to guard
+ * against. Source-side it falls out of `Dirent.isDirectory()` being false for a
+ * link; destination-side it needs the explicit check, because `lstat` declines
+ * to follow only the *last* path component — descending into a symlinked
+ * `.axa/agents` would resolve that link on the way to every child.
  */
 async function hasUncopiedEntries(
   from: string,
