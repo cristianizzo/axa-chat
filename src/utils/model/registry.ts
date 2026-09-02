@@ -28,6 +28,7 @@ export type ModelFamilyName = 'opus' | 'sonnet' | 'haiku' | 'fable' | 'mythos'
 
 /** Pricing tier name — mapped to concrete ModelCosts in modelCost.ts. */
 export type PricingTier =
+  | 'tier_2_10'
   | 'tier_3_15'
   | 'tier_5_25'
   | 'tier_15_75'
@@ -167,7 +168,7 @@ export const MODEL_REGISTRY: readonly ModelDescriptor[] = [
     adaptiveThinking: true,
     structuredOutputs: false,
     maxOutput: OUT_64_128,
-    knowledgeCutoff: null,
+    knowledgeCutoff: 'May 2026',
   },
   {
     key: 'sonnet45',
@@ -205,14 +206,14 @@ export const MODEL_REGISTRY: readonly ModelDescriptor[] = [
     canonical: 'claude-sonnet-5',
     family: 'sonnet',
     displayName: 'Sonnet 5',
-    pricingTier: 'tier_3_15',
+    pricingTier: 'tier_2_10',
     supports1M: true,
     effort: true,
     maxEffort: false,
     adaptiveThinking: true,
     structuredOutputs: false,
     maxOutput: OUT_64_128,
-    knowledgeCutoff: null,
+    knowledgeCutoff: 'January 2026',
   },
   {
     key: 'fable5',
@@ -227,7 +228,22 @@ export const MODEL_REGISTRY: readonly ModelDescriptor[] = [
     adaptiveThinking: true,
     structuredOutputs: false,
     maxOutput: OUT_64_128,
-    knowledgeCutoff: null,
+    knowledgeCutoff: 'January 2026',
+  },
+  {
+    key: 'fable51',
+    config: ALL_MODEL_CONFIGS.fable51,
+    canonical: 'claude-fable-5-1',
+    family: 'fable',
+    displayName: 'Fable 5.1',
+    pricingTier: 'tier_10_50',
+    supports1M: true,
+    effort: true,
+    maxEffort: false,
+    adaptiveThinking: true,
+    structuredOutputs: false,
+    maxOutput: OUT_64_128,
+    knowledgeCutoff: 'June 2026',
   },
   {
     key: 'mythos5',
@@ -242,7 +258,10 @@ export const MODEL_REGISTRY: readonly ModelDescriptor[] = [
     adaptiveThinking: true,
     structuredOutputs: false,
     maxOutput: OUT_64_128,
-    knowledgeCutoff: null,
+    // Mythos 5 has no page of its own in the public model list; the Fable 5 page
+    // states it shares Fable 5's specifications and pricing, which is where this
+    // and the tier above come from.
+    knowledgeCutoff: 'January 2026',
   },
 ]
 

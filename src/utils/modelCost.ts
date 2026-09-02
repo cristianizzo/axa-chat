@@ -34,6 +34,15 @@ export type ModelCosts = {
   webSearchRequests: number
 }
 
+// Pricing tier for Sonnet 5: $2 input / $10 output per Mtok
+export const COST_TIER_2_10 = {
+  inputTokens: 2,
+  outputTokens: 10,
+  promptCacheWriteTokens: 2.5,
+  promptCacheReadTokens: 0.2,
+  webSearchRequests: 0.01,
+} as const satisfies ModelCosts
+
 // Standard pricing tier for Sonnet models: $3 input / $15 output per Mtok
 export const COST_TIER_3_15 = {
   inputTokens: 3,
@@ -113,6 +122,7 @@ const DEFAULT_UNKNOWN_MODEL_COST = COST_TIER_5_25
 
 /** Maps a registry model's pricing tier name to its concrete costs. */
 export const PRICING_TIER_COSTS: Record<PricingTier, ModelCosts> = {
+  tier_2_10: COST_TIER_2_10,
   tier_3_15: COST_TIER_3_15,
   tier_5_25: COST_TIER_5_25,
   tier_15_75: COST_TIER_15_75,
