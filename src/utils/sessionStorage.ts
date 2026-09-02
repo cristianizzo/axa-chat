@@ -4990,9 +4990,11 @@ async function readLiteMetadata(
  * so answering `false` for a session that was never starred would grow a
  * `favorite:false` line on the transcript of every resumed session forever.
  *
- * A tail read can start or end mid-line — the window is a byte offset, not a
- * line boundary — so an unparseable line is expected rather than exceptional,
- * and it is treated as no answer rather than as a negative one.
+ * A tail read can start mid-line, and can end mid-line if it catches an append
+ * in flight — the window is a byte offset, not a line boundary — so a line that
+ * does not parse is expected rather than exceptional. Such a line is no answer
+ * at all: the scan keeps going back, because an older complete entry is still a
+ * better answer than pretending the session was never starred.
  */
 function favoriteFromTail(tail: string): boolean | undefined {
   const marker = '{"type":"favorite"'
@@ -5000,18 +5002,23 @@ function favoriteFromTail(tail: string): boolean | undefined {
   // listed by /resume, over a window as large as LITE_READ_BUF_SIZE, and the
   // sibling extractors above avoid the same allocation.
   let start = tail.lastIndexOf(marker)
-  while (start > 0 && tail[start - 1] !== '\n') {
+  while (start >= 0) {
+    // Line starts only — the marker also appears inside a tool_use input that
+    // quotes one of these entries.
+    if (start === 0 || tail[start - 1] === '\n') {
+      const end = tail.indexOf('\n', start)
+      const line = end < 0 ? tail.slice(start) : tail.slice(start, end)
+      try {
+        const value = (JSON.parse(line) as { favorite?: unknown }).favorite
+        if (typeof value === 'boolean') return value
+      } catch {
+        // Not an answer; keep looking behind it.
+      }
+    }
+    if (start === 0) break
     start = tail.lastIndexOf(marker, start - 1)
   }
-  if (start < 0) return undefined
-  const end = tail.indexOf('\n', start)
-  const line = end < 0 ? tail.slice(start) : tail.slice(start, end)
-  try {
-    const value = (JSON.parse(line) as { favorite?: unknown }).favorite
-    return typeof value === 'boolean' ? value : undefined
-  } catch {
-    return undefined
-  }
+  return undefined
 }
 
 /**
