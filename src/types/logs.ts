@@ -38,6 +38,7 @@ export type LogOption = {
   summary?: string // Optional conversation summary
   customTitle?: string // Optional user-set custom title
   tag?: string // Optional tag for the session (searchable in /resume)
+  favorite?: boolean // Starred by the user (Favorites tab in /resume)
   fileHistorySnapshots?: FileHistorySnapshot[] // Optional file history snapshots
   attributionSnapshots?: AttributionSnapshotMessage[] // Optional attribution snapshots
   contextCollapseCommits?: ContextCollapseCommitEntry[] // Ordered — commit B may reference commit A's summary
@@ -101,6 +102,20 @@ export type TagMessage = {
   type: 'tag'
   sessionId: UUID
   tag: string
+}
+
+/**
+ * Whether the user has starred this session in `/resume`.
+ *
+ * Separate from {@link TagMessage} rather than a reserved tag value, because a
+ * session carries exactly one tag: starring must not cost the user whatever tag
+ * they had put on it. Appended like every other bit of session metadata, so the
+ * last one written wins and unstarring is just another entry.
+ */
+export type FavoriteMessage = {
+  type: 'favorite'
+  sessionId: UUID
+  favorite: boolean
 }
 
 export type AgentNameMessage = {
@@ -302,6 +317,7 @@ export type Entry =
   | LastPromptMessage
   | TaskSummaryMessage
   | TagMessage
+  | FavoriteMessage
   | AgentNameMessage
   | AgentColorMessage
   | AgentSettingMessage

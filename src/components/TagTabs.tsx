@@ -4,7 +4,30 @@ import { Box, Text } from '../ink.js';
 import { truncateToWidth } from '../utils/format.js';
 
 // Constants for width calculations - derived from actual rendered strings
-const ALL_TAB_LABEL = 'All';
+/**
+ * Not a tag, so it renders without the `#` every other tab gets. Exported
+ * because LogSelector builds the tab list.
+ */
+export const FAVORITES_TAB_LABEL = '★ Favorites';
+
+/**
+ * Whether the tab at `index` names itself rather than a tag, and so renders
+ * without the `#` prefix.
+ *
+ * Decided by position, never by label: tags are user-supplied, so a session
+ * tagged `All` or `★ Favorites` would otherwise render as a second,
+ * identical-looking copy of a built-in tab. LogSelector builds the list as
+ * `All`, then the tags, then Favorites when anything is starred — so index 0 is
+ * the All tab, and the last index is Favorites exactly when the caller says the
+ * tab is there.
+ */
+function isLiteralTab(
+  index: number,
+  tabCount: number,
+  hasFavoritesTab: boolean,
+): boolean {
+  return index === 0 || (hasFavoritesTab && index === tabCount - 1);
+}
 const TAB_PADDING = 2; // Space before and after tab text: " {tab} "
 const HASH_PREFIX_LENGTH = 1; // "#" prefix for non-All tabs
 const LEFT_ARROW_PREFIX = '← ';
@@ -22,14 +45,16 @@ type Props = {
   selectedIndex: number;
   availableWidth: number;
   showAllProjects?: boolean;
+  /** Whether the last tab is the Favorites tab rather than a tag. */
+  hasFavoritesTab?: boolean;
 };
 
 /**
  * Calculate the display width of a tab
  */
-function getTabWidth(tab: string, maxWidth?: number): number {
-  if (tab === ALL_TAB_LABEL) {
-    return ALL_TAB_LABEL.length + TAB_PADDING;
+function getTabWidth(tab: string, isLiteral: boolean, maxWidth?: number): number {
+  if (isLiteral) {
+    return stringWidth(tab) + TAB_PADDING;
   }
   // For non-All tabs: " #{tag} " but truncate tag if needed
   const tagWidth = stringWidth(tab);
@@ -55,7 +80,8 @@ export function TagTabs({
   tabs,
   selectedIndex,
   availableWidth,
-  showAllProjects = false
+  showAllProjects = false,
+  hasFavoritesTab = false
 }: Props): React.ReactNode {
   const resumeLabel = showAllProjects ? 'Resume (All Projects)' : 'Resume';
   const resumeLabelWidth = resumeLabel.length + 1; // +1 for gap
@@ -69,7 +95,7 @@ export function TagTabs({
 
   // Calculate width of each tab, with truncation for very long tags
   const maxSingleTabWidth = Math.max(20, Math.floor(maxTabsWidth / 2)); // At least show half the space for one tab
-  const tabWidths = tabs.map(tab => getTabWidth(tab, maxSingleTabWidth));
+  const tabWidths = tabs.map((tab, i) => getTabWidth(tab, isLiteralTab(i, tabs.length, hasFavoritesTab), maxSingleTabWidth));
 
   // Find a window of tabs that fits, centered around selectedIndex
   let startIndex = 0;
@@ -123,8 +149,8 @@ export function TagTabs({
       {visibleTabs.map((tab_0, i_1) => {
       const actualIndex = visibleIndices[i_1]!;
       const isSelected = actualIndex === safeSelectedIndex;
-      const displayText = tab_0 === ALL_TAB_LABEL ? tab_0 : `#${truncateTag(tab_0, maxSingleTabWidth - TAB_PADDING)}`;
-      return <Text key={tab_0} backgroundColor={isSelected ? 'suggestion' : undefined} color={isSelected ? 'inverseText' : undefined} bold={isSelected}>
+      const displayText = isLiteralTab(actualIndex, tabs.length, hasFavoritesTab) ? tab_0 : `#${truncateTag(tab_0, maxSingleTabWidth)}`;
+      return <Text key={actualIndex} backgroundColor={isSelected ? 'suggestion' : undefined} color={isSelected ? 'inverseText' : undefined} bold={isSelected}>
             {' '}
             {displayText}{' '}
           </Text>;

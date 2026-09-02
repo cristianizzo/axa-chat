@@ -16,8 +16,8 @@ import type { LogOption, SerializedMessage } from '../types/logs.js';
 import { formatLogMetadata, truncateToWidth } from '../utils/format.js';
 import { getWorktreePaths } from '../utils/getWorktreePaths.js';
 import { getBranch } from '../utils/git.js';
-import { getLogDisplayTitle } from '../utils/log.js';
-import { getFirstMeaningfulUserMessageTextContent, getSessionIdFromLog, isCustomTitleEnabled, saveCustomTitle } from '../utils/sessionStorage.js';
+import { getLogDisplayTitle, logError } from '../utils/log.js';
+import { getFirstMeaningfulUserMessageTextContent, getSessionIdFromLog, isCustomTitleEnabled, saveCustomTitle, saveFavorite } from '../utils/sessionStorage.js';
 import { getTheme } from '../utils/theme.js';
 import { ConfigurableShortcutHint } from './ConfigurableShortcutHint.js';
 import { Select } from './CustomSelect/select.js';
@@ -27,7 +27,7 @@ import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js';
 import { SearchBox } from './SearchBox.js';
 import { SessionPreview } from './SessionPreview.js';
 import { Spinner } from './Spinner.js';
-import { TagTabs } from './TagTabs.js';
+import { FAVORITES_TAB_LABEL, TagTabs } from './TagTabs.js';
 import TextInput from './TextInput.js';
 import { type TreeNode, TreeSelect } from './ui/TreeSelect.js';
 type AgenticSearchState = {
@@ -141,7 +141,7 @@ function buildLogMetadata(log: LogOption, options?: {
   return childPadding + baseMetadata + projectSuffix;
 }
 export function LogSelector(t0) {
-  const $ = _c(247);
+  const $ = _c(257);
   const {
     logs,
     maxHeight: t1,
@@ -331,20 +331,41 @@ export function LogSelector(t0) {
   }
   const uniqueTags = t20;
   const hasTags = uniqueTags.length > 0;
+  let t20b;
+  if ($[247] !== logs) {
+    t20b = logs.some(_temp8);
+    $[247] = logs;
+    $[248] = t20b;
+  } else {
+    t20b = $[248];
+  }
+  // The Favorites tab only exists once something is starred: with no tags and
+  // no stars the header stays the plain "Resume Session" line it has always
+  // been. Ctrl+S is advertised in the hint bar regardless, so the tab is
+  // reachable from a standing start.
+  const hasFavorites = t20b;
   let t21;
-  if ($[21] !== hasTags || $[22] !== uniqueTags) {
-    t21 = hasTags ? ["All", ...uniqueTags] : [];
+  if ($[21] !== hasTags || $[22] !== uniqueTags || $[249] !== hasFavorites) {
+    t21 = hasTags || hasFavorites ? ["All", ...uniqueTags, ...(hasFavorites ? [FAVORITES_TAB_LABEL] : [])] : [];
     $[21] = hasTags;
     $[22] = uniqueTags;
+    $[249] = hasFavorites;
     $[23] = t21;
   } else {
     t21 = $[23];
   }
   const tagTabs = t21;
+  const hasTabs = tagTabs.length > 0;
   const effectiveTagIndex = tagTabs.length > 0 && selectedTagIndex < tagTabs.length ? selectedTagIndex : 0;
   const selectedTab = tagTabs[effectiveTagIndex];
-  const tagFilter = selectedTab === "All" ? undefined : selectedTab;
-  const tagTabsLines = hasTags ? 1 : 0;
+  // Identity by position, not by label: tags are user-supplied, so a session
+  // tagged "All" or "★ Favorites" would otherwise hijack the tab whose name it
+  // happens to share. The literal tabs sit at fixed ends of the list — "All"
+  // first, Favorites (when present) last.
+  const isAllTab = effectiveTagIndex === 0;
+  const favoritesOnly = hasFavorites && effectiveTagIndex === tagTabs.length - 1;
+  const tagFilter = isAllTab || favoritesOnly ? undefined : selectedTab;
+  const tagTabsLines = hasTabs ? 1 : 0;
   let filtered = logs;
   if (isResumeWithRenameEnabled) {
     let t22;
@@ -374,6 +395,17 @@ export function LogSelector(t0) {
       $[28] = t22;
     } else {
       t22 = $[28];
+    }
+    filtered = t22;
+  }
+  if (favoritesOnly) {
+    let t22;
+    if ($[250] !== filtered) {
+      t22 = filtered.filter(_temp8);
+      $[250] = filtered;
+      $[251] = t22;
+    } else {
+      t22 = $[251];
     }
     filtered = t22;
   }
@@ -1039,7 +1071,7 @@ export function LogSelector(t0) {
   }
   useKeybinding("confirm:no", t50, t52);
   let t53;
-  if ($[131] !== agenticSearchState.status || $[132] !== branchFilterEnabled || $[133] !== focusedLog || $[134] !== handleAgenticSearch || $[135] !== hasMultipleWorktrees || $[136] !== hasTags || $[137] !== isAgenticSearchOptionFocused || $[138] !== onAgenticSearch || $[139] !== onToggleAllProjects || $[140] !== searchQuery || $[141] !== setSearchQuery || $[142] !== showAllProjects || $[143] !== showAllWorktrees || $[144] !== tagTabs || $[145] !== uniqueTags || $[146] !== viewMode) {
+  if ($[131] !== agenticSearchState.status || $[132] !== branchFilterEnabled || $[133] !== focusedLog || $[134] !== handleAgenticSearch || $[135] !== hasMultipleWorktrees || $[136] !== hasTags || $[252] !== hasTabs || $[253] !== onLogsChanged || $[137] !== isAgenticSearchOptionFocused || $[138] !== onAgenticSearch || $[139] !== onToggleAllProjects || $[140] !== searchQuery || $[141] !== setSearchQuery || $[142] !== showAllProjects || $[143] !== showAllWorktrees || $[144] !== tagTabs || $[145] !== uniqueTags || $[146] !== viewMode) {
     t53 = (input, key) => {
       if (viewMode === "preview") {
         return;
@@ -1077,14 +1109,13 @@ export function LogSelector(t0) {
               }
             }
           }
-          if (hasTags && key.tab) {
+          if (hasTabs && key.tab) {
             const offset = key.shift ? -1 : 1;
             setSelectedTagIndex(prev => {
               const current = prev < tagTabs.length ? prev : 0;
               const newIndex = (current + tagTabs.length + offset) % tagTabs.length;
-              const newTab = tagTabs[newIndex];
               logEvent("tengu_session_tag_filter_changed", {
-                is_all: newTab === "All",
+                is_all: newIndex === 0,
                 tag_count: uniqueTags.length
               });
               return newIndex;
@@ -1119,7 +1150,23 @@ export function LogSelector(t0) {
                     enabled: true
                   });
                 } else {
-                  if (lowerInput === "r" && key.ctrl && focusedLog) {
+                  if (lowerInput === "s" && key.ctrl && focusedLog) {
+                    const starSessionId = getSessionIdFromLog(focusedLog);
+                    if (starSessionId) {
+                      const nowFavorite = !focusedLog.favorite;
+                      void saveFavorite(starSessionId, nowFavorite, focusedLog.fullPath).then(() => {
+                        // The row reads its star from `logs`, which is the
+                        // parent's; nothing here can flip it locally, so the
+                        // reload is what makes the keypress visible.
+                        onLogsChanged?.();
+                      })
+                      // A failed append would otherwise reject unhandled out of
+                      // a keypress. The list has nowhere to show an error, so
+                      // the star simply does not appear — which is the truth —
+                      // and the reason lands in the debug log.
+                      .catch(logError);
+                    }
+                  } else if (lowerInput === "r" && key.ctrl && focusedLog) {
                     setViewMode("rename");
                     setRenameValue("");
                     logEvent("tengu_session_rename_started", {});
@@ -1153,6 +1200,8 @@ export function LogSelector(t0) {
     $[134] = handleAgenticSearch;
     $[135] = hasMultipleWorktrees;
     $[136] = hasTags;
+    $[252] = hasTabs;
+    $[253] = onLogsChanged;
     $[137] = isAgenticSearchOptionFocused;
     $[138] = onAgenticSearch;
     $[139] = onToggleAllProjects;
@@ -1262,13 +1311,15 @@ export function LogSelector(t0) {
     t59 = $[165];
   }
   let t60;
-  if ($[166] !== columns || $[167] !== displayedLogs.length || $[168] !== effectiveTagIndex || $[169] !== focusedIndex || $[170] !== hasTags || $[171] !== showAllProjects || $[172] !== tagTabs || $[173] !== viewMode || $[174] !== visibleCount) {
-    t60 = hasTags ? <TagTabs tabs={tagTabs} selectedIndex={effectiveTagIndex} availableWidth={columns} showAllProjects={showAllProjects} /> : <Box flexShrink={0}><Text bold={true} color="suggestion">Resume Session{viewMode === "list" && displayedLogs.length > visibleCount && <Text dimColor={true}>{" "}({focusedIndex} of {displayedLogs.length})</Text>}</Text></Box>;
+  if ($[166] !== columns || $[167] !== displayedLogs.length || $[168] !== effectiveTagIndex || $[169] !== focusedIndex || $[170] !== hasTags || $[254] !== hasTabs || $[256] !== hasFavorites || $[171] !== showAllProjects || $[172] !== tagTabs || $[173] !== viewMode || $[174] !== visibleCount) {
+    t60 = hasTabs ? <TagTabs tabs={tagTabs} selectedIndex={effectiveTagIndex} availableWidth={columns} showAllProjects={showAllProjects} hasFavoritesTab={hasFavorites} /> : <Box flexShrink={0}><Text bold={true} color="suggestion">Resume Session{viewMode === "list" && displayedLogs.length > visibleCount && <Text dimColor={true}>{" "}({focusedIndex} of {displayedLogs.length})</Text>}</Text></Box>;
     $[166] = columns;
     $[167] = displayedLogs.length;
     $[168] = effectiveTagIndex;
     $[169] = focusedIndex;
     $[170] = hasTags;
+    $[254] = hasTabs;
+    $[256] = hasFavorites;
     $[171] = showAllProjects;
     $[172] = tagTabs;
     $[173] = viewMode;
@@ -1408,12 +1459,13 @@ export function LogSelector(t0) {
     t70 = $[221];
   }
   let t71;
-  if ($[222] !== agenticSearchState.status || $[223] !== currentBranch || $[224] !== exitState.keyName || $[225] !== exitState.pending || $[226] !== getExpandCollapseHint || $[227] !== hasMultipleWorktrees || $[228] !== isAgenticSearchOptionFocused || $[229] !== isSearching || $[230] !== onToggleAllProjects || $[231] !== showAllProjects || $[232] !== showAllWorktrees || $[233] !== viewMode) {
-    t71 = <Box paddingLeft={2}>{exitState.pending ? <Text dimColor={true}>Press {exitState.keyName} again to exit</Text> : viewMode === "rename" ? <Text dimColor={true}><Byline><KeyboardShortcutHint shortcut="Enter" action="save" /><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" /></Byline></Text> : agenticSearchState.status === "searching" ? <Text dimColor={true}><Byline><Text>Searching with Claude…</Text><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" /></Byline></Text> : isAgenticSearchOptionFocused ? <Text dimColor={true}><Byline><KeyboardShortcutHint shortcut="Enter" action="search" /><KeyboardShortcutHint shortcut={"\u2193"} action="skip" /><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" /></Byline></Text> : viewMode === "search" ? <Text dimColor={true}><Byline><Text>{isSearching && false ? "Searching\u2026" : "Type to Search"}</Text><KeyboardShortcutHint shortcut="Enter" action="select" /><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="clear" /></Byline></Text> : <Text dimColor={true}><Byline>{onToggleAllProjects && <KeyboardShortcutHint shortcut="Ctrl+A" action={`show ${showAllProjects ? "current dir" : "all projects"}`} />}{currentBranch && <KeyboardShortcutHint shortcut="Ctrl+B" action="toggle branch" />}{hasMultipleWorktrees && <KeyboardShortcutHint shortcut="Ctrl+W" action={`show ${showAllWorktrees ? "current worktree" : "all worktrees"}`} />}<KeyboardShortcutHint shortcut="Ctrl+V" action="preview" /><KeyboardShortcutHint shortcut="Ctrl+R" action="rename" /><Text>Type to search</Text><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" />{getExpandCollapseHint() && <Text>{getExpandCollapseHint()}</Text>}</Byline></Text>}</Box>;
+  if ($[222] !== agenticSearchState.status || $[223] !== currentBranch || $[224] !== exitState.keyName || $[225] !== exitState.pending || $[255] !== focusedLog?.favorite || $[226] !== getExpandCollapseHint || $[227] !== hasMultipleWorktrees || $[228] !== isAgenticSearchOptionFocused || $[229] !== isSearching || $[230] !== onToggleAllProjects || $[231] !== showAllProjects || $[232] !== showAllWorktrees || $[233] !== viewMode) {
+    t71 = <Box paddingLeft={2}>{exitState.pending ? <Text dimColor={true}>Press {exitState.keyName} again to exit</Text> : viewMode === "rename" ? <Text dimColor={true}><Byline><KeyboardShortcutHint shortcut="Enter" action="save" /><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" /></Byline></Text> : agenticSearchState.status === "searching" ? <Text dimColor={true}><Byline><Text>Searching with Claude…</Text><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" /></Byline></Text> : isAgenticSearchOptionFocused ? <Text dimColor={true}><Byline><KeyboardShortcutHint shortcut="Enter" action="search" /><KeyboardShortcutHint shortcut={"\u2193"} action="skip" /><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" /></Byline></Text> : viewMode === "search" ? <Text dimColor={true}><Byline><Text>{isSearching && false ? "Searching\u2026" : "Type to Search"}</Text><KeyboardShortcutHint shortcut="Enter" action="select" /><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="clear" /></Byline></Text> : <Text dimColor={true}><Byline>{onToggleAllProjects && <KeyboardShortcutHint shortcut="Ctrl+A" action={`show ${showAllProjects ? "current dir" : "all projects"}`} />}{currentBranch && <KeyboardShortcutHint shortcut="Ctrl+B" action="toggle branch" />}{hasMultipleWorktrees && <KeyboardShortcutHint shortcut="Ctrl+W" action={`show ${showAllWorktrees ? "current worktree" : "all worktrees"}`} />}<KeyboardShortcutHint shortcut="Ctrl+V" action="preview" /><KeyboardShortcutHint shortcut="Ctrl+R" action="rename" /><KeyboardShortcutHint shortcut="Ctrl+S" action={focusedLog?.favorite ? "unfavorite" : "favorite"} /><Text>Type to search</Text><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" />{getExpandCollapseHint() && <Text>{getExpandCollapseHint()}</Text>}</Byline></Text>}</Box>;
     $[222] = agenticSearchState.status;
     $[223] = currentBranch;
     $[224] = exitState.keyName;
     $[225] = exitState.pending;
+    $[255] = focusedLog?.favorite;
     $[226] = getExpandCollapseHint;
     $[227] = hasMultipleWorktrees;
     $[228] = isAgenticSearchOptionFocused;
@@ -1451,6 +1503,9 @@ export function LogSelector(t0) {
  * Extracts searchable text content from a message.
  * Handles both string content and structured content blocks.
  */
+function _temp8(log_7) {
+  return log_7.favorite === true;
+}
 function _temp7(r_0) {
   return r_0.log;
 }
