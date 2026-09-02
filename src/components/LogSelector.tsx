@@ -16,7 +16,7 @@ import type { LogOption, SerializedMessage } from '../types/logs.js';
 import { formatLogMetadata, truncateToWidth } from '../utils/format.js';
 import { getWorktreePaths } from '../utils/getWorktreePaths.js';
 import { getBranch } from '../utils/git.js';
-import { getLogDisplayTitle } from '../utils/log.js';
+import { getLogDisplayTitle, logError } from '../utils/log.js';
 import { getFirstMeaningfulUserMessageTextContent, getSessionIdFromLog, isCustomTitleEnabled, saveCustomTitle, saveFavorite } from '../utils/sessionStorage.js';
 import { getTheme } from '../utils/theme.js';
 import { ConfigurableShortcutHint } from './ConfigurableShortcutHint.js';
@@ -1159,7 +1159,12 @@ export function LogSelector(t0) {
                         // parent's; nothing here can flip it locally, so the
                         // reload is what makes the keypress visible.
                         onLogsChanged?.();
-                      });
+                      })
+                      // A failed append would otherwise reject unhandled out of
+                      // a keypress. The list has nowhere to show an error, so
+                      // the star simply does not appear — which is the truth —
+                      // and the reason lands in the debug log.
+                      .catch(logError);
                     }
                   } else if (lowerInput === "r" && key.ctrl && focusedLog) {
                     setViewMode("rename");
