@@ -532,6 +532,11 @@ const REMOTE_FLUSH_INTERVAL_MS = 10
 class Project {
   // Minimal cache for current session only (not all sessions)
   currentSessionTag: string | undefined
+  // Tri-state like the worktree field below: undefined = never starred or
+  // unstarred, so there is nothing to re-append. `false` is a real value and
+  // must be re-appended, or an unstar could be evicted from the tail window
+  // while an older `true` survives it and the session looks starred again.
+  currentSessionFavorite: boolean | undefined
   currentSessionTitle: string | undefined
   currentSessionAgentName: string | undefined
   currentSessionAgentColor: string | undefined
@@ -711,11 +716,13 @@ class Project {
     // `--resume "<title>"` finds nothing and silently drops to the picker.
     // Exit cleanup re-appends, which hid this behind clean shutdowns; a crash,
     // a kill, or simply reading the file from another process mid-session
-    // leaves the title unfindable. Only titled/tagged sessions pay the sync
-    // tail read: an untitled session has nothing to keep alive.
+    // leaves the title unfindable. Only titled/tagged/starred sessions pay the
+    // sync tail read: an untitled session has nothing to keep alive.
     if (
       this.bytesSinceMetadataReAppend >= this.METADATA_REAPPEND_INTERVAL_BYTES &&
-      (this.currentSessionTitle || this.currentSessionTag)
+      (this.currentSessionTitle ||
+        this.currentSessionTag ||
+        this.currentSessionFavorite !== undefined)
     ) {
       try {
         this.reAppendSessionMetadata()
@@ -813,6 +820,23 @@ class Project {
         this.currentSessionTag = tailTag || undefined
       }
     }
+    // Starring happens in /resume, which is another process's view of this
+    // file, so the tail is authoritative here for the same reason it is for
+    // title and tag.
+    const favoriteLine = tailLines.findLast(l =>
+      l.startsWith('{"type":"favorite"'),
+    )
+    if (favoriteLine) {
+      try {
+        const tailFavorite = (JSON.parse(favoriteLine) as { favorite?: unknown })
+          .favorite
+        if (typeof tailFavorite === 'boolean') {
+          this.currentSessionFavorite = tailFavorite
+        }
+      } catch {
+        // Half-written line: keep the cache, which is the only other source.
+      }
+    }
 
     // lastPrompt is re-appended so readLiteMetadata can show what the
     // user was most recently doing. Written first so customTitle/tag/etc
@@ -837,6 +861,16 @@ class Project {
       appendEntryToFile(this.sessionFile, {
         type: 'tag',
         tag: this.currentSessionTag,
+        sessionId,
+      })
+    }
+    // `!== undefined` rather than a truthiness test: `false` is the answer that
+    // says "not starred", and dropping it would let an evicted unstar be
+    // outlived by the `true` it was meant to overrule.
+    if (this.currentSessionFavorite !== undefined) {
+      appendEntryToFile(this.sessionFile, {
+        type: 'favorite',
+        favorite: this.currentSessionFavorite,
         sessionId,
       })
     }
@@ -1223,6 +1257,11 @@ class Project {
       void this.enqueueWrite(sessionFile, entry)
     } else if (entry.type === 'tag') {
       // Tags can always be appended
+      void this.enqueueWrite(sessionFile, entry)
+    } else if (entry.type === 'favorite') {
+      // Stars can always be appended. Without a branch here it would fall
+      // through to the message path, which loads the session's messages and
+      // deduplicates on a uuid this entry does not have.
       void this.enqueueWrite(sessionFile, entry)
     } else if (entry.type === 'agent-name') {
       // Agent names can always be appended
@@ -2353,6 +2392,7 @@ export async function loadTranscriptFromFile(
       summaries,
       customTitles,
       tags,
+      favorites,
       fileHistorySnapshots,
       attributionSnapshots,
       contextCollapseCommits,
@@ -2395,6 +2435,7 @@ export async function loadTranscriptFromFile(
         undefined,
         contentReplacements.get(sessionId) ?? [],
       ),
+      favorite: favorites.get(sessionId),
       contextCollapseCommits: contextCollapseCommits.filter(
         e => e.sessionId === sessionId,
       ),
@@ -2752,6 +2793,30 @@ export async function saveTag(sessionId: UUID, tag: string, fullPath?: string) {
 }
 
 /**
+ * Star or unstar a session, for the Favorites tab in `/resume`.
+ *
+ * Unstarring appends `favorite: false` rather than trying to remove the earlier
+ * line: the transcript is append-only, and every reader here takes the last
+ * matching entry, so the newest answer wins.
+ */
+export async function saveFavorite(
+  sessionId: UUID,
+  favorite: boolean,
+  fullPath?: string,
+) {
+  // Fall back to computed path if fullPath is not provided
+  const resolvedPath = fullPath ?? getTranscriptPathForSession(sessionId)
+  appendEntryToFile(resolvedPath, { type: 'favorite', favorite, sessionId })
+  // Only when starring the session we are in — /resume usually stars some other
+  // one, whose file nothing is appending to, so its entry stays at EOF and
+  // needs no keeping alive.
+  if (sessionId === getSessionId()) {
+    getProject().currentSessionFavorite = favorite
+  }
+  logEvent('tengu_session_favorited', {})
+}
+
+/**
  * Link a session to a GitHub pull request.
  * This stores the PR number, URL, and repository for tracking and navigation.
  */
@@ -2811,6 +2876,7 @@ export function getCurrentSessionAgentColor(): string | undefined {
 export function restoreSessionMetadata(meta: {
   customTitle?: string
   tag?: string
+  favorite?: boolean
   agentName?: string
   agentColor?: string
   agentSetting?: string
@@ -2825,6 +2891,10 @@ export function restoreSessionMetadata(meta: {
   // session's title. REPL.tsx clears before calling, so /resume is unaffected.
   if (meta.customTitle) project.currentSessionTitle ??= meta.customTitle
   if (meta.tag !== undefined) project.currentSessionTag = meta.tag || undefined
+  // Resuming a starred session has to load the star, or the first re-append
+  // would write nothing and the eviction this guards against would happen
+  // anyway.
+  if (meta.favorite !== undefined) project.currentSessionFavorite = meta.favorite
   if (meta.agentName) project.currentSessionAgentName = meta.agentName
   if (meta.agentColor) project.currentSessionAgentColor = meta.agentColor
   if (meta.agentSetting) project.currentSessionAgentSetting = meta.agentSetting
@@ -2846,6 +2916,7 @@ export function clearSessionMetadata(): void {
   const project = getProject()
   project.currentSessionTitle = undefined
   project.currentSessionTag = undefined
+  project.currentSessionFavorite = undefined
   project.currentSessionAgentName = undefined
   project.currentSessionAgentColor = undefined
   project.currentSessionLastPrompt = undefined
@@ -3017,6 +3088,7 @@ export async function loadFullLog(log: LogOption): Promise<LogOption> {
       summaries,
       customTitles,
       tags,
+      favorites,
       agentNames,
       agentColors,
       agentSettings,
@@ -3063,6 +3135,13 @@ export async function loadFullLog(log: LogOption): Promise<LogOption> {
         : log.summary,
       customTitle: sessionId ? customTitles.get(sessionId) : log.customTitle,
       tag: sessionId ? tags.get(sessionId) : log.tag,
+      // `has`, not `get`, like worktreeSession below: a session that was never
+      // starred has no entry, and overwriting `log.favorite` with the resulting
+      // undefined would discard whatever the caller already knew.
+      favorite:
+        sessionId && favorites.has(sessionId)
+          ? favorites.get(sessionId)
+          : log.favorite,
       agentName: sessionId ? agentNames.get(sessionId) : log.agentName,
       agentColor: sessionId ? agentColors.get(sessionId) : log.agentColor,
       agentSetting: sessionId ? agentSettings.get(sessionId) : log.agentSetting,
@@ -3167,6 +3246,7 @@ const METADATA_TYPE_MARKERS = [
   '"type":"summary"',
   '"type":"custom-title"',
   '"type":"tag"',
+  '"type":"favorite"',
   '"type":"agent-name"',
   '"type":"agent-color"',
   '"type":"agent-setting"',
@@ -3530,6 +3610,7 @@ export async function loadTranscriptFile(
   summaries: Map<UUID, string>
   customTitles: Map<UUID, string>
   tags: Map<UUID, string>
+  favorites: Map<UUID, boolean>
   agentNames: Map<UUID, string>
   agentColors: Map<UUID, string>
   agentSettings: Map<UUID, string>
@@ -3550,6 +3631,10 @@ export async function loadTranscriptFile(
   const summaries = new Map<UUID, string>()
   const customTitles = new Map<UUID, string>()
   const tags = new Map<UUID, string>()
+  // Unstarring writes `favorite: false`, so absent and `false` differ: absent
+  // means the session was never starred, and only absent lets a caller keep
+  // whatever it already had.
+  const favorites = new Map<UUID, boolean>()
   const agentNames = new Map<UUID, string>()
   const agentColors = new Map<UUID, string>()
   const agentSettings = new Map<UUID, string>()
@@ -3646,6 +3731,8 @@ export async function loadTranscriptFile(
           customTitles.set(entry.sessionId, entry.customTitle)
         } else if (entry.type === 'tag' && entry.sessionId) {
           tags.set(entry.sessionId, entry.tag)
+        } else if (entry.type === 'favorite' && entry.sessionId) {
+          favorites.set(entry.sessionId, entry.favorite)
         } else if (entry.type === 'agent-name' && entry.sessionId) {
           agentNames.set(entry.sessionId, entry.agentName)
         } else if (entry.type === 'agent-color' && entry.sessionId) {
@@ -3714,6 +3801,8 @@ export async function loadTranscriptFile(
         customTitles.set(entry.sessionId, entry.customTitle)
       } else if (entry.type === 'tag' && entry.sessionId) {
         tags.set(entry.sessionId, entry.tag)
+      } else if (entry.type === 'favorite' && entry.sessionId) {
+        favorites.set(entry.sessionId, entry.favorite)
       } else if (entry.type === 'agent-name' && entry.sessionId) {
         agentNames.set(entry.sessionId, entry.agentName)
       } else if (entry.type === 'agent-color' && entry.sessionId) {
@@ -3847,6 +3936,7 @@ export async function loadTranscriptFile(
     summaries,
     customTitles,
     tags,
+    favorites,
     agentNames,
     agentColors,
     agentSettings,
@@ -3873,6 +3963,7 @@ async function loadSessionFile(sessionId: UUID): Promise<{
   summaries: Map<UUID, string>
   customTitles: Map<UUID, string>
   tags: Map<UUID, string>
+  favorites: Map<UUID, boolean>
   agentSettings: Map<UUID, string>
   worktreeStates: Map<UUID, PersistedWorktreeSession | null>
   fileHistorySnapshots: Map<UUID, FileHistorySnapshotMessage>
@@ -3928,6 +4019,7 @@ export async function getLastSessionLog(
     summaries,
     customTitles,
     tags,
+    favorites,
     agentSettings,
     worktreeStates,
     fileHistorySnapshots,
@@ -3973,6 +4065,7 @@ export async function getLastSessionLog(
       agentSetting,
       contentReplacements.get(sessionId) ?? [],
     ),
+    favorite: favorites.get(sessionId),
     worktreeSession: worktreeStates.get(sessionId),
     contextCollapseCommits: contextCollapseCommits.filter(
       e => e.sessionId === sessionId,
@@ -4638,6 +4731,7 @@ type LiteMetadata = {
   customTitle?: string
   summary?: string
   tag?: string
+  favorite?: boolean
   agentSetting?: string
   prNumber?: number
   prUrl?: string
@@ -4657,6 +4751,7 @@ export async function loadAllLogsFromSessionFile(
     summaries,
     customTitles,
     tags,
+    favorites,
     agentNames,
     agentColors,
     agentSettings,
@@ -4722,6 +4817,7 @@ export async function loadAllLogsFromSessionFile(
       summary: summaries.get(leafMessage.uuid),
       customTitle: customTitles.get(sessionId),
       tag: tags.get(sessionId),
+      favorite: favorites.get(sessionId),
       agentName: agentNames.get(sessionId),
       agentColor: agentColors.get(sessionId),
       agentSetting: agentSettings.get(sessionId),
@@ -4828,6 +4924,12 @@ async function readLiteMetadata(
     extractLastJsonStringField(head, 'aiTitle')
   const summary = extractLastJsonStringField(tail, 'summary')
   const tag = extractLastJsonStringField(tail, 'tag')
+  // Scoped to the {"type":"favorite"} line rather than scanning the whole tail
+  // for the field, because `favorite` is an ordinary word that a tool_use input
+  // could carry — the same collision the tag extraction is warned about at
+  // listSessionsImpl.ts. Parsed rather than string-matched because the value is
+  // a boolean, and the last entry wins, which is what makes unstarring work.
+  const favorite = isFavoriteInTail(tail)
   const gitBranch =
     extractLastJsonStringField(tail, 'gitBranch') ??
     extractJsonStringField(head, 'gitBranch')
@@ -4858,10 +4960,30 @@ async function readLiteMetadata(
     customTitle,
     summary,
     tag,
+    favorite,
     agentSetting,
     prNumber,
     prUrl,
     prRepository,
+  }
+}
+
+/**
+ * `true` only for a well-formed favorite entry that says so.
+ *
+ * A tail read can start or end mid-line — the window is a byte offset, not a
+ * line boundary — so an unparseable line is expected rather than exceptional,
+ * and "not starred" is the right answer for one we cannot read.
+ */
+function isFavoriteInTail(tail: string): boolean {
+  const line = tail
+    .split('\n')
+    .findLast(l => l.startsWith('{"type":"favorite"'))
+  if (!line) return false
+  try {
+    return (JSON.parse(line) as { favorite?: unknown }).favorite === true
+  } catch {
+    return false
   }
 }
 
@@ -5091,6 +5213,7 @@ async function enrichLog(
     customTitle: meta.customTitle,
     summary: meta.summary,
     tag: meta.tag,
+    favorite: meta.favorite,
     agentSetting: meta.agentSetting,
     prNumber: meta.prNumber,
     prUrl: meta.prUrl,

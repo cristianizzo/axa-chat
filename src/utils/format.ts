@@ -198,13 +198,15 @@ export function formatRelativeTimeAgo(
 }
 
 /**
- * Formats log metadata for display (time, size or message count, branch, tag, PR)
+ * Formats log metadata for display (time, size or message count, branch, star,
+ * tag, PR)
  */
 export function formatLogMetadata(log: {
   modified: Date
   messageCount: number
   fileSize?: number
   gitBranch?: string
+  favorite?: boolean
   tag?: string
   agentSetting?: string
   prNumber?: number
@@ -219,6 +221,9 @@ export function formatLogMetadata(log: {
     ...(log.gitBranch ? [log.gitBranch] : []),
     sizeOrCount,
   ]
+  if (log.favorite) {
+    parts.push('★')
+  }
   if (log.tag) {
     parts.push(`#${log.tag}`)
   }

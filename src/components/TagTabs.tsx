@@ -5,6 +5,14 @@ import { truncateToWidth } from '../utils/format.js';
 
 // Constants for width calculations - derived from actual rendered strings
 const ALL_TAB_LABEL = 'All';
+/**
+ * Not a tag, so it renders without the `#` every other tab gets. Exported
+ * because LogSelector both builds the tab list and compares against the
+ * selected label to decide it is filtering stars rather than a tag.
+ */
+export const FAVORITES_TAB_LABEL = '★ Favorites';
+// Tabs that name themselves rather than a tag.
+const LITERAL_TAB_LABELS = new Set([ALL_TAB_LABEL, FAVORITES_TAB_LABEL]);
 const TAB_PADDING = 2; // Space before and after tab text: " {tab} "
 const HASH_PREFIX_LENGTH = 1; // "#" prefix for non-All tabs
 const LEFT_ARROW_PREFIX = '← ';
@@ -28,8 +36,8 @@ type Props = {
  * Calculate the display width of a tab
  */
 function getTabWidth(tab: string, maxWidth?: number): number {
-  if (tab === ALL_TAB_LABEL) {
-    return ALL_TAB_LABEL.length + TAB_PADDING;
+  if (LITERAL_TAB_LABELS.has(tab)) {
+    return stringWidth(tab) + TAB_PADDING;
   }
   // For non-All tabs: " #{tag} " but truncate tag if needed
   const tagWidth = stringWidth(tab);
@@ -123,7 +131,7 @@ export function TagTabs({
       {visibleTabs.map((tab_0, i_1) => {
       const actualIndex = visibleIndices[i_1]!;
       const isSelected = actualIndex === safeSelectedIndex;
-      const displayText = tab_0 === ALL_TAB_LABEL ? tab_0 : `#${truncateTag(tab_0, maxSingleTabWidth - TAB_PADDING)}`;
+      const displayText = LITERAL_TAB_LABELS.has(tab_0) ? tab_0 : `#${truncateTag(tab_0, maxSingleTabWidth - TAB_PADDING)}`;
       return <Text key={tab_0} backgroundColor={isSelected ? 'suggestion' : undefined} color={isSelected ? 'inverseText' : undefined} bold={isSelected}>
             {' '}
             {displayText}{' '}
