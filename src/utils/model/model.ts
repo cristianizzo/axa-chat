@@ -311,6 +311,16 @@ export function getRefusalFallbackModel(model: ModelName): ModelName | undefined
   return undefined
 }
 
+// @[MODEL LAUNCH]: Update the default Fable model.
+/**
+ * The version the `fable` alias resolves to. Unlike Opus and Sonnet there is no
+ * 3P-lag branch: every Fable config in ALL_MODEL_CONFIGS carries a Bedrock,
+ * Vertex and Foundry ID, so the current version is servable everywhere.
+ */
+export function getDefaultFableModel(): ModelName {
+  return getModelStrings().fable51
+}
+
 // @[MODEL LAUNCH]: Update the default Haiku model (3P providers may lag so keep defaults unchanged).
 export function getDefaultHaikuModel(): ModelName {
   if (process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL) {
@@ -766,7 +776,7 @@ export function parseUserSpecifiedModel(
       case 'opus':
         return getDefaultOpusModel() + (has1mTag ? '[1m]' : '')
       case 'fable':
-        return getModelStrings().fable51 + (has1mTag ? '[1m]' : '')
+        return getDefaultFableModel() + (has1mTag ? '[1m]' : '')
       case 'mythos':
         return getModelStrings().mythos5 + (has1mTag ? '[1m]' : '')
       case 'best':
