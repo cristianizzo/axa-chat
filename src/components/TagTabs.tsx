@@ -149,7 +149,7 @@ export function TagTabs({
       {visibleTabs.map((tab_0, i_1) => {
       const actualIndex = visibleIndices[i_1]!;
       const isSelected = actualIndex === safeSelectedIndex;
-      const displayText = isLiteralTab(actualIndex, tabs.length, hasFavoritesTab) ? tab_0 : `#${truncateTag(tab_0, maxSingleTabWidth - TAB_PADDING)}`;
+      const displayText = isLiteralTab(actualIndex, tabs.length, hasFavoritesTab) ? tab_0 : `#${truncateTag(tab_0, maxSingleTabWidth)}`;
       return <Text key={actualIndex} backgroundColor={isSelected ? 'suggestion' : undefined} color={isSelected ? 'inverseText' : undefined} bold={isSelected}>
             {' '}
             {displayText}{' '}
