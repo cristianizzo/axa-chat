@@ -4,15 +4,30 @@ import { Box, Text } from '../ink.js';
 import { truncateToWidth } from '../utils/format.js';
 
 // Constants for width calculations - derived from actual rendered strings
-const ALL_TAB_LABEL = 'All';
 /**
  * Not a tag, so it renders without the `#` every other tab gets. Exported
- * because LogSelector both builds the tab list and compares against the
- * selected label to decide it is filtering stars rather than a tag.
+ * because LogSelector builds the tab list.
  */
 export const FAVORITES_TAB_LABEL = '★ Favorites';
-// Tabs that name themselves rather than a tag.
-const LITERAL_TAB_LABELS = new Set([ALL_TAB_LABEL, FAVORITES_TAB_LABEL]);
+
+/**
+ * Whether the tab at `index` names itself rather than a tag, and so renders
+ * without the `#` prefix.
+ *
+ * Decided by position wherever position settles it: tags are user-supplied, so
+ * a session tagged `All` would otherwise render as a second, identical-looking
+ * "All" tab. LogSelector always builds the list as `All`, then the tags, then
+ * Favorites when anything is starred — index 0 is therefore always the literal
+ * All. Favorites can only ever be last, but a tag could also land last, so that
+ * end still needs the label to disambiguate; the cost of getting it wrong is a
+ * missing `#`, never a wrong filter (LogSelector filters by index).
+ */
+function isLiteralTab(tabs: string[], index: number): boolean {
+  if (index === 0) {
+    return true;
+  }
+  return index === tabs.length - 1 && tabs[index] === FAVORITES_TAB_LABEL;
+}
 const TAB_PADDING = 2; // Space before and after tab text: " {tab} "
 const HASH_PREFIX_LENGTH = 1; // "#" prefix for non-All tabs
 const LEFT_ARROW_PREFIX = '← ';
@@ -35,8 +50,8 @@ type Props = {
 /**
  * Calculate the display width of a tab
  */
-function getTabWidth(tab: string, maxWidth?: number): number {
-  if (LITERAL_TAB_LABELS.has(tab)) {
+function getTabWidth(tab: string, isLiteral: boolean, maxWidth?: number): number {
+  if (isLiteral) {
     return stringWidth(tab) + TAB_PADDING;
   }
   // For non-All tabs: " #{tag} " but truncate tag if needed
@@ -77,7 +92,7 @@ export function TagTabs({
 
   // Calculate width of each tab, with truncation for very long tags
   const maxSingleTabWidth = Math.max(20, Math.floor(maxTabsWidth / 2)); // At least show half the space for one tab
-  const tabWidths = tabs.map(tab => getTabWidth(tab, maxSingleTabWidth));
+  const tabWidths = tabs.map((tab, i) => getTabWidth(tab, isLiteralTab(tabs, i), maxSingleTabWidth));
 
   // Find a window of tabs that fits, centered around selectedIndex
   let startIndex = 0;
@@ -131,8 +146,8 @@ export function TagTabs({
       {visibleTabs.map((tab_0, i_1) => {
       const actualIndex = visibleIndices[i_1]!;
       const isSelected = actualIndex === safeSelectedIndex;
-      const displayText = LITERAL_TAB_LABELS.has(tab_0) ? tab_0 : `#${truncateTag(tab_0, maxSingleTabWidth - TAB_PADDING)}`;
-      return <Text key={tab_0} backgroundColor={isSelected ? 'suggestion' : undefined} color={isSelected ? 'inverseText' : undefined} bold={isSelected}>
+      const displayText = isLiteralTab(tabs, actualIndex) ? tab_0 : `#${truncateTag(tab_0, maxSingleTabWidth - TAB_PADDING)}`;
+      return <Text key={actualIndex} backgroundColor={isSelected ? 'suggestion' : undefined} color={isSelected ? 'inverseText' : undefined} bold={isSelected}>
             {' '}
             {displayText}{' '}
           </Text>;

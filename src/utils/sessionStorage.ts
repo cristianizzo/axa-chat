@@ -3731,7 +3731,15 @@ export async function loadTranscriptFile(
           customTitles.set(entry.sessionId, entry.customTitle)
         } else if (entry.type === 'tag' && entry.sessionId) {
           tags.set(entry.sessionId, entry.tag)
-        } else if (entry.type === 'favorite' && entry.sessionId) {
+        } else if (
+          entry.type === 'favorite' &&
+          entry.sessionId &&
+          typeof entry.favorite === 'boolean'
+        ) {
+          // Entries are cast, not validated, so a malformed line could put a
+          // non-boolean here. Callers distinguish absent from `false` with
+          // `has()`, which a junk value would satisfy while `get()` returned
+          // something meaningless — so a junk value must not create the key.
           favorites.set(entry.sessionId, entry.favorite)
         } else if (entry.type === 'agent-name' && entry.sessionId) {
           agentNames.set(entry.sessionId, entry.agentName)
@@ -3801,7 +3809,11 @@ export async function loadTranscriptFile(
         customTitles.set(entry.sessionId, entry.customTitle)
       } else if (entry.type === 'tag' && entry.sessionId) {
         tags.set(entry.sessionId, entry.tag)
-      } else if (entry.type === 'favorite' && entry.sessionId) {
+      } else if (
+        entry.type === 'favorite' &&
+        entry.sessionId &&
+        typeof entry.favorite === 'boolean'
+      ) {
         favorites.set(entry.sessionId, entry.favorite)
       } else if (entry.type === 'agent-name' && entry.sessionId) {
         agentNames.set(entry.sessionId, entry.agentName)
@@ -4929,7 +4941,7 @@ async function readLiteMetadata(
   // could carry — the same collision the tag extraction is warned about at
   // listSessionsImpl.ts. Parsed rather than string-matched because the value is
   // a boolean, and the last entry wins, which is what makes unstarring work.
-  const favorite = isFavoriteInTail(tail)
+  const favorite = favoriteFromTail(tail)
   const gitBranch =
     extractLastJsonStringField(tail, 'gitBranch') ??
     extractJsonStringField(head, 'gitBranch')
@@ -4969,21 +4981,28 @@ async function readLiteMetadata(
 }
 
 /**
- * `true` only for a well-formed favorite entry that says so.
+ * The session's own answer about being starred, or `undefined` if it never gave
+ * one.
+ *
+ * Absent must not collapse to `false`: `restoreSessionMetadata` caches any
+ * defined value, and `reAppendSessionMetadata` re-appends whatever is cached,
+ * so answering `false` for a session that was never starred would grow a
+ * `favorite:false` line on the transcript of every resumed session forever.
  *
  * A tail read can start or end mid-line — the window is a byte offset, not a
  * line boundary — so an unparseable line is expected rather than exceptional,
- * and "not starred" is the right answer for one we cannot read.
+ * and it is treated as no answer rather than as a negative one.
  */
-function isFavoriteInTail(tail: string): boolean {
+function favoriteFromTail(tail: string): boolean | undefined {
   const line = tail
     .split('\n')
     .findLast(l => l.startsWith('{"type":"favorite"'))
-  if (!line) return false
+  if (!line) return undefined
   try {
-    return (JSON.parse(line) as { favorite?: unknown }).favorite === true
+    const value = (JSON.parse(line) as { favorite?: unknown }).favorite
+    return typeof value === 'boolean' ? value : undefined
   } catch {
-    return false
+    return undefined
   }
 }
 

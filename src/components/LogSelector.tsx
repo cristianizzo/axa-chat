@@ -358,8 +358,13 @@ export function LogSelector(t0) {
   const hasTabs = tagTabs.length > 0;
   const effectiveTagIndex = tagTabs.length > 0 && selectedTagIndex < tagTabs.length ? selectedTagIndex : 0;
   const selectedTab = tagTabs[effectiveTagIndex];
-  const favoritesOnly = selectedTab === FAVORITES_TAB_LABEL;
-  const tagFilter = selectedTab === "All" || favoritesOnly ? undefined : selectedTab;
+  // Identity by position, not by label: tags are user-supplied, so a session
+  // tagged "All" or "★ Favorites" would otherwise hijack the tab whose name it
+  // happens to share. The literal tabs sit at fixed ends of the list — "All"
+  // first, Favorites (when present) last.
+  const isAllTab = effectiveTagIndex === 0;
+  const favoritesOnly = hasFavorites && effectiveTagIndex === tagTabs.length - 1;
+  const tagFilter = isAllTab || favoritesOnly ? undefined : selectedTab;
   const tagTabsLines = hasTabs ? 1 : 0;
   let filtered = logs;
   if (isResumeWithRenameEnabled) {
@@ -1109,9 +1114,8 @@ export function LogSelector(t0) {
             setSelectedTagIndex(prev => {
               const current = prev < tagTabs.length ? prev : 0;
               const newIndex = (current + tagTabs.length + offset) % tagTabs.length;
-              const newTab = tagTabs[newIndex];
               logEvent("tengu_session_tag_filter_changed", {
-                is_all: newTab === "All",
+                is_all: newIndex === 0,
                 tag_count: uniqueTags.length
               });
               return newIndex;
