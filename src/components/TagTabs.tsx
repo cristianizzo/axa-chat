@@ -14,19 +14,19 @@ export const FAVORITES_TAB_LABEL = '★ Favorites';
  * Whether the tab at `index` names itself rather than a tag, and so renders
  * without the `#` prefix.
  *
- * Decided by position wherever position settles it: tags are user-supplied, so
- * a session tagged `All` would otherwise render as a second, identical-looking
- * "All" tab. LogSelector always builds the list as `All`, then the tags, then
- * Favorites when anything is starred — index 0 is therefore always the literal
- * All. Favorites can only ever be last, but a tag could also land last, so that
- * end still needs the label to disambiguate; the cost of getting it wrong is a
- * missing `#`, never a wrong filter (LogSelector filters by index).
+ * Decided by position, never by label: tags are user-supplied, so a session
+ * tagged `All` or `★ Favorites` would otherwise render as a second,
+ * identical-looking copy of a built-in tab. LogSelector builds the list as
+ * `All`, then the tags, then Favorites when anything is starred — so index 0 is
+ * the All tab, and the last index is Favorites exactly when the caller says the
+ * tab is there.
  */
-function isLiteralTab(tabs: string[], index: number): boolean {
-  if (index === 0) {
-    return true;
-  }
-  return index === tabs.length - 1 && tabs[index] === FAVORITES_TAB_LABEL;
+function isLiteralTab(
+  index: number,
+  tabCount: number,
+  hasFavoritesTab: boolean,
+): boolean {
+  return index === 0 || (hasFavoritesTab && index === tabCount - 1);
 }
 const TAB_PADDING = 2; // Space before and after tab text: " {tab} "
 const HASH_PREFIX_LENGTH = 1; // "#" prefix for non-All tabs
@@ -45,6 +45,8 @@ type Props = {
   selectedIndex: number;
   availableWidth: number;
   showAllProjects?: boolean;
+  /** Whether the last tab is the Favorites tab rather than a tag. */
+  hasFavoritesTab?: boolean;
 };
 
 /**
@@ -78,7 +80,8 @@ export function TagTabs({
   tabs,
   selectedIndex,
   availableWidth,
-  showAllProjects = false
+  showAllProjects = false,
+  hasFavoritesTab = false
 }: Props): React.ReactNode {
   const resumeLabel = showAllProjects ? 'Resume (All Projects)' : 'Resume';
   const resumeLabelWidth = resumeLabel.length + 1; // +1 for gap
@@ -92,7 +95,7 @@ export function TagTabs({
 
   // Calculate width of each tab, with truncation for very long tags
   const maxSingleTabWidth = Math.max(20, Math.floor(maxTabsWidth / 2)); // At least show half the space for one tab
-  const tabWidths = tabs.map((tab, i) => getTabWidth(tab, isLiteralTab(tabs, i), maxSingleTabWidth));
+  const tabWidths = tabs.map((tab, i) => getTabWidth(tab, isLiteralTab(i, tabs.length, hasFavoritesTab), maxSingleTabWidth));
 
   // Find a window of tabs that fits, centered around selectedIndex
   let startIndex = 0;
@@ -146,7 +149,7 @@ export function TagTabs({
       {visibleTabs.map((tab_0, i_1) => {
       const actualIndex = visibleIndices[i_1]!;
       const isSelected = actualIndex === safeSelectedIndex;
-      const displayText = isLiteralTab(tabs, actualIndex) ? tab_0 : `#${truncateTag(tab_0, maxSingleTabWidth - TAB_PADDING)}`;
+      const displayText = isLiteralTab(actualIndex, tabs.length, hasFavoritesTab) ? tab_0 : `#${truncateTag(tab_0, maxSingleTabWidth - TAB_PADDING)}`;
       return <Text key={actualIndex} backgroundColor={isSelected ? 'suggestion' : undefined} color={isSelected ? 'inverseText' : undefined} bold={isSelected}>
             {' '}
             {displayText}{' '}

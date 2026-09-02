@@ -141,7 +141,7 @@ function buildLogMetadata(log: LogOption, options?: {
   return childPadding + baseMetadata + projectSuffix;
 }
 export function LogSelector(t0) {
-  const $ = _c(256);
+  const $ = _c(257);
   const {
     logs,
     maxHeight: t1,
@@ -1306,14 +1306,15 @@ export function LogSelector(t0) {
     t59 = $[165];
   }
   let t60;
-  if ($[166] !== columns || $[167] !== displayedLogs.length || $[168] !== effectiveTagIndex || $[169] !== focusedIndex || $[170] !== hasTags || $[254] !== hasTabs || $[171] !== showAllProjects || $[172] !== tagTabs || $[173] !== viewMode || $[174] !== visibleCount) {
-    t60 = hasTabs ? <TagTabs tabs={tagTabs} selectedIndex={effectiveTagIndex} availableWidth={columns} showAllProjects={showAllProjects} /> : <Box flexShrink={0}><Text bold={true} color="suggestion">Resume Session{viewMode === "list" && displayedLogs.length > visibleCount && <Text dimColor={true}>{" "}({focusedIndex} of {displayedLogs.length})</Text>}</Text></Box>;
+  if ($[166] !== columns || $[167] !== displayedLogs.length || $[168] !== effectiveTagIndex || $[169] !== focusedIndex || $[170] !== hasTags || $[254] !== hasTabs || $[256] !== hasFavorites || $[171] !== showAllProjects || $[172] !== tagTabs || $[173] !== viewMode || $[174] !== visibleCount) {
+    t60 = hasTabs ? <TagTabs tabs={tagTabs} selectedIndex={effectiveTagIndex} availableWidth={columns} showAllProjects={showAllProjects} hasFavoritesTab={hasFavorites} /> : <Box flexShrink={0}><Text bold={true} color="suggestion">Resume Session{viewMode === "list" && displayedLogs.length > visibleCount && <Text dimColor={true}>{" "}({focusedIndex} of {displayedLogs.length})</Text>}</Text></Box>;
     $[166] = columns;
     $[167] = displayedLogs.length;
     $[168] = effectiveTagIndex;
     $[169] = focusedIndex;
     $[170] = hasTags;
     $[254] = hasTabs;
+    $[256] = hasFavorites;
     $[171] = showAllProjects;
     $[172] = tagTabs;
     $[173] = viewMode;
