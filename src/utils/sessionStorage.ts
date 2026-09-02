@@ -4995,10 +4995,17 @@ async function readLiteMetadata(
  * and it is treated as no answer rather than as a negative one.
  */
 function favoriteFromTail(tail: string): boolean | undefined {
-  const line = tail
-    .split('\n')
-    .findLast(l => l.startsWith('{"type":"favorite"'))
-  if (!line) return undefined
+  const marker = '{"type":"favorite"'
+  // Scanned backwards rather than split into lines: this runs once per session
+  // listed by /resume, over a window as large as LITE_READ_BUF_SIZE, and the
+  // sibling extractors above avoid the same allocation.
+  let start = tail.lastIndexOf(marker)
+  while (start > 0 && tail[start - 1] !== '\n') {
+    start = tail.lastIndexOf(marker, start - 1)
+  }
+  if (start < 0) return undefined
+  const end = tail.indexOf('\n', start)
+  const line = end < 0 ? tail.slice(start) : tail.slice(start, end)
   try {
     const value = (JSON.parse(line) as { favorite?: unknown }).favorite
     return typeof value === 'boolean' ? value : undefined
