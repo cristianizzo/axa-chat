@@ -14,7 +14,7 @@ import {
 } from '../auth.js'
 import { getModelStrings } from './modelStrings.js'
 import {
-  COST_TIER_3_15,
+  COST_TIER_2_10,
   COST_HAIKU_35,
   COST_HAIKU_45,
   formatModelPricing,
@@ -77,7 +77,7 @@ export function getDefaultOptionForUser(fastMode = false): ModelOption {
   return {
     value: null,
     label: 'Default (recommended)',
-    description: `Use the default model (currently ${renderDefaultModelSetting(getDefaultMainLoopModelSetting())})${is3P ? '' : ` · ${formatModelPricing(COST_TIER_3_15)}`}`,
+    description: `Use the default model (currently ${renderDefaultModelSetting(getDefaultMainLoopModelSetting())})${is3P ? '' : ` · ${formatModelPricing(COST_TIER_2_10)}`}`,
   }
 }
 
@@ -119,7 +119,7 @@ function getSonnetOption(): ModelOption {
   return {
     value: is3P ? sonnetModel : 'sonnet',
     label: 'Sonnet',
-    description: `${name} · Best for everyday tasks${is3P ? '' : ` · ${formatModelPricing(COST_TIER_3_15)}`}`,
+    description: `${name} · Best for everyday tasks${is3P ? '' : ` · ${formatModelPricing(COST_TIER_2_10)}`}`,
     descriptionForModel:
       `${name} - best for everyday tasks. Generally recommended for most coding tasks`,
   }
@@ -170,7 +170,7 @@ export function getSonnet1MOption(): ModelOption {
   return {
     value: is3P ? sonnetModel + '[1m]' : 'sonnet[1m]',
     label: 'Sonnet (1M context)',
-    description: `${name} for long sessions${is3P ? '' : ` · ${formatModelPricing(COST_TIER_3_15)}`}`,
+    description: `${name} for long sessions${is3P ? '' : ` · ${formatModelPricing(COST_TIER_2_10)}`}`,
     descriptionForModel:
       `${name} with 1M context window - for long sessions with large codebases`,
   }
@@ -264,7 +264,7 @@ export function getMaxSonnet1MOption(): ModelOption {
   return {
     value: 'sonnet[1m]',
     label: 'Sonnet (1M context)',
-    description: `${name} with 1M context${billingInfo}${is3P ? '' : ` · ${formatModelPricing(COST_TIER_3_15)}`}`,
+    description: `${name} with 1M context${billingInfo}${is3P ? '' : ` · ${formatModelPricing(COST_TIER_2_10)}`}`,
   }
 }
 
@@ -345,7 +345,7 @@ export function getModelFamilies(): ModelFamily[] {
     {
       key: 'sonnet',
       label: 'Sonnet',
-      description: '$3/$15 · Best speed/intelligence balance',
+      description: '$2/$10 · Best speed/intelligence balance',
       versions: [
         { value: s.sonnet5, label: 'Sonnet 5', description: '1M context · 128k output · Latest' },
         { value: s.sonnet46, label: 'Sonnet 4.6', description: '1M context · 128k output · Previous default' },
@@ -356,7 +356,8 @@ export function getModelFamilies(): ModelFamily[] {
       label: 'Fable',
       description: '$10/$50 · Next-gen long-running agents',
       versions: [
-        { value: s.fable5, label: 'Fable 5', description: '1M context · 128k output · Most advanced' },
+        { value: s.fable51, label: 'Fable 5.1', description: '1M context · 128k output · Latest, most advanced' },
+        { value: s.fable5, label: 'Fable 5', description: '1M context · 128k output · Previous version' },
       ],
     },
     {
@@ -467,6 +468,14 @@ function getModelFamilyInfo(
     const currentName = getMarketingNameForModel(getDefaultOpusModel())
     if (currentName) {
       return { alias: 'Opus', currentVersionName: currentName }
+    }
+  }
+
+  // Fable family
+  if (family === 'fable') {
+    const currentName = getMarketingNameForModel(getModelStrings().fable51)
+    if (currentName) {
+      return { alias: 'Fable', currentVersionName: currentName }
     }
   }
 

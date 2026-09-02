@@ -170,6 +170,14 @@ export const CLAUDE_FABLE_5_CONFIG = {
   openai: 'claude-fable-5',
 } as const satisfies ModelConfig
 
+export const CLAUDE_FABLE_5_1_CONFIG = {
+  firstParty: 'claude-fable-5-1',
+  bedrock: 'anthropic.claude-fable-5-1',
+  vertex: 'claude-fable-5-1',
+  foundry: 'claude-fable-5-1',
+  openai: 'claude-fable-5-1',
+} as const satisfies ModelConfig
+
 export const CLAUDE_MYTHOS_5_CONFIG = {
   firstParty: 'claude-mythos-5',
   bedrock: 'anthropic.claude-mythos-5',
@@ -234,6 +242,7 @@ export const ALL_MODEL_CONFIGS = {
   opus5: CLAUDE_OPUS_5_CONFIG,
   sonnet5: CLAUDE_SONNET_5_CONFIG,
   fable5: CLAUDE_FABLE_5_CONFIG,
+  fable51: CLAUDE_FABLE_5_1_CONFIG,
   mythos5: CLAUDE_MYTHOS_5_CONFIG,
   // OpenAI Codex models
   gpt56sol: GPT_5_6_SOL_CONFIG,

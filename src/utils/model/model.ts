@@ -421,6 +421,9 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   }
   // Special cases for Claude 4+ models to differentiate versions
   // Order matters: check more specific versions first (4-5 before 4)
+  if (name.includes('claude-fable-5-1')) {
+    return 'claude-fable-5-1'
+  }
   if (name.includes('claude-fable-5')) {
     return 'claude-fable-5'
   }
@@ -763,7 +766,7 @@ export function parseUserSpecifiedModel(
       case 'opus':
         return getDefaultOpusModel() + (has1mTag ? '[1m]' : '')
       case 'fable':
-        return getModelStrings().fable5 + (has1mTag ? '[1m]' : '')
+        return getModelStrings().fable51 + (has1mTag ? '[1m]' : '')
       case 'mythos':
         return getModelStrings().mythos5 + (has1mTag ? '[1m]' : '')
       case 'best':
