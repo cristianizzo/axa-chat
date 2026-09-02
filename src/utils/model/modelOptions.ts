@@ -14,10 +14,10 @@ import {
 } from '../auth.js'
 import { getModelStrings } from './modelStrings.js'
 import {
-  COST_TIER_2_10,
   COST_HAIKU_35,
   COST_HAIKU_45,
   formatModelPricing,
+  getModelPricingString,
 } from '../modelCost.js'
 import { getSettings_DEPRECATED } from '../settings/settings.js'
 import { checkOpus1mAccess, checkSonnet1mAccess } from './check1mAccess.js'
@@ -28,13 +28,16 @@ import {
   getClaudeAiUserDefaultModelDescription,
   getDefaultSonnetModel,
   getDefaultOpusModel,
+  getDefaultFableModel,
   getDefaultHaikuModel,
+  getDefaultMainLoopModel,
   getDefaultMainLoopModelSetting,
   getMarketingNameForModel,
   getUserSpecifiedModelSetting,
   isOpus1mMergeEnabled,
   getOpus46PricingSuffix,
   renderDefaultModelSetting,
+  type ModelName,
   type ModelSetting,
 } from './model.js'
 import { has1mContext } from '../context.js'
@@ -48,6 +51,20 @@ export type ModelOption = {
   label: string
   description: string
   descriptionForModel?: string
+}
+
+/**
+ * The ` · $2/$10 per Mtok` tail of a picker entry, derived from the model the
+ * entry actually resolves to instead of a hardcoded tier — a hardcoded one goes
+ * stale at the next price change or when the user pins an older version through
+ * ANTHROPIC_DEFAULT_SONNET_MODEL. Empty for 3P providers, which bill through
+ * their own contracts, and for any model with no pricing on record.
+ * Mirrors getOpus46PricingSuffix, which owns the Opus fast-mode tiers.
+ */
+function getPricingSuffix(model: ModelName): string {
+  if (getAPIProvider() !== 'firstParty') return ''
+  const pricing = getModelPricingString(model)
+  return pricing ? ` · ${pricing}` : ''
 }
 
 export function getDefaultOptionForUser(fastMode = false): ModelOption {
@@ -73,11 +90,10 @@ export function getDefaultOptionForUser(fastMode = false): ModelOption {
   }
 
   // PAYG
-  const is3P = getAPIProvider() !== 'firstParty'
   return {
     value: null,
     label: 'Default (recommended)',
-    description: `Use the default model (currently ${renderDefaultModelSetting(getDefaultMainLoopModelSetting())})${is3P ? '' : ` · ${formatModelPricing(COST_TIER_2_10)}`}`,
+    description: `Use the default model (currently ${renderDefaultModelSetting(getDefaultMainLoopModelSetting())})${getPricingSuffix(getDefaultMainLoopModel())}`,
   }
 }
 
@@ -119,7 +135,7 @@ function getSonnetOption(): ModelOption {
   return {
     value: is3P ? sonnetModel : 'sonnet',
     label: 'Sonnet',
-    description: `${name} · Best for everyday tasks${is3P ? '' : ` · ${formatModelPricing(COST_TIER_2_10)}`}`,
+    description: `${name} · Best for everyday tasks${getPricingSuffix(sonnetModel)}`,
     descriptionForModel:
       `${name} - best for everyday tasks. Generally recommended for most coding tasks`,
   }
@@ -170,7 +186,7 @@ export function getSonnet1MOption(): ModelOption {
   return {
     value: is3P ? sonnetModel + '[1m]' : 'sonnet[1m]',
     label: 'Sonnet (1M context)',
-    description: `${name} for long sessions${is3P ? '' : ` · ${formatModelPricing(COST_TIER_2_10)}`}`,
+    description: `${name} for long sessions${getPricingSuffix(sonnetModel)}`,
     descriptionForModel:
       `${name} with 1M context window - for long sessions with large codebases`,
   }
@@ -258,13 +274,12 @@ function getMaxOpusOption(fastMode = false): ModelOption {
 }
 
 export function getMaxSonnet1MOption(): ModelOption {
-  const is3P = getAPIProvider() !== 'firstParty'
   const billingInfo = isClaudeAISubscriber() ? ' · Billed as extra usage' : ''
   const name = defaultSonnetName()
   return {
     value: 'sonnet[1m]',
     label: 'Sonnet (1M context)',
-    description: `${name} with 1M context${billingInfo}${is3P ? '' : ` · ${formatModelPricing(COST_TIER_2_10)}`}`,
+    description: `${name} with 1M context${billingInfo}${getPricingSuffix(getDefaultSonnetModel())}`,
   }
 }
 
@@ -473,7 +488,7 @@ function getModelFamilyInfo(
 
   // Fable family
   if (family === 'fable') {
-    const currentName = getMarketingNameForModel(getModelStrings().fable51)
+    const currentName = getMarketingNameForModel(getDefaultFableModel())
     if (currentName) {
       return { alias: 'Fable', currentVersionName: currentName }
     }
