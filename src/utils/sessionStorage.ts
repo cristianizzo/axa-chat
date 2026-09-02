@@ -532,10 +532,11 @@ const REMOTE_FLUSH_INTERVAL_MS = 10
 class Project {
   // Minimal cache for current session only (not all sessions)
   currentSessionTag: string | undefined
-  // Tri-state like the worktree field below: undefined = never starred or
-  // unstarred, so there is nothing to re-append. `false` is a real value and
-  // must be re-appended, or an unstar could be evicted from the tail window
-  // while an older `true` survives it and the session looks starred again.
+  // Tri-state like the worktree field below: undefined = this session's star was
+  // never touched either way, so there is nothing to re-append. `false` is a
+  // real value — an explicit unstar — and must be re-appended, or it could be
+  // evicted from the tail window while an older `true` survives it and the
+  // session looks starred again.
   currentSessionFavorite: boolean | undefined
   currentSessionTitle: string | undefined
   currentSessionAgentName: string | undefined
@@ -2807,13 +2808,13 @@ export async function saveFavorite(
   // Fall back to computed path if fullPath is not provided
   const resolvedPath = fullPath ?? getTranscriptPathForSession(sessionId)
   appendEntryToFile(resolvedPath, { type: 'favorite', favorite, sessionId })
-  // Only when starring the session we are in — /resume usually stars some other
-  // one, whose file nothing is appending to, so its entry stays at EOF and
-  // needs no keeping alive.
+  // Only for the session we are in, and for either direction — /resume usually
+  // toggles some other session, whose file nothing is appending to, so its entry
+  // stays at EOF and needs no keeping alive.
   if (sessionId === getSessionId()) {
     getProject().currentSessionFavorite = favorite
   }
-  logEvent('tengu_session_favorited', {})
+  logEvent('tengu_session_favorited', { favorite })
 }
 
 /**
