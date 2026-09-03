@@ -20,7 +20,7 @@ import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js';
 import { getCwd, runWithCwdOverride } from '../../utils/cwd.js';
 import { logForDebugging } from '../../utils/debug.js';
 import { isEnvTruthy } from '../../utils/envUtils.js';
-import { AbortError, errorMessage, toError } from '../../utils/errors.js';
+import { AbortError, errorMessage, isAbortError, toError } from '../../utils/errors.js';
 import type { CacheSafeParams } from '../../utils/forkedAgent.js';
 import { lazySchema } from '../../utils/lazySchema.js';
 import { createUserMessage, extractTextContent, isSyntheticMessage, normalizeMessages } from '../../utils/messages.js';
@@ -52,7 +52,7 @@ import { buildForkedMessages, buildWorktreeNotice, FORK_AGENT, isForkSubagentEna
 import type { AgentDefinition } from './loadAgentsDir.js';
 import { filterAgentsByMcpRequirements, hasRequiredMcpServers, isBuiltInAgent } from './loadAgentsDir.js';
 import { getPrompt } from './prompt.js';
-import { filterIncompleteToolCalls, runAgent } from './runAgent.js';
+import { runAgent } from './runAgent.js';
 import { renderGroupedAgentToolUse, renderToolResultMessage, renderToolUseErrorMessage, renderToolUseMessage, renderToolUseProgressMessage, renderToolUseRejectedMessage, renderToolUseTag, userFacingName, userFacingNameBackgroundColor } from './UI.js';
 
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -61,6 +61,15 @@ const proactiveModule = feature('PROACTIVE') || feature('KAIROS') ? require('../
 
 // Progress display constants (for showing background hint)
 const PROGRESS_THRESHOLD_MS = 2000; // Show background hint after 2 seconds
+
+// Budget for the sync→background transition to wait on the agent's in-flight
+// segment before logging that it is stuck. NOT a hard bail: abandoning a live
+// segment would let the old generator finish its tool (side effects) while the
+// background continuation re-runs it — the double-execution this logic exists
+// to prevent. The wait is bounded in practice because the segment runs under
+// the parent's abort controller (runAgent.ts), which aborts when the parent
+// turn ends or the user cancels.
+const LANDING_BUDGET_MS = 30_000;
 
 // Check if background tasks are disabled at module load time
 const isBackgroundTasksDisabled =
@@ -926,16 +935,64 @@ export const AgentTool = buildTool({
                     // generator is now suspended at the yield, so it terminates
                     // promptly and its finally (MCP/session-hook cleanup) runs before
                     // the background loop starts.
-                    const landed = await nextMessagePromise;
-                    if (!landed.done) {
-                      agentMessages.push(landed.value);
+                    const abortLanding = rejectOnAbort(task.abortController.signal);
+                    let landed: IteratorResult<MessageType, void> | undefined;
+                    let generatorErrored = false;
+                    // Log (but do not bail) when the in-flight segment is slow to
+                    // yield. Abandoning it would re-open the double-execution hole
+                    // above; the wait ends when the segment finishes or the parent
+                    // turn aborts the shared controller (runAgent.ts).
+                    const slowLandingLog = setTimeout(() => {
+                      logForDebugging(`Background continuation for agent ${backgroundedTaskId} is still waiting on its in-flight segment after ${LANDING_BUDGET_MS}ms. The segment runs under the parent's abort controller and is not interrupted by backgrounding; it settles when it completes or the parent turn aborts.`);
+                    }, LANDING_BUDGET_MS);
+                    try {
+                      // Race the in-flight segment against the background task's
+                      // abort so a task kill is honored promptly even if the segment
+                      // hangs. The segment itself can't be interrupted in isolation
+                      // (it shares the parent's controller), so a kill abandons it
+                      // and the kill path below reports the task as killed.
+                      try {
+                        landed = await Promise.race([nextMessagePromise, abortLanding.promise]);
+                      } finally {
+                        clearTimeout(slowLandingLog);
+                      }
+                    } catch (err) {
+                      // isAbortError covers our AbortError plus the DOMException and
+                      // SDK APIUserAbortError shapes an aborted in-flight tool can
+                      // throw. Normalize to our AbortError so the kill path below
+                      // (which matches on instanceof AbortError) fires correctly.
+                      if (isAbortError(err)) {
+                        throw new AbortError();
+                      }
+                      // The generator terminated with a real error while producing
+                      // the in-flight message. Its finally already unwound during the
+                      // rejection, so there is nothing left to .return() into. Mirror
+                      // the sync path's recovery: if assistant messages were captured,
+                      // finalize the partial work below instead of failing the task.
+                      if (agentMessages.some(m => m.type === 'assistant')) {
+                        generatorErrored = true;
+                        logForDebugging(`Backgrounded agent errored while landing the in-flight segment; finalizing ${agentMessages.length} partial messages: ${errorMessage(err)}`);
+                      } else {
+                        throw err;
+                      }
+                    } finally {
+                      abortLanding.dispose();
                     }
-                    // .catch: a teardown error in the generator's finally must not
-                    // fail the whole background transition (messages are already
-                    // captured) — but log it rather than swallowing silently.
-                    await agentIterator.return(undefined).catch(err => {
-                      logForDebugging(`Failed to clean up foreground agent iterator after backgrounding: ${errorMessage(err)}`);
-                    });
+
+                    if (!generatorErrored && landed !== undefined && !landed.done) {
+                      agentMessages.push(landed.value);
+                      // .catch: a teardown error in the generator's finally must not
+                      // fail the whole background transition (messages are already
+                      // captured) — but log it rather than swallowing silently.
+                      await agentIterator.return(undefined).catch(err => {
+                        logForDebugging(`Failed to clean up foreground agent iterator after backgrounding: ${errorMessage(err)}`);
+                      });
+                      // If the task was killed while the segment was landing, don't
+                      // launch a fresh continuation — the kill path below cleans up.
+                      if (task.abortController.signal.aborted) {
+                        throw new AbortError();
+                      }
+                    }
 
                     // Initialize progress tracking from existing messages (including
                     // any message landed above)
@@ -945,22 +1002,19 @@ export const AgentTool = buildTool({
                       updateProgressFromMessage(tracker, existingMsg, resolveActivity2, toolUseContext.options.tools);
                     }
 
-                    if (!landed.done) {
-                      // If the task was killed while we waited for the in-flight
-                      // segment to land, don't launch a fresh continuation — the
-                      // kill path below handles cleanup.
-                      if (task.abortController.signal.aborted) {
-                        throw new AbortError();
-                      }
+                    if (!generatorErrored && landed !== undefined && !landed.done) {
                       // Continue the agent in the background. Seed it with the
                       // original context PLUS the messages accumulated while it ran
                       // in the foreground so it resumes where the sync loop left off
                       // instead of restarting from the prompt.
-                      // filterIncompleteToolCalls drops any assistant tool_use that
-                      // decided but did not yet run a tool (its result was never
-                      // yielded) — that tool is only ever executed by the
-                      // continuation, so there is no double execution.
-                      const continuedFrom = filterIncompleteToolCalls(
+                      // trimUnexecutedToolCalls removes only the tool_use blocks that
+                      // never produced a result — those tools were never executed, so
+                      // only the continuation runs them. Executed tools keep their
+                      // results, so they are not re-run. Unlike
+                      // filterIncompleteToolCalls, this does not drop the whole
+                      // assistant message (which would orphan already-executed
+                      // results) when backgrounding lands mid-batch between tools.
+                      const continuedFrom = trimUnexecutedToolCalls(
                         agentMessages.filter(m => m.type === 'assistant' || m.type === 'user'),
                       );
                       for await (const msg of runAgent({
@@ -1428,6 +1482,90 @@ duration_ms: ${data.totalDurationMs}</usage>`
   renderToolUseErrorMessage,
   renderGroupedToolUse: renderGroupedAgentToolUse
 } satisfies ToolDef<InputSchema, Output, Progress>);
+
+/**
+ * Trim an accumulated subagent transcript to a seed valid for a fresh query()
+ * when a synchronous agent is backgrounded mid-turn.
+ *
+ * The generator can be stopped between the tool results of a single assistant
+ * message (background fired while tool #k of N was running, .return() landed
+ * before #k+1..#N started). Those N tool_use blocks are still listed on the
+ * assistant message, but only #1..#k have results in the transcript. Feeding
+ * that back to query() is an invalid tail (assistant tool_use with no
+ * tool_result) — and it would let the continuation re-run tools that already
+ * executed in the foreground.
+ *
+ * Unlike filterIncompleteToolCalls (which drops the WHOLE assistant message if
+ * ANY tool_use lacks a result, orphaning the executed results), this trims per
+ * block: tool_use with a result are kept (with their results, so they are never
+ * re-executed); tool_use without a result are dropped (they never ran, so the
+ * continuation re-proposes them). Non-tool content (text/thinking) is
+ * preserved; an assistant message left with no content is dropped entirely.
+ * User tool_result messages are kept as-is — a result only exists for a tool
+ * that ran, whose tool_use is kept, so no kept result is ever orphaned.
+ */
+function trimUnexecutedToolCalls(messages: MessageType[]): MessageType[] {
+  const resultIds = new Set<string>();
+  for (const message of messages) {
+    if (message.type !== 'user') continue;
+    const content = message.message.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (block.type === 'tool_result' && block.tool_use_id) {
+        resultIds.add(block.tool_use_id);
+      }
+    }
+  }
+  const trimmed: MessageType[] = [];
+  for (const message of messages) {
+    if (message.type === 'assistant') {
+      const content = message.message.content;
+      if (Array.isArray(content)) {
+        const kept = content.filter(block =>
+          block.type === 'tool_use' ? Boolean(block.id) && resultIds.has(block.id) : true
+        );
+        if (kept.length > 0) {
+          trimmed.push({
+            ...message,
+            message: {
+              ...message.message,
+              content: kept
+            }
+          });
+        }
+        // Dropped entirely when no content remains (a pure, unexecuted proposal)
+        continue;
+      }
+      // String content can't carry tool_use; keep as-is.
+    }
+    trimmed.push(message);
+  }
+  return trimmed;
+}
+
+/**
+ * A promise that rejects with an AbortError when the given signal aborts. Used
+ * to make a background task kill interrupt the sync→background landing instead
+ * of waiting for a slow in-flight segment. dispose() removes the listener when
+ * the caller is done racing, so a late abort can't fire a stale rejection.
+ */
+function rejectOnAbort(signal: AbortSignal): {
+  promise: Promise<never>;
+  dispose: () => void;
+} {
+  let dispose = () => {};
+  const promise = new Promise<never>((_, reject) => {
+    if (signal.aborted) {
+      reject(new AbortError());
+      return;
+    }
+    const onAbort = () => reject(new AbortError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    dispose = () => signal.removeEventListener('abort', onAbort);
+  });
+  return { promise, dispose };
+}
+
 function resolveTeamName(input: {
   team_name?: string;
 }, appState: {
