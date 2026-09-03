@@ -304,7 +304,8 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
 
 /**
  * Maps an Anthropic model name to the appropriate DeepSeek model.
- * Claude Opus → deepseek-v4-pro, Claude Sonnet/Haiku → deepseek-v4-flash.
+ * Claude Opus/Fable/Mythos → deepseek-v4-pro, Claude Sonnet/Haiku →
+ * deepseek-v4-flash.
  * Any already-valid DeepSeek model ID passes through untouched — including the
  * retired deepseek-chat/deepseek-reasoner aliases, which the API still serves.
  */
@@ -316,8 +317,12 @@ function resolveModel(claudeModel: string | undefined): string {
   // Already a DeepSeek model — pass through
   if (lower.startsWith('deepseek-')) return claudeModel
 
-  // Map Claude families to DeepSeek equivalents
+  // Map Claude families to DeepSeek equivalents. Fable and Mythos take Pro
+  // alongside Opus: in MODEL_REGISTRY they carry pricingTier 'tier_10_50',
+  // the most expensive tier there — above every Opus, which is 'tier_5_25'.
   if (lower.includes('opus')) return 'deepseek-v4-pro'
+  if (lower.includes('fable')) return 'deepseek-v4-pro'
+  if (lower.includes('mythos')) return 'deepseek-v4-pro'
   if (lower.includes('sonnet')) return 'deepseek-v4-flash'
   if (lower.includes('haiku')) return 'deepseek-v4-flash'
 
