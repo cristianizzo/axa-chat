@@ -1288,6 +1288,13 @@ async function execCommandHook(
     }
 
     child.on('close', code => {
+      // 'close' can fire after the grace path already resolved and destroyed
+      // the stdio streams (which is what lets 'close' fire at all). Those
+      // streams never emitted 'end', so waiting on them again would hang —
+      // bail out once we've settled.
+      if (settled) {
+        return
+      }
       exitCode = code ?? 1
 
       // Wait for both streams to end before resolving with the final output
@@ -1297,6 +1304,9 @@ async function execCommandHook(
     })
 
     child.on('exit', code => {
+      if (settled) {
+        return
+      }
       exitCode = code ?? 1
       exitGraceTimer = setTimeout(() => {
         // Only reachable when a backgrounded grandchild kept our read ends open
