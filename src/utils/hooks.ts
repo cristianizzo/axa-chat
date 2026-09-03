@@ -165,6 +165,17 @@ import { errorMessage, getErrnoCode } from './errors.js'
 
 const TOOL_HOOK_EXECUTION_TIMEOUT_MS = 10 * 60 * 1000
 
+// A hook's shell can exit while its stdio stays open when a backgrounded
+// grandchild inherited the pipe fds (`sleep 1000 &`). Node emits 'close' only
+// once every fd on the write end is gone, so 'close' would never fire and the
+// hook would block forever — ShellCommandImpl resolves on 'exit' and disarms
+// its timeout/abort the instant the shell exits, leaving nothing to resolve or
+// kill the hook (the Bash path deliberately avoids 'close' for this reason).
+// After the shell exits its output is already written; wait this long for the
+// stdio streams to close before treating the hook as done. Well-behaved hooks
+// close their streams in microseconds, so this only bounds the daemon case.
+const HOOK_EXIT_STREAM_GRACE_MS = 100
+
 /**
  * SessionEnd hooks run during shutdown/clear and need a much tighter bound
  * than TOOL_HOOK_EXECUTION_TIMEOUT_MS. This value is used by callers as both
@@ -1220,8 +1231,13 @@ async function execCommandHook(
     child.on('error', reject)
   })
 
-  // Create promise for child process close - but only resolve after streams end
-  // to ensure all output has been collected
+  // Create promise for child process completion. Normally it resolves once the
+  // stdio fully closes ('close'), so all output has been collected. But 'close'
+  // waits for every fd on the write end: a hook that backgrounds a grandchild
+  // (`sleep 1000 &`) inherits the pipe fds, so 'close' never fires and the hook
+  // used to hang forever. Fall back to the shell's own 'exit' after a short
+  // grace — by then the shell's output is fully written and buffered, which is
+  // the same signal the Bash path resolves on.
   const childClosePromise = new Promise<{
     stdout: string
     stderr: string
@@ -1230,32 +1246,77 @@ async function execCommandHook(
     aborted?: boolean
   }>(resolve => {
     let exitCode: number | null = null
+    let settled = false
+    let exitGraceTimer: ReturnType<typeof setTimeout> | null = null
+
+    const settle = (detachStdio: boolean) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      if (exitGraceTimer) {
+        clearTimeout(exitGraceTimer)
+        exitGraceTimer = null
+      }
+      // The shell is gone but a grandchild may still hold our read ends open.
+      // Drop them so it can't keep these data handlers flowing (and growing
+      // `stdout`) after we return. Never when ownership was handed to the
+      // async-hook registry, which is still draining those streams.
+      if (detachStdio && !shellCommandTransferred) {
+        child.stdout.destroy()
+        child.stderr.destroy()
+      }
+      // Strip lines we processed as prompt requests so parseHookOutput only
+      // sees the final hook result. Content-matching against the set of
+      // actually-processed lines means prompt JSON can never leak through
+      // (fail-closed), regardless of line positioning.
+      const finalStdout =
+        processedPromptLines.size === 0
+          ? stdout
+          : stdout
+              .split('\n')
+              .filter(line => !processedPromptLines.has(line.trim()))
+              .join('\n')
+
+      resolve({
+        stdout: finalStdout,
+        stderr,
+        output,
+        status: exitCode!,
+        aborted: signal.aborted,
+      })
+    }
 
     child.on('close', code => {
+      // 'close' can fire after the grace path already resolved and destroyed
+      // the stdio streams (which is what lets 'close' fire at all). Those
+      // streams never emitted 'end', so waiting on them again would hang —
+      // bail out once we've settled.
+      if (settled) {
+        return
+      }
       exitCode = code ?? 1
 
       // Wait for both streams to end before resolving with the final output
       void Promise.all([stdoutEndPromise, stderrEndPromise]).then(() => {
-        // Strip lines we processed as prompt requests so parseHookOutput
-        // only sees the final hook result. Content-matching against the set
-        // of actually-processed lines means prompt JSON can never leak
-        // through (fail-closed), regardless of line positioning.
-        const finalStdout =
-          processedPromptLines.size === 0
-            ? stdout
-            : stdout
-                .split('\n')
-                .filter(line => !processedPromptLines.has(line.trim()))
-                .join('\n')
-
-        resolve({
-          stdout: finalStdout,
-          stderr,
-          output,
-          status: exitCode!,
-          aborted: signal.aborted,
-        })
+        settle(false)
       })
+    })
+
+    child.on('exit', code => {
+      if (settled) {
+        return
+      }
+      exitCode = code ?? 1
+      exitGraceTimer = setTimeout(() => {
+        // Only reachable when a backgrounded grandchild kept our read ends open
+        // past the grace window. Everything else resolves on 'close' below, so
+        // this log is the sole marker distinguishing the two paths.
+        logForDebugging(
+          `Hooks: Hook "${hookName}" resolved on shell exit after ${HOOK_EXIT_STREAM_GRACE_MS}ms grace (stdio held open — likely a backgrounded grandchild). Output may be truncated and the process may outlive the hook.`,
+        )
+        settle(true)
+      }, HOOK_EXIT_STREAM_GRACE_MS)
     })
   })
 
