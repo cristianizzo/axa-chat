@@ -153,17 +153,25 @@ export function parseSettingSourcesFlag(flag: string): SettingSource[] {
 }
 
 /**
- * Get enabled setting sources with policy/flag always included
+ * Get enabled setting sources with policy/flag always included.
+ * Returned in canonical SETTING_SOURCES order (low -> high priority), so
+ * callers that merge "later wins" apply policy above flag above file sources.
  * @returns Array of enabled SettingSource values
  */
 export function getEnabledSettingSources(): SettingSource[] {
   const allowed = getAllowedSettingSources()
 
-  // Always include policy and flag settings
-  const result = new Set<SettingSource>(allowed)
-  result.add('policySettings')
-  result.add('flagSettings')
-  return Array.from(result)
+  // Always include policy and flag settings, even when --setting-sources
+  // restricts the file-based sources that load. Rebuild by filtering the
+  // canonical SETTING_SOURCES rather than appending to `allowed`, so the
+  // returned order is always low -> high priority. Merge loops that are
+  // "later wins" then keep policy above flag above file sources; appending
+  // `policySettings` then `flagSettings` to a restricted `allowed` would have
+  // put flag last and let --settings/SDK-inline override managed policy.
+  const enabled = new Set<SettingSource>(allowed)
+  enabled.add('policySettings')
+  enabled.add('flagSettings')
+  return SETTING_SOURCES.filter(source => enabled.has(source))
 }
 
 /**
