@@ -30,6 +30,12 @@ const MAX_SSE_LINE_BYTES = 1_048_576
 // error envelope, small enough that it cannot itself become the problem.
 const RAW_PREFIX_LIMIT = 500
 
+// The only finish_reasons this adapter knows how to surface. Anything else the
+// upstream reports — content_filter, a future value — means it stopped for a
+// reason we would otherwise map to a clean end_turn, so it is treated as a
+// truncated or refused answer and fails loudly.
+const MODELLED_FINISH_REASONS = ['stop', 'tool_calls', 'length']
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface AnthropicContentBlock {
@@ -310,7 +316,9 @@ async function translateOpenAIStreamToAnthropic(
     let hadToolCalls = false
     let streamErrored = false
     let aborted = false
-    let finishReasonReceived = false
+    // The raw finish_reason, so an unrecognised value can be told apart from
+    // the three this adapter models (a boolean cannot).
+    let finishReasonValue: string | null = null
     let lengthTruncated = false
     let sawAnyDataLine = false
     let rawPrefix = ''
@@ -513,7 +521,7 @@ async function translateOpenAIStreamToAnthropic(
           if (!delta) {
             // finish_reason chunk with no delta
             if (choice.finish_reason) {
-              finishReasonReceived = true
+              finishReasonValue = choice.finish_reason
               if (choice.finish_reason === 'tool_calls') hadToolCalls = true
               if (choice.finish_reason === 'length') lengthTruncated = true
             }
@@ -584,21 +592,28 @@ async function translateOpenAIStreamToAnthropic(
             }
 
             if (choice.finish_reason === 'tool_calls') {
-              finishReasonReceived = true
+              finishReasonValue = choice.finish_reason
               hadToolCalls = true
             }
           }
 
           // Track finish_reason even when it arrives alongside a delta (e.g. finish_reason:'stop')
-          if (choice.finish_reason && !finishReasonReceived) {
-            finishReasonReceived = true
+          if (choice.finish_reason && !finishReasonValue) {
+            finishReasonValue = choice.finish_reason
             if (choice.finish_reason === 'length') lengthTruncated = true
           }
         }
       }
     } catch (err) {
       if ((err as { name?: string })?.name === 'AbortError') {
+        // The caller cancelled — a silent close is correct, since the SDK
+        // treats abort as a clean stop and an error event would be wrong.
+        // Logged at debug so an abort that was not the caller's own cancel
+        // (watchdog, proxy reset surfacing as AbortError) is not entirely
+        // invisible. Not logError: a genuine user cancel must not trip
+        // --hard-fail.
         aborted = true
+        logForDebugging('DeepSeek SSE: stream aborted', { level: 'debug' })
       } else {
         streamErrored = true
         logError(err)
@@ -652,8 +667,24 @@ async function translateOpenAIStreamToAnthropic(
     //
     // A completed stream always carries a finish_reason, so this cannot fire
     // on the happy path.
-    if (!finishReasonReceived) {
+    if (!finishReasonValue) {
       const message = 'DeepSeek stream ended without a finish_reason — the response was cut short'
+      logError(new Error(message))
+      safeEnqueue(encoder.encode(formatSSE('error', JSON.stringify({
+        type: 'error',
+        error: { type: 'api_error', message },
+      }))))
+      await sink.close()
+      return
+    }
+
+    // A present-but-unmodelled finish_reason means the provider stopped for a
+    // reason this adapter does not surface (content_filter is a refusal;
+    // anything future is unknown). Mapping it to end_turn would be the same
+    // silent truncation this function exists to prevent, so it fails the same
+    // loud way, with the reason named.
+    if (!MODELLED_FINISH_REASONS.includes(finishReasonValue)) {
+      const message = `DeepSeek stream stopped with unhandled finish_reason '${finishReasonValue}'`
       logError(new Error(message))
       safeEnqueue(encoder.encode(formatSSE('error', JSON.stringify({
         type: 'error',
