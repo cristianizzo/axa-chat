@@ -938,6 +938,7 @@ export const AgentTool = buildTool({
                     const abortLanding = rejectOnAbort(task.abortController.signal);
                     let landed: IteratorResult<MessageType, void> | undefined;
                     let generatorErrored = false;
+                    let parentCancelledLanding = false;
                     // Log (but do not bail) when the in-flight segment is slow to
                     // yield. Abandoning it would re-open the double-execution hole
                     // above; the wait ends when the segment finishes or the parent
@@ -949,37 +950,68 @@ export const AgentTool = buildTool({
                       // Race the in-flight segment against the background task's
                       // abort so a task kill is honored promptly even if the segment
                       // hangs. The segment itself can't be interrupted in isolation
-                      // (it shares the parent's controller), so a kill abandons it
-                      // and the kill path below reports the task as killed.
+                      // (it shares the parent's controller), so a task kill abandons
+                      // it and the kill path below reports the task as killed.
                       try {
                         landed = await Promise.race([nextMessagePromise, abortLanding.promise]);
                       } finally {
                         clearTimeout(slowLandingLog);
                       }
                     } catch (err) {
-                      // isAbortError covers our AbortError plus the DOMException and
-                      // SDK APIUserAbortError shapes an aborted in-flight tool can
-                      // throw. Normalize to our AbortError so the kill path below
-                      // (which matches on instanceof AbortError) fires correctly.
-                      if (isAbortError(err)) {
+                      // Two distinct abort sources reach here:
+                      // - The task was killed: task.abortController aborted, so
+                      //   abortLanding.promise rejected. The task must die — throw so
+                      //   the kill path below (instanceof AbortError) reports it.
+                      if (task.abortController.signal.aborted) {
+                        // The in-flight segment runs under the PARENT's controller,
+                        // not the task's, so a task kill cannot abort it — it keeps
+                        // running until it yields, and an abandoned generator parked
+                        // at a yield never runs its finally (agent-MCP/session-hook
+                        // cleanup). Queue a .return() so the generator runs its
+                        // finally as soon as the in-flight segment yields. This is
+                        // fire-and-forget: the kill path below proceeds now, and
+                        // nothing launches a continuation for a killed task.
+                        void agentIterator.return(undefined).catch(err => {
+                          logForDebugging(`Failed to clean up foreground agent iterator after task kill: ${errorMessage(err)}`);
+                        });
                         throw new AbortError();
                       }
-                      // The generator terminated with a real error while producing
-                      // the in-flight message. Its finally already unwound during the
-                      // rejection, so there is nothing left to .return() into. Mirror
-                      // the sync path's recovery: if assistant messages were captured,
-                      // finalize the partial work below instead of failing the task.
-                      if (agentMessages.some(m => m.type === 'assistant')) {
-                        generatorErrored = true;
-                        logForDebugging(`Backgrounded agent errored while landing the in-flight segment; finalizing ${agentMessages.length} partial messages: ${errorMessage(err)}`);
+                      // - The parent (or the shared controller the segment runs under)
+                      //   aborted the in-flight segment — a parent cancel, not a task
+                      //   kill. Background tasks are meant to SURVIVE Escape on the
+                      //   main thread (the async-from-start path never links to the
+                      //   parent controller), so this must not kill the freshly
+                      //   backgrounded task. The generator is now closed (its .next()
+                      //   rejected), so there is nothing to .return() into; any tool
+                      //   result the aborted query had produced is drained into the
+                      //   transcript by query()'s abort path. Continue below from the
+                      //   accumulated messages.
+                      // isAbortError covers our AbortError plus the DOMException and
+                      // SDK APIUserAbortError shapes an aborted in-flight tool can
+                      // throw.
+                      if (isAbortError(err)) {
+                        parentCancelledLanding = true;
+                        logForDebugging(`Parent cancelled while agent ${backgroundedTaskId} was transitioning to background; continuing from ${agentMessages.length} accumulated messages`);
                       } else {
-                        throw err;
+                        // A real generator error while producing the in-flight
+                        // message. Mirror the sync path's recovery: if assistant
+                        // messages were captured, finalize the partial work below
+                        // instead of failing the task.
+                        if (agentMessages.some(m => m.type === 'assistant')) {
+                          generatorErrored = true;
+                          logForDebugging(`Backgrounded agent errored while landing the in-flight segment; finalizing ${agentMessages.length} partial messages: ${errorMessage(err)}`);
+                        } else {
+                          throw err;
+                        }
                       }
                     } finally {
                       abortLanding.dispose();
                     }
 
-                    if (!generatorErrored && landed !== undefined && !landed.done) {
+                    const landedMessage = landed !== undefined && !landed.done;
+                    // The generator is already closed when it errored or was cancelled
+                    // by a parent abort; only .return() a generator suspended at a yield.
+                    if (landedMessage && !generatorErrored && !parentCancelledLanding) {
                       agentMessages.push(landed.value);
                       // .catch: a teardown error in the generator's finally must not
                       // fail the whole background transition (messages are already
@@ -1002,7 +1034,12 @@ export const AgentTool = buildTool({
                       updateProgressFromMessage(tracker, existingMsg, resolveActivity2, toolUseContext.options.tools);
                     }
 
-                    if (!generatorErrored && landed !== undefined && !landed.done) {
+                    // Continue in the background unless the generator errored (finalize
+                    // the partial below) or the task was killed (thrown above). This
+                    // also covers a parent cancel during the landing: the accumulated
+                    // transcript (possibly empty) is still continued under the task's
+                    // own controller, which the parent cancel does not abort.
+                    if (!generatorErrored && (landedMessage || parentCancelledLanding)) {
                       // Continue the agent in the background. Seed it with the
                       // original context PLUS the messages accumulated while it ran
                       // in the foreground so it resumes where the sync loop left off
@@ -1503,6 +1540,15 @@ duration_ms: ${data.totalDurationMs}</usage>`
  * preserved; an assistant message left with no content is dropped entirely.
  * User tool_result messages are kept as-is — a result only exists for a tool
  * that ran, whose tool_use is kept, so no kept result is ever orphaned.
+ *
+ * Guarantee: this is exact on the serial tool-execution path (the default) —
+ * tools run one at a time, each result is yielded before the next tool starts,
+ * so a tool_use with no result in the transcript genuinely never ran.
+ * Under the concurrent streaming executor (config.gates.streamingToolExecution,
+ * off by default), tools can start in parallel and a mid-stream .return() leaves
+ * a started tool's result undrained in query(); that tool_use is dropped here and
+ * re-proposed by the continuation, so it could run twice. query() drains on
+ * abort (query.ts), so this only bites the landing path, not the kill path.
  */
 function trimUnexecutedToolCalls(messages: MessageType[]): MessageType[] {
   const resultIds = new Set<string>();
