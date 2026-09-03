@@ -1299,6 +1299,12 @@ async function execCommandHook(
     child.on('exit', code => {
       exitCode = code ?? 1
       exitGraceTimer = setTimeout(() => {
+        // Only reachable when a backgrounded grandchild kept our read ends open
+        // past the grace window. Everything else resolves on 'close' below, so
+        // this log is the sole marker distinguishing the two paths.
+        logForDebugging(
+          `Hooks: Hook "${hookName}" resolved on shell exit after ${HOOK_EXIT_STREAM_GRACE_MS}ms grace (stdio held open — likely a backgrounded grandchild). Output may be truncated and the process may outlive the hook.`,
+        )
         settle(true)
       }, HOOK_EXIT_STREAM_GRACE_MS)
     })
