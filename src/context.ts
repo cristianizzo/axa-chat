@@ -9,6 +9,7 @@ import {
   filterInjectedMemoryFiles,
   getClaudeMds,
   getMemoryFiles,
+  registerLayeredMemoryCacheClear,
 } from './utils/claudemd.js'
 import { logForDiagnosticsNoPII } from './utils/diagLogs.js'
 import { isBareMode, isEnvTruthy } from './utils/envUtils.js'
@@ -187,3 +188,11 @@ export const getUserContext = memoize(
     }
   },
 )
+// This memo layers over getMemoryFiles() (via getClaudeMds). Register its
+// clear here so clearMemoryFileCaches() invalidates both layers — otherwise a
+// mid-session memory edit leaves the memo a stale hit. Registered in context.ts
+// (not claudemd.ts) to keep the dependency direction acyclic: this module
+// already imports claudemd, the reverse would be a module cycle.
+registerLayeredMemoryCacheClear(() => {
+  getUserContext.cache?.clear?.()
+})
