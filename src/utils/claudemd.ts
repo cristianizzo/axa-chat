@@ -25,6 +25,7 @@
  * - Non-existent files are silently ignored
  */
 
+import { getUserContext } from '../context.js'
 import {
   CONFIG_DIR_NAME,
   LOCAL_MEMORY_FILE_NAME,
@@ -1115,16 +1116,23 @@ function consumeNextEagerLoadReason(): InstructionsLoadReason | undefined {
 }
 
 /**
- * Clears the getMemoryFiles memoize cache
- * without firing the InstructionsLoaded hook.
+ * Clears both memory-file caches without firing the InstructionsLoaded hook.
  *
- * Use this for cache invalidation that is purely for correctness (e.g.
- * worktree enter/exit, settings sync, /memory dialog). For events that
- * represent instructions actually being reloaded into context (e.g.
- * compaction), use resetGetMemoryFilesCache() instead.
+ * getUserContext (context.ts) is a memoized outer layer that assembles the
+ * claudeMd block from getMemoryFiles(). Clearing only the inner getMemoryFiles
+ * cache leaves the next getUserContext() a memo HIT on stale assembled content,
+ * so mid-session memory edits and CWD changes (worktree enter/exit, settings
+ * sync, /memory dialog, import, team-memory pull) never reach the prompt until
+ * a /compact or /clear. postCompactCleanup documents the same two-layer trap
+ * for the compaction path; this centralizes the outer clear for the
+ * correctness-only callers, which all route through this function.
+ *
+ * For events that represent instructions actually being reloaded into context
+ * (e.g. compaction), use resetGetMemoryFilesCache() instead.
  */
 export function clearMemoryFileCaches(): void {
-  // ?.cache because tests spyOn this, which replaces the memoize wrapper.
+  // ?.cache because tests spy on these, which replaces the memoize wrapper.
+  getUserContext.cache?.clear?.()
   getMemoryFiles.cache?.clear?.()
 }
 

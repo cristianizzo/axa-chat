@@ -41,6 +41,12 @@ function MemoryCommand({
       }
       await editFileInEditor(memoryPath);
 
+      // editFileInEditor blocks until the editor exits, so this runs after the
+      // user has actually changed the file. Invalidate both memory caches so
+      // the next turn reassembles context with the edits — without this the
+      // instructions stay stale until /compact or /clear.
+      clearMemoryFileCaches();
+
       // Determine which environment variable controls the editor
       let editorSource = 'default';
       let editorValue = '';
