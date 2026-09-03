@@ -318,8 +318,9 @@ function resolveModel(claudeModel: string | undefined): string {
   if (lower.startsWith('deepseek-')) return claudeModel
 
   // Map Claude families to DeepSeek equivalents. Fable and Mythos take Pro
-  // alongside Opus: in MODEL_REGISTRY they carry pricingTier 'tier_10_50',
-  // the most expensive tier there — above every Opus, which is 'tier_5_25'.
+  // alongside Opus: of the entries in MODEL_REGISTRY they carry the most
+  // expensive pricingTier, 'tier_10_50', above every Opus entry in it at
+  // 'tier_5_25'.
   if (lower.includes('opus')) return 'deepseek-v4-pro'
   if (lower.includes('fable')) return 'deepseek-v4-pro'
   if (lower.includes('mythos')) return 'deepseek-v4-pro'
