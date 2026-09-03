@@ -1114,18 +1114,39 @@ function consumeNextEagerLoadReason(): InstructionsLoadReason | undefined {
   return reason
 }
 
+// Cache layers built on top of getMemoryFiles() register their own clear here
+// (context.ts registers getUserContext's memo clear). getMemoryFiles() is a
+// low-level dependency of context.ts, so claudemd.ts must not import the
+// higher layer back — a static import would create a module cycle. This keeps
+// the dependency direction acyclic while letting one clearMemoryFileCaches()
+// invalidate the whole stack. Registration runs at module init, long before
+// any runtime invalidation call.
+const layeredMemoryCacheClears = new Set<() => void>()
+
+export function registerLayeredMemoryCacheClear(clear: () => void): void {
+  layeredMemoryCacheClears.add(clear)
+}
+
 /**
- * Clears the getMemoryFiles memoize cache
- * without firing the InstructionsLoaded hook.
+ * Clears the whole memory-file cache stack without firing the
+ * InstructionsLoaded hook.
  *
- * Use this for cache invalidation that is purely for correctness (e.g.
- * worktree enter/exit, settings sync, /memory dialog). For events that
- * represent instructions actually being reloaded into context (e.g.
- * compaction), use resetGetMemoryFilesCache() instead.
+ * getUserContext (context.ts) is a memoized outer layer that assembles the
+ * claudeMd block from getMemoryFiles(). Clearing only the inner getMemoryFiles
+ * cache leaves the next getUserContext() a memo HIT on stale assembled content,
+ * so mid-session memory edits and CWD changes (worktree enter/exit, settings
+ * sync, /memory dialog, import, team-memory pull) never reach the prompt until
+ * a /compact or /clear. postCompactCleanup documents the same two-layer trap
+ * for the compaction path; this centralizes the layered clears for the
+ * correctness-only callers, which all route through this function.
+ *
+ * For events that represent instructions actually being reloaded into context
+ * (e.g. compaction), use resetGetMemoryFilesCache() instead.
  */
 export function clearMemoryFileCaches(): void {
-  // ?.cache because tests spyOn this, which replaces the memoize wrapper.
+  // ?.cache because tests spy on these, which replaces the memoize wrapper.
   getMemoryFiles.cache?.clear?.()
+  for (const clear of layeredMemoryCacheClears) clear()
 }
 
 export function resetGetMemoryFilesCache(
