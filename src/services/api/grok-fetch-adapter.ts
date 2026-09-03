@@ -479,15 +479,17 @@ async function translateOpenAIStreamToAnthropic(
           try {
             event = JSON.parse(dataStr) as Record<string, unknown>
           } catch {
-            // A frame that fails JSON.parse is corrupt or split, not merely
+            // A frame that fails JSON.parse is malformed, not merely
             // unfamiliar — an unmodelled field would parse fine and be ignored
-            // below. Still not escalated to a stream error, because the damage
-            // it represents is already caught downstream: a split frame means
-            // the connection broke, and that ends the stream without a
-            // finish_reason, which now fails loudly. Escalating here as well
-            // would only change which of the two errors the user sees. The
-            // payload is logged because the length alone gave nothing to
-            // diagnose from.
+            // below. Not escalated to a stream error, because the two ways it
+            // happens both end acceptably: a frame split by a dropped
+            // connection also ends the stream without a finish_reason, which
+            // now fails loudly; and a spec-legal multi-line `data:` field (the
+            // continuation lines are dropped above, since they do not start
+            // with `data: `) would lose one frame from a stream that is
+            // otherwise fine. OpenAI-shaped APIs emit single-line JSON, so the
+            // second is theoretical. The payload is logged because the length
+            // alone gave nothing to diagnose from.
             logForDebugging(
               `Grok SSE: malformed JSON frame, skipped: ${dataStr.slice(0, 200)}`,
               { level: 'warn' },
@@ -666,10 +668,19 @@ async function translateOpenAIStreamToAnthropic(
     // still 0) used to skip this entirely and be reported as a clean end_turn.
     //
     // Emitted as `event: error`, not as warning text in the assistant block.
-    // Injecting text here would finish the message with stop_reason 'end_turn',
-    // which the turn loop cannot retry, and the warning would come back next
-    // turn as the model's own prior output. A completed stream always carries a
-    // finish_reason, so this cannot fire on the happy path.
+    // Injecting text here finished the message as a normal end_turn, so a
+    // truncated answer was indistinguishable from a complete one and the
+    // warning came back the next turn as the model's own prior output.
+    //
+    // This surfaces as a hard turn failure, not a retry: the SDK raises
+    // `APIError` with no status (`@anthropic-ai/sdk/core/streaming.js`, the
+    // `sse.event === 'error'` branch passes `undefined`), and
+    // `withRetry.ts:866` bails on a statusless error. So the streaming path
+    // fails visibly while the non-streaming 500 below is retried. Visible and
+    // unretried still beats silently wrong, but the asymmetry is real.
+    //
+    // A completed stream always carries a finish_reason, so this cannot fire
+    // on the happy path.
     if (!finishReasonReceived) {
       const message = 'Grok stream ended without a finish_reason — the response was cut short'
       logError(new Error(message))
@@ -862,6 +873,11 @@ async function aggregateStreamToMessage(
             streamError = err?.message ?? 'Grok stream failed'
             break
           }
+          // Keep-alive, emitted by the pump on every response. Listed
+          // explicitly so it does not reach the `default` below and warn on
+          // every non-streaming call.
+          case 'ping':
+            break
           default:
             logForDebugging(
               `Grok: unhandled Anthropic SSE event '${eventName}' while aggregating a non-streaming response`,
