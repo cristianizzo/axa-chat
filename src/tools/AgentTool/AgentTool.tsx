@@ -52,7 +52,7 @@ import { buildForkedMessages, buildWorktreeNotice, FORK_AGENT, isForkSubagentEna
 import type { AgentDefinition } from './loadAgentsDir.js';
 import { filterAgentsByMcpRequirements, hasRequiredMcpServers, isBuiltInAgent } from './loadAgentsDir.js';
 import { getPrompt } from './prompt.js';
-import { runAgent } from './runAgent.js';
+import { filterIncompleteToolCalls, runAgent } from './runAgent.js';
 import { renderGroupedAgentToolUse, renderToolResultMessage, renderToolUseErrorMessage, renderToolUseMessage, renderToolUseProgressMessage, renderToolUseRejectedMessage, renderToolUseTag, userFacingName, userFacingNameBackgroundColor } from './UI.js';
 
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -911,41 +911,84 @@ export const AgentTool = buildTool({
                 void runWithAgentContext(syncAgentContext, async () => {
                   let stopBackgroundedSummarization: (() => void) | undefined;
                   try {
-                    // Clean up the foreground iterator so its finally block runs
-                    // (releases MCP connections, session hooks, prompt cache tracking, etc.)
-                    // Timeout prevents blocking if MCP server cleanup hangs.
-                    // .catch() prevents unhandled rejection if timeout wins the race.
-                    await Promise.race([agentIterator.return(undefined).catch(() => {}), sleep(1000)]);
-                    // Initialize progress tracking from existing messages
+                    // The background signal (Shift+Tab / auto-background timer) almost
+                    // always fires while the agent's iterator has an in-flight .next()
+                    // — i.e. the generator is mid-turn (model or tool call). An async
+                    // generator only honors .return() once it reaches a yield, so
+                    // calling it on a running generator neither interrupts the current
+                    // segment nor resolves promptly. Racing it against sleep(1000) and
+                    // moving on (a) left that abandoned loop alive to finish its
+                    // segment (duplicate side effects) and (b) handed the second
+                    // runAgent below only the ORIGINAL prompt, so it restarted from
+                    // scratch and re-ran every already-completed tool call. Instead:
+                    // land the in-flight segment so the generator reaches a yield with
+                    // its message captured, then await .return() for real — the
+                    // generator is now suspended at the yield, so it terminates
+                    // promptly and its finally (MCP/session-hook cleanup) runs before
+                    // the background loop starts.
+                    const landed = await nextMessagePromise;
+                    if (!landed.done) {
+                      agentMessages.push(landed.value);
+                    }
+                    // .catch: a teardown error in the generator's finally must not
+                    // fail the whole background transition (messages are already
+                    // captured) — but log it rather than swallowing silently.
+                    await agentIterator.return(undefined).catch(err => {
+                      logForDebugging(`Failed to clean up foreground agent iterator after backgrounding: ${errorMessage(err)}`);
+                    });
+
+                    // Initialize progress tracking from existing messages (including
+                    // any message landed above)
                     const tracker = createProgressTracker();
                     const resolveActivity2 = createActivityDescriptionResolver(toolUseContext.options.tools);
                     for (const existingMsg of agentMessages) {
                       updateProgressFromMessage(tracker, existingMsg, resolveActivity2, toolUseContext.options.tools);
                     }
-                    for await (const msg of runAgent({
-                      ...runAgentParams,
-                      isAsync: true,
-                      // Agent is now running in background
-                      override: {
-                        ...runAgentParams.override,
-                        agentId: asAgentId(backgroundedTaskId),
-                        abortController: task.abortController
-                      },
-                      onCacheSafeParams: getSdkAgentProgressSummariesEnabled() ? (params: CacheSafeParams) => {
-                        const {
-                          stop
-                        } = startAgentSummarization(backgroundedTaskId, asAgentId(backgroundedTaskId), params, rootSetAppState);
-                        stopBackgroundedSummarization = stop;
-                      } : undefined
-                    })) {
-                      agentMessages.push(msg);
 
-                      // Track progress for backgrounded agents
-                      updateProgressFromMessage(tracker, msg, resolveActivity2, toolUseContext.options.tools);
-                      updateAsyncAgentProgress(backgroundedTaskId, getProgressUpdate(tracker), rootSetAppState);
-                      const lastToolName = getLastToolUseName(msg);
-                      if (lastToolName) {
-                        emitTaskProgress(tracker, backgroundedTaskId, toolUseContext.toolUseId, description, startTime, lastToolName);
+                    if (!landed.done) {
+                      // If the task was killed while we waited for the in-flight
+                      // segment to land, don't launch a fresh continuation — the
+                      // kill path below handles cleanup.
+                      if (task.abortController.signal.aborted) {
+                        throw new AbortError();
+                      }
+                      // Continue the agent in the background. Seed it with the
+                      // original context PLUS the messages accumulated while it ran
+                      // in the foreground so it resumes where the sync loop left off
+                      // instead of restarting from the prompt.
+                      // filterIncompleteToolCalls drops any assistant tool_use that
+                      // decided but did not yet run a tool (its result was never
+                      // yielded) — that tool is only ever executed by the
+                      // continuation, so there is no double execution.
+                      const continuedFrom = filterIncompleteToolCalls(
+                        agentMessages.filter(m => m.type === 'assistant' || m.type === 'user'),
+                      );
+                      for await (const msg of runAgent({
+                        ...runAgentParams,
+                        promptMessages: [...runAgentParams.promptMessages, ...continuedFrom],
+                        isAsync: true,
+                        // Agent is now running in background
+                        override: {
+                          ...runAgentParams.override,
+                          agentId: asAgentId(backgroundedTaskId),
+                          abortController: task.abortController
+                        },
+                        onCacheSafeParams: getSdkAgentProgressSummariesEnabled() ? (params: CacheSafeParams) => {
+                          const {
+                            stop
+                          } = startAgentSummarization(backgroundedTaskId, asAgentId(backgroundedTaskId), params, rootSetAppState);
+                          stopBackgroundedSummarization = stop;
+                        } : undefined
+                      })) {
+                        agentMessages.push(msg);
+
+                        // Track progress for backgrounded agents
+                        updateProgressFromMessage(tracker, msg, resolveActivity2, toolUseContext.options.tools);
+                        updateAsyncAgentProgress(backgroundedTaskId, getProgressUpdate(tracker), rootSetAppState);
+                        const lastToolName = getLastToolUseName(msg);
+                        if (lastToolName) {
+                          emitTaskProgress(tracker, backgroundedTaskId, toolUseContext.toolUseId, description, startTime, lastToolName);
+                        }
                       }
                     }
                     const agentResult = finalizeAgentTool(agentMessages, backgroundedTaskId, metadata);
