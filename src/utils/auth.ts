@@ -1480,6 +1480,42 @@ export function isKimiSubscriber(): boolean {
   return !!getKimiAuth()?.apiKey
 }
 
+// ── Grok API key storage ─────────────────────────────────────────────────────
+// Grok credentials live in GlobalConfig alongside Codex, Ollama, DeepSeek and
+// Kimi, never in the keychain. The key goes to api.x.ai as a Bearer token and
+// is never forwarded to Anthropic's servers — worth stating twice, because the
+// request leaving here is an Anthropic-shaped one that a translating fetch
+// adapter rewrites before it reaches x.ai.
+
+export type GrokAuth = {
+  apiKey: string
+}
+
+/**
+ * Retrieves the stored Grok API key from GlobalConfig.
+ * Returns null if no key has been stored.
+ */
+export function getGrokAuth(): GrokAuth | null {
+  const stored = getGlobalConfig().grokAuth
+  if (!stored?.apiKey) return null
+  return { apiKey: stored.apiKey }
+}
+
+/**
+ * Whether Grok is the active, usable provider.
+ *
+ * Same shape as {@link isKimiSubscriber}: the provider check keeps this false
+ * whenever some other account is active, and the stored-key check ensures we do
+ * not route to a backend we cannot authenticate to — e.g. after a logout
+ * cleared the key.
+ *
+ * @returns Whether Grok is the active, usable provider
+ */
+export function isGrokSubscriber(): boolean {
+  if (getAPIProvider() !== 'grok') return false
+  return !!getGrokAuth()?.apiKey
+}
+
 
 let lastCredentialsMtimeMs = 0
 

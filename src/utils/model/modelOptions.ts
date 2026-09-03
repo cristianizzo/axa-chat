@@ -7,6 +7,7 @@ import {
   isClaudeAISubscriber,
   isCodexSubscriber,
   isDeepSeekSubscriber,
+  isGrokSubscriber,
   isKimiSubscriber,
   isMaxSubscriber,
   isOllamaSubscriber,
@@ -420,14 +421,15 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     return [getDefaultOptionForUser(fastMode)]
   }
 
-  // Codex, DeepSeek and Kimi: show only what their catalog declares. Codex gets
-  // a "Default (recommended)" entry since it has a known preferred model; the
-  // other two show their models directly without a redundant default alias.
+  // Codex, DeepSeek, Kimi and Grok: show only what their catalog declares.
+  // Codex gets a "Default (recommended)" entry since it has a known preferred
+  // model; the others show their models directly without a redundant default
+  // alias.
   if (isCodexSubscriber()) {
     return [getDefaultOptionForUser(), ...getCatalogModelOptions(getActiveAuthProvider())]
   }
 
-  if (isDeepSeekSubscriber() || isKimiSubscriber()) {
+  if (isDeepSeekSubscriber() || isKimiSubscriber() || isGrokSubscriber()) {
     return getCatalogModelOptions(getActiveAuthProvider())
   }
 
@@ -565,10 +567,10 @@ export function getModelOptions(fastMode = false): ModelOption[] {
 function getModelOptionsInternal(fastMode = false): ModelOption[] {
   const options = getModelOptionsBase(fastMode)
 
-  // Ollama, DeepSeek and Kimi serve only their provider-specific model lists.
-  // Skip Anthropic-specific augmentation and allowlist filtering below, which
-  // could otherwise add unservable Claude models to their pickers.
-  if (isOllamaSubscriber() || isDeepSeekSubscriber() || isKimiSubscriber()) {
+  // Ollama, DeepSeek, Kimi and Grok serve only their provider-specific model
+  // lists. Skip Anthropic-specific augmentation and allowlist filtering below,
+  // which could otherwise add unservable Claude models to their pickers.
+  if (isOllamaSubscriber() || isDeepSeekSubscriber() || isKimiSubscriber() || isGrokSubscriber()) {
     return options
   }
 
