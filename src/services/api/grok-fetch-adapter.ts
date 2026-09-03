@@ -482,14 +482,15 @@ async function translateOpenAIStreamToAnthropic(
             // A frame that fails JSON.parse is malformed, not merely
             // unfamiliar — an unmodelled field would parse fine and be ignored
             // below. Not escalated to a stream error, because the two ways it
-            // happens both end acceptably: a frame split by a dropped
+            // happens both end acceptably. A frame split by a dropped
             // connection also ends the stream without a finish_reason, which
-            // now fails loudly; and a spec-legal multi-line `data:` field (the
-            // continuation lines are dropped above, since they do not start
-            // with `data: `) would lose one frame from a stream that is
-            // otherwise fine. OpenAI-shaped APIs emit single-line JSON, so the
-            // second is theoretical. The payload is logged because the length
-            // alone gave nothing to diagnose from.
+            // now fails loudly. And a multi-line SSE `data` field — expressed
+            // as repeated `data:` lines, so each one clears the prefix check
+            // above and is parsed as its own frame — makes each line fail
+            // here, losing that one event from a stream that is otherwise
+            // fine. OpenAI-shaped APIs emit single-line JSON, so the second is
+            // theoretical. The payload is logged because the length alone gave
+            // nothing to diagnose from.
             logForDebugging(
               `Grok SSE: malformed JSON frame, skipped: ${dataStr.slice(0, 200)}`,
               { level: 'warn' },
@@ -673,11 +674,11 @@ async function translateOpenAIStreamToAnthropic(
     // warning came back the next turn as the model's own prior output.
     //
     // This surfaces as a hard turn failure, not a retry: the SDK raises
-    // `APIError` with no status (`@anthropic-ai/sdk/core/streaming.js`, the
-    // `sse.event === 'error'` branch passes `undefined`), and
-    // `withRetry.ts:866` bails on a statusless error. So the streaming path
-    // fails visibly while the non-streaming 500 below is retried. Visible and
-    // unretried still beats silently wrong, but the asymmetry is real.
+    // `APIError` with no status (the vendored `streaming.js` passes
+    // `undefined` on `sse.event === 'error'`), and `shouldRetry` bails on a
+    // statusless error. So the streaming path fails visibly while the
+    // non-streaming 500 below is retried. Visible and unretried still beats
+    // silently wrong, but the asymmetry is real.
     //
     // A completed stream always carries a finish_reason, so this cannot fire
     // on the happy path.
