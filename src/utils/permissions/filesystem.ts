@@ -82,6 +82,14 @@ export const DANGEROUS_DIRECTORIES = [
   // protection from exactly the projects that predate the rename — the ones
   // still relying on it.
   '.claude',
+  // Credential / persistence directories. Writing here grants persistent
+  // access or exposes secrets: an edit to ~/.ssh/authorized_keys is a
+  // backdoor, and these hold private keys / cloud credentials. Listed as
+  // whole directories because every file under them is sensitive. The
+  // segment match applies wherever they appear (home or a project's .ssh).
+  '.ssh',
+  '.aws',
+  '.gnupg',
 ] as const
 
 /**
