@@ -399,6 +399,37 @@ export function useManageMCPConnections(
                     )
                     const elapsed = Date.now() - reconnectStartTime
 
+                    // The disabled check at the top of this loop only guards
+                    // the window before the connect attempt starts. If the
+                    // user disables the server while reconnectMcpServerImpl
+                    // is in flight, it can resolve to a fresh 'connected'
+                    // client that would otherwise be surfaced here and its
+                    // tools re-exposed behind the user's back. Re-check after
+                    // the connect resolves and, if disabled, tear the new
+                    // connection down instead of applying it — the 'disabled'
+                    // state toggleMcpServer wrote stays intact.
+                    if (isMcpServerDisabled(client.name)) {
+                      reconnectTimersRef.current.delete(client.name)
+                      if (result.client.type === 'connected') {
+                        logMCPDebug(
+                          client.name,
+                          `Server disabled during reconnection, closing new connection`,
+                        )
+                        await result.client.cleanup().catch(error =>
+                          logMCPError(
+                            client.name,
+                            `Error cleaning up connection closed after disable: ${errorMessage(error)}`,
+                          ),
+                        )
+                      } else {
+                        logMCPDebug(
+                          client.name,
+                          `Server disabled during reconnection, discarding result`,
+                        )
+                      }
+                      return
+                    }
+
                     if (result.client.type === 'connected') {
                       logMCPDebug(
                         client.name,
