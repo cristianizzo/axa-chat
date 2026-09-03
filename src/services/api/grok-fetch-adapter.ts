@@ -270,7 +270,12 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
     const format = (anthropicBody.output_config as { format?: unknown }).format as
       | { type?: string; schema?: unknown }
       | undefined
-    if (format?.type === 'json_schema' && format.schema && typeof format.schema === 'object') {
+    if (
+      format?.type === 'json_schema' &&
+      format.schema &&
+      typeof format.schema === 'object' &&
+      !Array.isArray(format.schema)
+    ) {
       body.response_format = { type: 'json_schema', json_schema: { schema: format.schema } }
     }
   }

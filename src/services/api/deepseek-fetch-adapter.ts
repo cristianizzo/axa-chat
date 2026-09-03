@@ -264,7 +264,12 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
     const format = (anthropicBody.output_config as { format?: unknown }).format as
       | { type?: string; schema?: unknown }
       | undefined
-    if (format?.type === 'json_schema' && format.schema && typeof format.schema === 'object') {
+    if (
+      format?.type === 'json_schema' &&
+      format.schema &&
+      typeof format.schema === 'object' &&
+      !Array.isArray(format.schema)
+    ) {
       const promptText = [system ?? '', ...messages.map(promptTextOf)].join('\n')
       if (/\bjson\b/i.test(promptText)) {
         logForDebugging(
@@ -274,7 +279,7 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
         body.response_format = { type: 'json_object' }
       } else {
         logForDebugging(
-          'DeepSeek: json_schema structured output dropped (provider lacks json_schema and the prompt does not ask for json_object)',
+          'DeepSeek: json_schema structured output dropped (provider lacks json_schema and the prompt never mentions JSON)',
           { level: 'warn' },
         )
       }
