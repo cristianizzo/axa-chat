@@ -605,19 +605,27 @@ async function translateOpenAIStreamToAnthropic(
       return
     }
 
-    // If the stream ended without a finish_reason (truncated connection), warn the user
+    // A stream that ends without a finish_reason was cut off: the socket closed
+    // cleanly enough that `read()` reported `done`, but DeepSeek never said why
+    // it stopped. Deliberately not gated on contentBlockIndex — that counter
+    // only advances when a block is *closed*, so the commonest truncation of all
+    // (a single answer cut off mid-sentence, one text block still open, index
+    // still 0) used to skip this entirely and be reported as a clean end_turn.
+    //
+    // Emitted as `event: error`, not as warning text in the assistant block.
+    // Injecting text here would finish the message with stop_reason 'end_turn',
+    // which the turn loop cannot retry, and the warning would come back next
+    // turn as the model's own prior output. A completed stream always carries a
+    // finish_reason, so this cannot fire on the happy path.
     if (!finishReasonReceived) {
-      logForDebugging('DeepSeek SSE: stream ended without finish_reason — response may be incomplete', { level: 'warn' })
-      if (!textBlockOpen) {
-        closeThinkingBlock()
-        flushToolBlocks()
-        openTextBlock()
-      }
-      safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
-        type: 'content_block_delta',
-        index: contentBlockIndex,
-        delta: { type: 'text_delta', text: '\n\n[Warning: DeepSeek response was cut short — the answer may be incomplete.]' },
+      const message = 'DeepSeek stream ended without a finish_reason — the response was cut short'
+      logError(new Error(message))
+      safeEnqueue(encoder.encode(formatSSE('error', JSON.stringify({
+        type: 'error',
+        error: { type: 'api_error', message },
       }))))
+      await sink.close()
+      return
     }
 
     // Close any open blocks
@@ -694,9 +702,17 @@ async function aggregateStreamToMessage(
 
   const blocks: AnthropicContentBlock[] = []
   const partialJson = new Map<number, string>()
+  let streamError: string | null = null
 
   const reader = streamResponse.body?.getReader()
-  if (!reader) return new Response(JSON.stringify(message), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  if (!reader) {
+    const message = 'DeepSeek: translated stream had no body to aggregate'
+    logError(new Error(message))
+    return new Response(
+      JSON.stringify({ type: 'error', error: { type: 'api_error', message } }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } },
+    )
+  }
 
   const decoder = new TextDecoder()
   let buffer = ''
@@ -782,11 +798,37 @@ async function aggregateStreamToMessage(
             if (data.usage) message.usage = { ...(message.usage as object), ...(data.usage as object) }
             break
           }
+          // The streaming path signals every failure as `event: error`. Without
+          // this case the frame matched nothing and was dropped, and the caller
+          // got 200 with the initialised stop_reason 'end_turn' plus whatever
+          // partial content had arrived — a truncated answer indistinguishable
+          // from a complete one. This path feeds sideQuery, so that answer was
+          // being used to make permission decisions.
+          case 'error': {
+            const err = data.error as { message?: string } | undefined
+            streamError = err?.message ?? 'DeepSeek stream failed'
+            break
+          }
+          default:
+            logForDebugging(
+              `DeepSeek: unhandled Anthropic SSE event '${eventName}' while aggregating a non-streaming response`,
+              { level: 'warn' },
+            )
         }
       }
     }
   } finally {
     reader.releaseLock()
+  }
+
+  // A non-200 is what makes the SDK raise an APIError on the non-streaming
+  // path, mirroring what `event: error` does on the streaming one. 500 so the
+  // SDK's own retry policy treats it as transient.
+  if (streamError) {
+    return new Response(
+      JSON.stringify({ type: 'error', error: { type: 'api_error', message: streamError } }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } },
+    )
   }
 
   message.content = blocks.filter(Boolean)
