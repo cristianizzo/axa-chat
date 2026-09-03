@@ -90,8 +90,19 @@ function checkDangerousRemovalPaths(
       return {
         behavior: 'ask',
         message: `Dangerous ${command} operation detected: '${absolutePath}'\n\nThis command would remove a critical system directory. This requires explicit approval and cannot be auto-allowed by permission rules.`,
+        // safetyCheck, not 'other': auto mode's isLocallyRiskyAction only
+        // re-prompts on type 'safetyCheck'. With 'other', an `rm -rf /` that
+        // reached this gate while bypassing the destructive-command regexes
+        // (which require `rm` at the start of the input or after a separator —
+        // e.g. `env rm -rf /`, since stripWrappersFromArgv removes `env` and
+        // the base command resolves to `rm`) was auto-approved in auto mode
+        // despite this message promising it "cannot be auto-allowed".
+        // classifierApprovable is false because a critical-path removal must
+        // not be delegated to a classifier either — it needs an explicit
+        // human yes.
         decisionReason: {
-          type: 'other',
+          type: 'safetyCheck',
+          classifierApprovable: false,
           reason: `Dangerous ${command} operation on critical path: ${absolutePath}`,
         },
         // Don't provide suggestions - we don't want to encourage saving dangerous commands
