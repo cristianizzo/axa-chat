@@ -472,7 +472,15 @@ async function translateOpenAIStreamToAnthropic(
           try {
             event = JSON.parse(dataStr) as Record<string, unknown>
           } catch {
-            logForDebugging(`Grok SSE: malformed JSON (${dataStr.length} chars)`, { level: 'warn' })
+            // Not escalated to a stream error: a single unparseable frame is far
+            // more likely to be a field we don't model than a broken connection,
+            // and a truncated connection is already caught by the finish_reason
+            // guard below. The payload is logged because the length alone gives
+            // nothing to diagnose from.
+            logForDebugging(
+              `Grok SSE: malformed JSON frame, skipped: ${dataStr.slice(0, 200)}`,
+              { level: 'warn' },
+            )
             continue
           }
 
