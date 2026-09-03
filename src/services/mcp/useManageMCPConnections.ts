@@ -409,13 +409,23 @@ export function useManageMCPConnections(
                     // connection down instead of applying it — the 'disabled'
                     // state toggleMcpServer wrote stays intact.
                     if (isMcpServerDisabled(client.name)) {
-                      logMCPDebug(
-                        client.name,
-                        `Server disabled during reconnection, closing new connection`,
-                      )
                       reconnectTimersRef.current.delete(client.name)
                       if (result.client.type === 'connected') {
-                        await result.client.cleanup().catch(() => {})
+                        logMCPDebug(
+                          client.name,
+                          `Server disabled during reconnection, closing new connection`,
+                        )
+                        await result.client.cleanup().catch(error =>
+                          logMCPDebug(
+                            client.name,
+                            `Error cleaning up connection closed after disable: ${error}`,
+                          ),
+                        )
+                      } else {
+                        logMCPDebug(
+                          client.name,
+                          `Server disabled during reconnection, discarding result`,
+                        )
                       }
                       return
                     }
