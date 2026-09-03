@@ -229,6 +229,19 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
     body.temperature = anthropicBody.temperature
   }
 
+  if (Array.isArray(anthropicBody.stop_sequences)) {
+    // Anthropic stop_sequences → OpenAI stop. Without this the sequences were
+    // dropped, so a caller that asks the model to stop at a marker (e.g.
+    // yoloClassifier's '</block>') had the model run straight past it and
+    // parse text it was promised would never appear. Filtered to strings —
+    // `stop_sequences` arrives untyped on this Record, and a non-string entry
+    // would draw a provider 400.
+    const sequences = anthropicBody.stop_sequences.filter(
+      (s): s is string => typeof s === 'string' && s.length > 0,
+    )
+    if (sequences.length > 0) body.stop = sequences
+  }
+
   if (anthropicTools.length > 0) {
     body.tools = translateTools(anthropicTools)
     // Translate Anthropic tool_choice → OpenAI tool_choice
@@ -901,6 +914,15 @@ async function aggregateStreamToMessage(
     )
   }
 
+  // A tool_use stop_reason with no surviving tool_use block means the call
+  // was dropped for unparseable arguments (see content_block_stop above).
+  // Claiming a tool call that is not in the content would make the caller wait
+  // for a tool_use block that never comes; downgrade to end_turn so the
+  // message is coherent text.
+  if (message.stop_reason === 'tool_use' && !blocks.some(b => b?.type === 'tool_use')) {
+    message.stop_reason = 'end_turn'
+  }
+
   message.content = blocks.filter(Boolean)
   return new Response(JSON.stringify(message), {
     status: 200,
@@ -1016,9 +1038,19 @@ export function createDeepSeekFetch(
           message: `DeepSeek API error (${deepSeekResponse.status}): ${describeDeepSeekError(errorText)}`,
         },
       }
+      // The upstream retry directives must survive the translation, or the
+      // provider's backoff is discarded. The vendored SDK reads
+      // retry-after-ms and retry-after off the error Response's headers; this
+      // repo's shouldRetry (getRetryAfter) reads only retry-after. Preserving
+      // both covers the SDK and the repo retry loop.
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      for (const name of ['retry-after-ms', 'retry-after']) {
+        const value = deepSeekResponse.headers.get(name)
+        if (value) headers[name] = value
+      }
       return new Response(JSON.stringify(errorBody), {
         status: deepSeekResponse.status,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
       })
     }
 
