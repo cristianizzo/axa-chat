@@ -326,6 +326,14 @@ export type GlobalConfig = {
   kimiAuth?: {
     apiKey: string
   }
+  /**
+   * Grok API key credentials, stored separately from Anthropic and Codex.
+   * The key is sent as a Bearer token to api.x.ai and is never forwarded to
+   * Anthropic's servers. No OAuth flow — the user pastes the key at login.
+   */
+  grokAuth?: {
+    apiKey: string
+  }
 
   /**
    * Per-account model memory, keyed by auth provider id. Each account (Anthropic,

@@ -5,12 +5,14 @@ import {
 import type { ModelName } from './model.js'
 import type { APIProvider } from './providers.js'
 
-// Ollama, DeepSeek and Kimi have no column in the builtin config table — they
-// don't use the Anthropic model ID rewriting scheme. getBuiltinModelStrings
-// falls back to firstParty for Ollama; DeepSeek and Kimi use their own catalogs
-// entirely. Note this is not about the request shape: Kimi speaks Anthropic and
-// still belongs here, because the table maps one Claude model across backends
-// and there is no Kimi model that is Claude Sonnet 4.5 under another name.
+// Ollama, DeepSeek, Kimi and Grok have no column in the builtin config table —
+// they don't use the Anthropic model ID rewriting scheme. getBuiltinModelStrings
+// falls back to firstParty for Ollama; DeepSeek, Kimi and Grok use their own
+// catalogs entirely. Note this is not about the request shape: Kimi speaks
+// Anthropic and still belongs here, because the table maps one Claude model
+// across backends and there is no Kimi model that is Claude Sonnet 4.5 under
+// another name. Grok's translating fetch adapter rewrites any inbound `claude-*`
+// id to grok-4.6, so there is no Grok column to keep in sync either.
 //
 // Declared as a value, not just a type argument, because the fallback in
 // getBuiltinModelStrings has to make the same distinction at runtime and used
@@ -19,6 +21,7 @@ const PROVIDERS_WITHOUT_MODEL_CONFIG = [
   'ollama',
   'deepseek',
   'kimi',
+  'grok',
 ] as const satisfies readonly APIProvider[]
 
 /** A provider that is a column in {@link ModelConfig}. */

@@ -23,12 +23,14 @@
 import type { GlobalConfig } from '../../utils/config.js'
 import { CODEX_PROVIDER_ID } from '../codex.js'
 import { DEEPSEEK_PROVIDER_ID } from '../deepseek.js'
+import { GROK_PROVIDER_ID } from '../grok.js'
 import { KIMI_PROVIDER_ID } from '../kimi.js'
 import { OLLAMA_PROVIDER_ID } from '../ollama.js'
 import { ANTHROPIC_PROVIDER, ANTHROPIC_PROVIDER_ID } from './anthropic.js'
 import type { ProviderModelCatalog } from './catalog.js'
 import { CODEX_PROVIDER } from './codex.js'
 import { DEEPSEEK_PROVIDER } from './deepseek.js'
+import { GROK_PROVIDER } from './grok.js'
 import { KIMI_PROVIDER } from './kimi.js'
 import { OLLAMA_PROVIDER } from './ollama.js'
 import type { ProviderDescriptor } from './types.js'
@@ -58,6 +60,7 @@ const PROVIDER_TUPLE = [
   OLLAMA_PROVIDER,
   DEEPSEEK_PROVIDER,
   KIMI_PROVIDER,
+  GROK_PROVIDER,
 ] as const satisfies readonly ProviderDescriptor[]
 
 /**
@@ -79,6 +82,7 @@ const PROVIDER_IDS = [
   OLLAMA_PROVIDER_ID,
   DEEPSEEK_PROVIDER_ID,
   KIMI_PROVIDER_ID,
+  GROK_PROVIDER_ID,
 ] as const
 
 export type AuthProviderId = (typeof PROVIDER_IDS)[number]
@@ -102,6 +106,7 @@ export const PROVIDERS: Record<
   [OLLAMA_PROVIDER.id]: OLLAMA_PROVIDER,
   [DEEPSEEK_PROVIDER.id]: DEEPSEEK_PROVIDER,
   [KIMI_PROVIDER.id]: KIMI_PROVIDER,
+  [GROK_PROVIDER.id]: GROK_PROVIDER,
 }
 
 /**

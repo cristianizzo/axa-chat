@@ -21,6 +21,7 @@
 
 import { CODEX_PROVIDER_ID } from 'src/config/codex.js'
 import { DEEPSEEK_PROVIDER_ID } from 'src/config/deepseek.js'
+import { GROK_PROVIDER_ID } from 'src/config/grok.js'
 import { KIMI_BASE_URL, KIMI_PROVIDER_ID } from 'src/config/kimi.js'
 import { OLLAMA_PROVIDER_ID } from 'src/config/ollama.js'
 import {
@@ -31,6 +32,7 @@ import {
 import {
   getCodexOAuthTokens,
   getDeepSeekAuth,
+  getGrokAuth,
   getKimiAuth,
   getOllamaAuth,
 } from 'src/utils/auth.js'
@@ -38,6 +40,7 @@ import { logForDebugging } from 'src/utils/debug.js'
 import { createCodexFetch } from './codex-fetch-adapter.js'
 import { createCountTokensShim } from './count-tokens-shim.js'
 import { createDeepSeekFetch } from './deepseek-fetch-adapter.js'
+import { createGrokFetch } from './grok-fetch-adapter.js'
 import { limitRequestConcurrency } from './requestLimiter.js'
 
 type FetchFn = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -161,6 +164,20 @@ const PROVIDER_CLIENT_BUILDERS: Record<
       // count_tokens never waits for, or occupies, one of the few slots
       // Moonshot gives us.
       fetch: createCountTokensShim(base),
+    }
+  },
+
+  [GROK_PROVIDER_ID]: base => {
+    const apiKey = getGrokAuth()?.apiKey
+    if (!apiKey) {
+      return undefined
+    }
+    return {
+      // The SDK insists on a key; the fetch adapter is what actually
+      // authenticates, sending the real key as `Authorization: Bearer` to
+      // api.x.ai. Mirror of DeepSeek's placeholder.
+      apiKey: 'grok-placeholder',
+      fetch: createGrokFetch(apiKey, base),
     }
   },
 }

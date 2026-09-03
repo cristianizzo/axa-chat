@@ -6,6 +6,7 @@ import {
 } from '../config/providers/index.js'
 import { CODEX_PROVIDER_ID } from '../config/codex.js'
 import { DEEPSEEK_PROVIDER_ID } from '../config/deepseek.js'
+import { GROK_PROVIDER_ID } from '../config/grok.js'
 import { KIMI_PROVIDER_ID } from '../config/kimi.js'
 import { OLLAMA_PROVIDER_ID } from '../config/ollama.js'
 import { stringWidth } from '../ink/stringWidth.js'
@@ -263,9 +264,11 @@ export function formatReleaseNoteForDisplay(
  * special-cased to the front of that chain for exactly this reason, which fixed
  * Codex and left every provider added afterwards broken.
  *
- * The switch is deliberately exhaustive with no `default`, so adding a provider
- * to the registry without giving it a label is a compile error rather than a
- * silent fallback to Anthropic's.
+ * The switch has no `default`, so adding a provider to the registry without
+ * giving it a label must not fall back to Anthropic's. The trailing `never`
+ * assignment is what makes that a compile error: this package builds with
+ * `strict: false` and no `noImplicitReturns`, so a missing case would otherwise
+ * return `undefined` and the banner would read "<model> · undefined".
  */
 function getBillingTypeLabel(): string {
   // CLAUDE_CODE_USE_BEDROCK/_VERTEX/_FOUNDRY beat the account in getAPIProvider()
@@ -294,7 +297,11 @@ function getBillingTypeLabel(): string {
       return 'DeepSeek API Usage'
     case KIMI_PROVIDER_ID:
       return 'Moonshot API Usage'
+    case GROK_PROVIDER_ID:
+      return 'xAI API Usage'
   }
+  const unhandled: never = provider
+  throw new Error(`Unhandled auth provider: ${String(unhandled)}`)
 }
 
 /** The glyph beside a provider that has stored credentials, and one that has not. */

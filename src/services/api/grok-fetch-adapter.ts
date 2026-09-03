@@ -1,7 +1,7 @@
 /**
- * DeepSeek Fetch Adapter
+ * Grok Fetch Adapter
  *
- * Intercepts fetch calls from the Anthropic SDK and routes them to DeepSeek's
+ * Intercepts fetch calls from the Anthropic SDK and routes them to x.ai's
  * OpenAI-compatible Chat Completions API, translating between Anthropic Messages
  * API format and OpenAI Chat Completions format.
  *
@@ -11,12 +11,13 @@
  * - Tool definitions (Anthropic input_schema → OpenAI function parameters)
  * - Tool use (tool_use → function call, tool_result → tool role message)
  * - Streaming events translation (OpenAI SSE → Anthropic SSE)
- * - DeepSeek reasoning_content → thinking content blocks
+ * - Grok reasoning_content → thinking content blocks
+ * - Image input (Anthropic image blocks → OpenAI image_url parts)
  *
- * Endpoint: https://api.deepseek.com/v1/chat/completions
+ * Endpoint: https://api.x.ai/v1/chat/completions
  */
 
-import { DEEPSEEK_BASE_URL, DEEPSEEK_MAX_OUTPUT_TOKENS, DEEPSEEK_MESSAGES_PATH, DEFAULT_DEEPSEEK_MODEL } from '../../config/deepseek.js'
+import { GROK_BASE_URL, GROK_MAX_OUTPUT_TOKENS, GROK_MESSAGES_PATH, DEFAULT_GROK_MODEL } from '../../config/grok.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { estimateTokenCountResponse } from './count-tokens-shim.js'
 import { createBackpressuredSseStream } from './sse-backpressure.js'
@@ -63,7 +64,7 @@ interface AnthropicTool {
 
 interface OpenAIMessage {
   role: string
-  content: string | null
+  content: string | Array<Record<string, unknown>> | null
   tool_calls?: OpenAIToolCall[]
   tool_call_id?: string
   name?: string
@@ -136,7 +137,7 @@ function translateMessages(
             },
           })
         }
-        // thinking/redacted_thinking blocks are skipped — DeepSeek handles its own reasoning
+        // thinking/redacted_thinking blocks are skipped — Grok handles its own reasoning
       }
 
       const assistantMsg: OpenAIMessage = {
@@ -149,8 +150,9 @@ function translateMessages(
       result.push(assistantMsg)
     } else if (msg.role === 'user') {
       // Tool results must become separate `tool` role messages in OpenAI format
-      const textParts: string[] = []
+      const contentParts: Array<Record<string, unknown>> = []
       const toolResults: OpenAIMessage[] = []
+      let hasImage = false
 
       for (const block of msg.content) {
         if (block.type === 'tool_result') {
@@ -170,18 +172,37 @@ function translateMessages(
             content: isError ? `[tool error] ${outputText}` : outputText,
           })
         } else if (block.type === 'text' && typeof block.text === 'string') {
-          textParts.push(block.text)
+          contentParts.push({ type: 'text', text: block.text })
+        } else if (block.type === 'image') {
+          const source = block.source as { type?: string; media_type?: string; data?: string; url?: string } | undefined
+          if (source?.type === 'base64' && source.media_type && source.data) {
+            contentParts.push({ type: 'image_url', image_url: { url: `data:${source.media_type};base64,${source.data}` } })
+            hasImage = true
+          } else if (source?.type === 'url' && source.url) {
+            contentParts.push({ type: 'image_url', image_url: { url: source.url } })
+            hasImage = true
+          } else {
+            logForDebugging(`Grok translateMessages: image block with unrecognised source type '${source?.type}'`, { level: 'warn' })
+            contentParts.push({ type: 'text', text: `[Unsupported ${block.type} attachment omitted from this request.]` })
+          }
         } else {
-          logForDebugging(`DeepSeek: dropping unsupported ${block.type} block from user message`, { level: 'warn' })
-          textParts.push(`[Unsupported ${block.type} attachment omitted from this request.]`)
+          logForDebugging(`Grok translateMessages: unsupported block type '${block.type}' omitted`, { level: 'warn' })
+          contentParts.push({ type: 'text', text: `[Unsupported ${block.type} attachment omitted from this request.]` })
         }
       }
 
       // Tool results first (they logically precede the next user message)
       result.push(...toolResults)
 
-      if (textParts.length > 0) {
-        result.push({ role: 'user', content: textParts.join('') })
+      if (contentParts.length > 0) {
+        if (hasImage) {
+          // OpenAI requires array content when images are present
+          result.push({ role: 'user', content: contentParts })
+        } else {
+          // Plain string for the common text-only path
+          const text = contentParts.map(p => (p as { text?: string }).text ?? '').join('')
+          result.push({ role: 'user', content: text })
+        }
       }
     }
   }
@@ -220,9 +241,9 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
   }
 
   if (typeof anthropicBody.max_tokens === 'number') {
-    // Clamp to DeepSeek's hard cap so an escalated Claude-sized request can
+    // Clamp to Grok's hard cap so an escalated Claude-sized request can
     // never exceed what the API will accept.
-    body.max_tokens = Math.min(anthropicBody.max_tokens, DEEPSEEK_MAX_OUTPUT_TOKENS.upperLimit)
+    body.max_tokens = Math.min(anthropicBody.max_tokens, GROK_MAX_OUTPUT_TOKENS.upperLimit)
   }
 
   if (typeof anthropicBody.temperature === 'number') {
@@ -246,26 +267,37 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
 }
 
 /**
- * Maps an Anthropic model name to the appropriate DeepSeek model.
- * Claude Opus → deepseek-v4-pro, Claude Sonnet/Haiku → deepseek-v4-flash.
- * Any already-valid DeepSeek model ID passes through untouched — including the
- * retired deepseek-chat/deepseek-reasoner aliases, which the API still serves.
+ * Maps an Anthropic model name to the appropriate Grok model.
+ *
+ * Every Claude family — Opus, Sonnet, Haiku, Fable, Mythos — maps to whatever
+ * DEFAULT_GROK_MODEL currently names, so the flagship version lives in
+ * config/grok.ts alone and this function needs no edit when it moves.
+ *
+ * A `grok-*` ID passes through rather than being clamped to the default. In
+ * practice only the catalog's own ID can arrive here — `/model`, settings and
+ * ANTHROPIC_MODEL are all filtered by isServableByActiveProvider, which defers
+ * to the catalog's exact-ID acceptsModel — so the branch is a no-op today. It
+ * stays permissive because the failure modes are asymmetric: if GROK_MODELS
+ * gains a second entry, pass-through serves it, whereas clamping would quietly
+ * answer as the wrong model with no way for the user to tell.
  */
 function resolveModel(claudeModel: string | undefined): string {
-  if (!claudeModel) return DEFAULT_DEEPSEEK_MODEL
+  if (!claudeModel) return DEFAULT_GROK_MODEL
 
   const lower = claudeModel.toLowerCase()
 
-  // Already a DeepSeek model — pass through
-  if (lower.startsWith('deepseek-')) return claudeModel
+  // Already a Grok model — pass through
+  if (lower.startsWith('grok-')) return claudeModel
 
-  // Map Claude families to DeepSeek equivalents
-  if (lower.includes('opus')) return 'deepseek-v4-pro'
-  if (lower.includes('sonnet')) return 'deepseek-v4-flash'
-  if (lower.includes('haiku')) return 'deepseek-v4-flash'
+  // Map Claude families to the Grok flagship
+  if (lower.includes('opus')) return DEFAULT_GROK_MODEL
+  if (lower.includes('sonnet')) return DEFAULT_GROK_MODEL
+  if (lower.includes('haiku')) return DEFAULT_GROK_MODEL
+  if (lower.includes('fable')) return DEFAULT_GROK_MODEL
+  if (lower.includes('mythos')) return DEFAULT_GROK_MODEL
 
-  logForDebugging(`DeepSeek resolveModel: unrecognised model '${claudeModel}', falling back to '${DEFAULT_DEEPSEEK_MODEL}'`, { level: 'warn' })
-  return DEFAULT_DEEPSEEK_MODEL
+  logForDebugging(`Grok resolveModel: unrecognised model '${claudeModel}', falling back to '${DEFAULT_GROK_MODEL}'`, { level: 'warn' })
+  return DEFAULT_GROK_MODEL
 }
 
 // ── Response translation: OpenAI SSE → Anthropic SSE ─────────────────────────
@@ -280,7 +312,7 @@ function formatSSE(event: string, data: string): string {
  * OpenAI stream events look like:
  *   data: {"id":"...","choices":[{"delta":{"content":"hi"},"index":0}]}
  *
- * DeepSeek R1 adds:
+ * Grok adds:
  *   data: {"choices":[{"delta":{"reasoning_content":"...","content":null}}]}
  *
  * We map these to Anthropic's event sequence:
@@ -291,13 +323,13 @@ async function translateOpenAIStreamToAnthropic(
   openAIResponse: Response,
   model: string,
 ): Promise<Response> {
-  const messageId = `msg_deepseek_${Date.now()}`
+  const messageId = `msg_grok_${Date.now()}`
   const encoder = new TextEncoder()
 
   // The pump below fills the sink; the sink hands bytes to the consumer as it
   // asks for them. See sse-backpressure.ts for why the pump is started rather
   // than awaited.
-  const { readable, sink } = createBackpressuredSseStream('DeepSeek', () =>
+  const { readable, sink } = createBackpressuredSseStream('Grok', () =>
     pump(),
   )
   const safeEnqueue = sink.enqueue
@@ -321,7 +353,6 @@ async function translateOpenAIStreamToAnthropic(
     let finishReasonValue: string | null = null
     let lengthTruncated = false
     let sawAnyDataLine = false
-    let rawPrefix = ''
 
     // Emit Anthropic message_start
     safeEnqueue(encoder.encode(formatSSE('message_start', JSON.stringify({
@@ -410,15 +441,17 @@ async function translateOpenAIStreamToAnthropic(
 
     const reader = openAIResponse.body?.getReader()
     if (!reader) {
-      logError(new Error('DeepSeek: response body is null — no stream to read'))
+      logError(new Error('Grok: response body is null — no SSE stream received'))
       safeEnqueue(encoder.encode(formatSSE('error', JSON.stringify({
         type: 'error',
-        error: { type: 'api_error', message: 'DeepSeek stream failed: response body is null' },
+        error: { type: 'api_error', message: 'Grok: response body is null — no SSE stream received' },
       }))))
       await sink.close()
       return
     }
     sink.setUpstreamReader(reader)
+
+    let rawPreview = ''
 
     try {
       const decoder = new TextDecoder()
@@ -431,17 +464,13 @@ async function translateOpenAIStreamToAnthropic(
         const { done, value } = await reader.read()
         if (done) break
 
-        const decoded = decoder.decode(value, { stream: true })
-        // Kept only to diagnose a 200 that carries no SSE at all — the body is
-        // then the API's real complaint (a quota or auth JSON), and without it
-        // the log says nothing more than "something went wrong". Capped, and
-        // never read on the success path.
-        if (rawPrefix.length < RAW_PREFIX_LIMIT) {
-          rawPrefix += decoded.slice(0, RAW_PREFIX_LIMIT - rawPrefix.length)
+        const chunk = decoder.decode(value, { stream: true })
+        buffer += chunk
+        if (rawPreview.length < RAW_PREFIX_LIMIT) {
+          rawPreview += chunk.slice(0, RAW_PREFIX_LIMIT - rawPreview.length)
         }
-        buffer += decoded
         if (buffer.length > MAX_SSE_LINE_BYTES) {
-          throw new Error(`DeepSeek SSE frame exceeded ${MAX_SSE_LINE_BYTES} bytes`)
+          throw new Error(`Grok SSE frame exceeded ${MAX_SSE_LINE_BYTES} bytes`)
         }
         const lines = buffer.split('\n')
         buffer = lines.pop() ?? ''
@@ -450,8 +479,8 @@ async function translateOpenAIStreamToAnthropic(
           const trimmed = line.trim()
           if (!trimmed || !trimmed.startsWith('data: ')) continue
 
-          const dataStr = trimmed.slice(6)
           sawAnyDataLine = true
+          const dataStr = trimmed.slice(6)
           if (dataStr === '[DONE]') continue
 
           let event: Record<string, unknown>
@@ -471,24 +500,24 @@ async function translateOpenAIStreamToAnthropic(
             // theoretical. The payload is logged because the length alone gave
             // nothing to diagnose from.
             logForDebugging(
-              `DeepSeek SSE: malformed JSON frame, skipped: ${dataStr.slice(0, 200)}`,
+              `Grok SSE: malformed JSON frame, skipped: ${dataStr.slice(0, 200)}`,
               { level: 'warn' },
             )
             continue
           }
 
-          // DeepSeek reports a mid-generation abort (rate limit, content filter,
+          // x.ai reports a mid-generation abort (rate limit, content filter,
           // backend fault) as an OpenAI-shaped error frame on an already-200
           // stream. It carries no `choices`, so without this it would fall
-          // through the `!choices?.length` guard below and be discarded — the
-          // user would get whatever text arrived before the abort, presented as
-          // a complete answer. Throw so the catch below marks the stream errored.
+          // through the delta handling below and be discarded — the user would
+          // get whatever text arrived before the abort, presented as a
+          // complete answer. Throw so the catch below marks the stream errored.
           const errorFrame = event.error as
             | { message?: string; type?: string; code?: string }
             | undefined
           if (errorFrame) {
             throw new Error(
-              `DeepSeek stream error: ${errorFrame.message ?? JSON.stringify(errorFrame)}`,
+              `Grok stream error: ${errorFrame.message ?? JSON.stringify(errorFrame)}`,
             )
           }
 
@@ -528,7 +557,7 @@ async function translateOpenAIStreamToAnthropic(
             continue
           }
 
-          // ── Reasoning content (DeepSeek R1) ──────────────────────────────
+          // ── Reasoning content (Grok) ─────────────────────────────────────
           if (delta.reasoning_content) {
             closeTextBlock()
             openThinkingBlock()
@@ -584,7 +613,7 @@ async function translateOpenAIStreamToAnthropic(
                   outputChars += tc.function.arguments.length
                 } else {
                   logForDebugging(
-                    `DeepSeek SSE: argument delta for unknown tool index ${tcIndex}`,
+                    `Grok SSE: argument delta for unknown tool index ${tcIndex}`,
                     { level: 'warn' },
                   )
                 }
@@ -613,13 +642,13 @@ async function translateOpenAIStreamToAnthropic(
         // invisible. Not logError: a genuine user cancel must not trip
         // --hard-fail.
         aborted = true
-        logForDebugging('DeepSeek SSE: stream aborted', { level: 'debug' })
+        logForDebugging('Grok SSE: stream aborted', { level: 'debug' })
       } else {
         streamErrored = true
         logError(err)
         safeEnqueue(encoder.encode(formatSSE('error', JSON.stringify({
           type: 'error',
-          error: { type: 'api_error', message: `DeepSeek stream failed: ${err instanceof Error ? err.message : String(err)}` },
+          error: { type: 'api_error', message: `Grok stream failed: ${err instanceof Error ? err.message : String(err)}` },
         }))))
       }
     } finally {
@@ -627,30 +656,31 @@ async function translateOpenAIStreamToAnthropic(
       sink.setUpstreamReader(null)
     }
 
-    // On abort or stream error, skip finishStream — emitting message_delta/message_stop
-    // after an error event would be incoherent.
+    // Abort or hard error: skip finishStream entirely — emitting message_delta
+    // and message_stop after an error event would be incoherent.
     if (aborted || streamErrored) {
       await sink.close()
       return
     }
 
-    // Non-SSE 200: the API returned 200 but sent no SSE data lines (e.g. a plain JSON error body)
+    // 200 response that contained no SSE data lines at all (e.g. x.ai
+    // returning a plain JSON error body on an otherwise-200 response).
     if (!sawAnyDataLine) {
-      const detail = rawPrefix ? `: ${rawPrefix}` : ''
-      logError(new Error(`DeepSeek: 200 response contained no SSE data lines${detail}`))
+      const detail = rawPreview ? `: ${rawPreview}` : ''
+      logError(new Error(`Grok: 200 response contained no SSE data lines${detail}`))
       safeEnqueue(encoder.encode(formatSSE('error', JSON.stringify({
         type: 'error',
-        error: { type: 'api_error', message: `DeepSeek: 200 response contained no SSE data lines${detail}` },
+        error: { type: 'api_error', message: `Grok: 200 response contained no SSE data lines${detail}` },
       }))))
       await sink.close()
       return
     }
 
     // A stream that ends without a finish_reason was cut off: the socket closed
-    // cleanly enough that `read()` reported `done`, but DeepSeek never said why
-    // it stopped. Deliberately not gated on contentBlockIndex — that counter
-    // only advances when a block is *closed*, so the commonest truncation of all
-    // (a single answer cut off mid-sentence, one text block still open, index
+    // cleanly enough that `read()` reported `done`, but x.ai never said why it
+    // stopped. Deliberately not gated on contentBlockIndex — that counter only
+    // advances when a block is *closed*, so the commonest truncation of all (a
+    // single answer cut off mid-sentence, one text block still open, index
     // still 0) used to skip this entirely and be reported as a clean end_turn.
     //
     // Emitted as `event: error`, not as warning text in the assistant block.
@@ -668,7 +698,7 @@ async function translateOpenAIStreamToAnthropic(
     // A completed stream always carries a finish_reason, so this cannot fire
     // on the happy path.
     if (!finishReasonValue) {
-      const message = 'DeepSeek stream ended without a finish_reason — the response was cut short'
+      const message = 'Grok stream ended without a finish_reason — the response was cut short'
       logError(new Error(message))
       safeEnqueue(encoder.encode(formatSSE('error', JSON.stringify({
         type: 'error',
@@ -684,7 +714,7 @@ async function translateOpenAIStreamToAnthropic(
     // silent truncation this function exists to prevent, so it fails the same
     // loud way, with the reason named.
     if (!MODELLED_FINISH_REASONS.includes(finishReasonValue)) {
-      const message = `DeepSeek stream stopped with unhandled finish_reason '${finishReasonValue}'`
+      const message = `Grok stream stopped with unhandled finish_reason '${finishReasonValue}'`
       logError(new Error(message))
       safeEnqueue(encoder.encode(formatSSE('error', JSON.stringify({
         type: 'error',
@@ -699,9 +729,10 @@ async function translateOpenAIStreamToAnthropic(
     closeThinkingBlock()
     flushToolBlocks()
 
+    // Estimate token count from character count when the API didn't report usage
     if (!usageSeen) {
       outputTokens = Math.ceil(outputChars / 4)
-      logForDebugging('DeepSeek SSE: no usage reported — token counts are estimated', { level: 'warn' })
+      logForDebugging('Grok SSE: no usage reported — token counts are estimated', { level: 'warn' })
     }
 
     await finishStream({ inputTokens, outputTokens, hadToolCalls, lengthTruncated })
@@ -755,7 +786,7 @@ async function aggregateStreamToMessage(
   model: string,
 ): Promise<Response> {
   const message: Record<string, unknown> = {
-    id: `msg_deepseek_${Date.now()}`,
+    id: `msg_grok_${Date.now()}`,
     type: 'message',
     role: 'assistant',
     model,
@@ -771,7 +802,7 @@ async function aggregateStreamToMessage(
 
   const reader = streamResponse.body?.getReader()
   if (!reader) {
-    const message = 'DeepSeek: translated stream had no body to aggregate'
+    const message = 'Grok: translated stream had no body to aggregate'
     logError(new Error(message))
     return new Response(
       JSON.stringify({ type: 'error', error: { type: 'api_error', message } }),
@@ -844,10 +875,10 @@ async function aggregateStreamToMessage(
                 const parsed = json ? JSON.parse(json) : {}
                 block.input = parsed
               } catch (err) {
-                logError(new Error(`DeepSeek: unparseable tool arguments for '${String(block.name ?? 'unknown')}': ${String(err)}`))
+                logError(new Error(`Grok: unparseable tool arguments for '${String(block.name ?? 'unknown')}': ${String(err)}`))
                 blocks[index] = {
                   type: 'text',
-                  text: `[DeepSeek returned an unparseable argument list for tool '${String(block.name ?? 'unknown')}'; the call was not made.]`,
+                  text: `[Grok returned an unparseable argument list for tool '${String(block.name ?? 'unknown')}'; the call was not made.]`,
                 } as AnthropicContentBlock
               }
             }
@@ -871,7 +902,7 @@ async function aggregateStreamToMessage(
           // being used to make permission decisions.
           case 'error': {
             const err = data.error as { message?: string } | undefined
-            streamError = err?.message ?? 'DeepSeek stream failed'
+            streamError = err?.message ?? 'Grok stream failed'
             break
           }
           // Keep-alive, emitted by the pump on every response. Listed
@@ -881,7 +912,7 @@ async function aggregateStreamToMessage(
             break
           default:
             logForDebugging(
-              `DeepSeek: unhandled Anthropic SSE event '${eventName}' while aggregating a non-streaming response`,
+              `Grok: unhandled Anthropic SSE event '${eventName}' while aggregating a non-streaming response`,
               { level: 'warn' },
             )
         }
@@ -922,7 +953,7 @@ function anthropicErrorType(status: number): string {
   }
 }
 
-function describeDeepSeekError(body: string): string {
+function describeGrokError(body: string): string {
   try {
     const parsed = JSON.parse(body) as { error?: { message?: unknown }; message?: unknown } | null
     const message =
@@ -941,17 +972,17 @@ function describeDeepSeekError(body: string): string {
 
 /**
  * Creates a fetch function that intercepts Anthropic SDK calls and routes them
- * to DeepSeek's OpenAI-compatible Chat Completions API.
+ * to Grok's OpenAI-compatible Chat Completions API.
  *
- * @param apiKey - The DeepSeek API key for Bearer authentication
+ * @param apiKey - The Grok API key for Bearer authentication
  * @param inner - The fetch to send the translated request with, and to pass
  *   untranslated requests through to. Taking it as an argument is what lets the
- *   caller wrap DeepSeek traffic the same way it wraps every other provider's:
+ *   caller wrap Grok traffic the same way it wraps every other provider's:
  *   the concurrency limiter and the request logging live in that fetch. Proxy
  *   options do not — the outbound call below sets its own.
  * @returns A fetch suitable for the Anthropic SDK's `fetch` option
  */
-export function createDeepSeekFetch(
+export function createGrokFetch(
   apiKey: string,
   inner: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> = globalThis.fetch,
 ): (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> {
@@ -995,7 +1026,7 @@ export function createDeepSeekFetch(
     const model = resolveModel(anthropicBody.model as string | undefined)
     const openAIBody = translateToOpenAIBody(anthropicBody)
 
-    const deepSeekResponse = await inner(`${DEEPSEEK_BASE_URL}${DEEPSEEK_MESSAGES_PATH}`, {
+    const grokResponse = await inner(`${GROK_BASE_URL}${GROK_MESSAGES_PATH}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1007,22 +1038,22 @@ export function createDeepSeekFetch(
       ...getProxyFetchOptions({ forAnthropicAPI: false }),
     })
 
-    if (!deepSeekResponse.ok) {
-      const errorText = await deepSeekResponse.text()
+    if (!grokResponse.ok) {
+      const errorText = await grokResponse.text()
       const errorBody = {
         type: 'error',
         error: {
-          type: anthropicErrorType(deepSeekResponse.status),
-          message: `DeepSeek API error (${deepSeekResponse.status}): ${describeDeepSeekError(errorText)}`,
+          type: anthropicErrorType(grokResponse.status),
+          message: `Grok API error (${grokResponse.status}): ${describeGrokError(errorText)}`,
         },
       }
       return new Response(JSON.stringify(errorBody), {
-        status: deepSeekResponse.status,
+        status: grokResponse.status,
         headers: { 'Content-Type': 'application/json' },
       })
     }
 
-    const anthropicStream = await translateOpenAIStreamToAnthropic(deepSeekResponse, model)
+    const anthropicStream = await translateOpenAIStreamToAnthropic(grokResponse, model)
     return anthropicBody.stream === true
       ? anthropicStream
       : aggregateStreamToMessage(anthropicStream, model)
