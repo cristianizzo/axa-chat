@@ -450,16 +450,35 @@ async function translateOpenAIStreamToAnthropic(
           try {
             event = JSON.parse(dataStr) as Record<string, unknown>
           } catch {
-            // Not escalated to a stream error: a single unparseable frame is far
-            // more likely to be a field we don't model than a broken connection,
-            // and a truncated connection is already caught by the finish_reason
-            // guard below. The payload is logged because the length alone gives
-            // nothing to diagnose from.
+            // A frame that fails JSON.parse is corrupt or split, not merely
+            // unfamiliar — an unmodelled field would parse fine and be ignored
+            // below. Still not escalated to a stream error, because the damage
+            // it represents is already caught downstream: a split frame means
+            // the connection broke, and that ends the stream without a
+            // finish_reason, which now fails loudly. Escalating here as well
+            // would only change which of the two errors the user sees. The
+            // payload is logged because the length alone gave nothing to
+            // diagnose from.
             logForDebugging(
               `DeepSeek SSE: malformed JSON frame, skipped: ${dataStr.slice(0, 200)}`,
               { level: 'warn' },
             )
             continue
+          }
+
+          // DeepSeek reports a mid-generation abort (rate limit, content filter,
+          // backend fault) as an OpenAI-shaped error frame on an already-200
+          // stream. It carries no `choices`, so without this it would fall
+          // through the `!choices?.length` guard below and be discarded — the
+          // user would get whatever text arrived before the abort, presented as
+          // a complete answer. Throw so the catch below marks the stream errored.
+          const errorFrame = event.error as
+            | { message?: string; type?: string; code?: string }
+            | undefined
+          if (errorFrame) {
+            throw new Error(
+              `DeepSeek stream error: ${errorFrame.message ?? JSON.stringify(errorFrame)}`,
+            )
           }
 
           // Usage information (may appear in the final chunk)
@@ -548,6 +567,10 @@ async function translateOpenAIStreamToAnthropic(
                 const toolCall = toolCalls.get(tcIndex)
                 if (toolCall) {
                   toolCall.args += tc.function.arguments
+                  // Counted towards the estimate too: a tool-only turn produces
+                  // no text and no reasoning, so without this it would fall back
+                  // to zero output tokens — the very case the estimate exists for.
+                  outputChars += tc.function.arguments.length
                 } else {
                   logForDebugging(
                     `DeepSeek SSE: argument delta for unknown tool index ${tcIndex}`,
@@ -638,19 +661,18 @@ async function translateOpenAIStreamToAnthropic(
       logForDebugging('DeepSeek SSE: no usage reported — token counts are estimated', { level: 'warn' })
     }
 
-    await finishStream({ inputTokens, outputTokens, hadToolCalls, errored: streamErrored, lengthTruncated })
+    await finishStream({ inputTokens, outputTokens, hadToolCalls, lengthTruncated })
   }
 
   async function finishStream(opts: {
     inputTokens: number
     outputTokens: number
     hadToolCalls: boolean
-    errored: boolean
     lengthTruncated: boolean
   }): Promise<void> {
     const stopReason = opts.lengthTruncated
       ? 'max_tokens'
-      : opts.hadToolCalls && !opts.errored
+      : opts.hadToolCalls
         ? 'tool_use'
         : 'end_turn'
 

@@ -12,6 +12,7 @@
  * - Tool use (tool_use → function call, tool_result → tool role message)
  * - Streaming events translation (OpenAI SSE → Anthropic SSE)
  * - Grok reasoning_content → thinking content blocks
+ * - Image input (Anthropic image blocks → OpenAI image_url parts)
  *
  * Endpoint: https://api.x.ai/v1/chat/completions
  */
@@ -25,6 +26,10 @@ import { getProxyFetchOptions } from '../../utils/proxy.js'
 
 // 1 MiB per SSE line — a legitimate response never approaches this
 const MAX_SSE_LINE_BYTES = 1_048_576
+
+// How much of a non-SSE 200 body to keep for the error log. Enough for an API
+// error envelope, small enough that it cannot itself become the problem.
+const RAW_PREFIX_LIMIT = 500
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -453,7 +458,9 @@ async function translateOpenAIStreamToAnthropic(
 
         const chunk = decoder.decode(value, { stream: true })
         buffer += chunk
-        if (rawPreview.length < 500) rawPreview += chunk.slice(0, 500 - rawPreview.length)
+        if (rawPreview.length < RAW_PREFIX_LIMIT) {
+          rawPreview += chunk.slice(0, RAW_PREFIX_LIMIT - rawPreview.length)
+        }
         if (buffer.length > MAX_SSE_LINE_BYTES) {
           throw new Error(`Grok SSE frame exceeded ${MAX_SSE_LINE_BYTES} bytes`)
         }
@@ -472,11 +479,15 @@ async function translateOpenAIStreamToAnthropic(
           try {
             event = JSON.parse(dataStr) as Record<string, unknown>
           } catch {
-            // Not escalated to a stream error: a single unparseable frame is far
-            // more likely to be a field we don't model than a broken connection,
-            // and a truncated connection is already caught by the finish_reason
-            // guard below. The payload is logged because the length alone gives
-            // nothing to diagnose from.
+            // A frame that fails JSON.parse is corrupt or split, not merely
+            // unfamiliar — an unmodelled field would parse fine and be ignored
+            // below. Still not escalated to a stream error, because the damage
+            // it represents is already caught downstream: a split frame means
+            // the connection broke, and that ends the stream without a
+            // finish_reason, which now fails loudly. Escalating here as well
+            // would only change which of the two errors the user sees. The
+            // payload is logged because the length alone gave nothing to
+            // diagnose from.
             logForDebugging(
               `Grok SSE: malformed JSON frame, skipped: ${dataStr.slice(0, 200)}`,
               { level: 'warn' },
@@ -585,6 +596,10 @@ async function translateOpenAIStreamToAnthropic(
                 const toolCall = toolCalls.get(tcIndex)
                 if (toolCall) {
                   toolCall.args += tc.function.arguments
+                  // Counted towards the estimate too: a tool-only turn produces
+                  // no text and no reasoning, so without this it would fall back
+                  // to zero output tokens — the very case the estimate exists for.
+                  outputChars += tc.function.arguments.length
                 } else {
                   logForDebugging(
                     `Grok SSE: argument delta for unknown tool index ${tcIndex}`,
@@ -677,19 +692,18 @@ async function translateOpenAIStreamToAnthropic(
       logForDebugging('Grok SSE: no usage reported — token counts are estimated', { level: 'warn' })
     }
 
-    await finishStream({ inputTokens, outputTokens, hadToolCalls, errored: streamErrored, lengthTruncated })
+    await finishStream({ inputTokens, outputTokens, hadToolCalls, lengthTruncated })
   }
 
   async function finishStream(opts: {
     inputTokens: number
     outputTokens: number
     hadToolCalls: boolean
-    errored: boolean
     lengthTruncated: boolean
   }): Promise<void> {
     const stopReason = opts.lengthTruncated
       ? 'max_tokens'
-      : opts.hadToolCalls && !opts.errored
+      : opts.hadToolCalls
         ? 'tool_use'
         : 'end_turn'
 
