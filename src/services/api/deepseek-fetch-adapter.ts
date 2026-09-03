@@ -191,6 +191,15 @@ function translateMessages(
 
 // ── Full request translation ──────────────────────────────────────────────────
 
+/** The plain text of a message, for the json_object prompt gate below. */
+function promptTextOf(msg: AnthropicMessage): string {
+  if (typeof msg.content === 'string') return msg.content
+  return msg.content
+    .filter(b => b.type === 'text' && typeof b.text === 'string')
+    .map(b => (b as { text: string }).text)
+    .join('\n')
+}
+
 function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<string, unknown> {
   const messages = (anthropicBody.messages ?? []) as AnthropicMessage[]
   const systemPrompt = anthropicBody.system as
@@ -240,6 +249,41 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
       (s): s is string => typeof s === 'string' && s.length > 0,
     )
     if (sequences.length > 0) body.stop = sequences
+  }
+
+  if (typeof anthropicBody.output_config === 'object' && anthropicBody.output_config !== null) {
+    // DeepSeek rejects response_format json_schema (probe: HTTP 400 "This
+    // response_format type is unavailable now"). The closest it offers is
+    // json_object, which just demands valid JSON and enforces no schema, and
+    // which DeepSeek additionally rejects unless the prompt says "json" (it
+    // scans for the word itself). So: downgrade to json_object only when the
+    // caller's prompt already asks for JSON; otherwise leave the field unset —
+    // sending json_object blind would 400 a structured-output caller whose
+    // prompt never mentions JSON. Both branches log, so the weaker output is
+    // never silent.
+    const format = (anthropicBody.output_config as { format?: unknown }).format as
+      | { type?: string; schema?: unknown }
+      | undefined
+    if (
+      format?.type === 'json_schema' &&
+      format.schema &&
+      typeof format.schema === 'object' &&
+      !Array.isArray(format.schema)
+    ) {
+      const promptText = [system ?? '', ...messages.map(promptTextOf)].join('\n')
+      if (/\bjson\b/i.test(promptText)) {
+        logForDebugging(
+          'DeepSeek: json_schema structured output downgraded to json_object (schema not enforced)',
+          { level: 'warn' },
+        )
+        body.response_format = { type: 'json_object' }
+      } else {
+        logForDebugging(
+          'DeepSeek: json_schema structured output dropped (provider lacks json_schema and the prompt never mentions JSON)',
+          { level: 'warn' },
+        )
+      }
+    }
   }
 
   if (anthropicTools.length > 0) {

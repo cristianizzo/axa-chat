@@ -263,6 +263,23 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
     if (sequences.length > 0) body.stop = sequences
   }
 
+  if (typeof anthropicBody.output_config === 'object' && anthropicBody.output_config !== null) {
+    // Anthropic structured outputs → OpenAI response_format. Anthropic sends
+    // output_config.format as { type:'json_schema', schema }, and the schema
+    // carries no name — which x.ai accepts (probe-verified against grok-4.6).
+    const format = (anthropicBody.output_config as { format?: unknown }).format as
+      | { type?: string; schema?: unknown }
+      | undefined
+    if (
+      format?.type === 'json_schema' &&
+      format.schema &&
+      typeof format.schema === 'object' &&
+      !Array.isArray(format.schema)
+    ) {
+      body.response_format = { type: 'json_schema', json_schema: { schema: format.schema } }
+    }
+  }
+
   if (anthropicTools.length > 0) {
     body.tools = translateTools(anthropicTools)
     // Translate Anthropic tool_choice → OpenAI tool_choice
