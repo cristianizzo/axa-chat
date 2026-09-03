@@ -236,9 +236,18 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
 
 /**
  * Maps an Anthropic model name to the appropriate Grok model.
- * Every Claude family — Opus, Sonnet, Haiku, Fable, Mythos — maps to the single
- * supported flagship grok-4.6. Any already-valid `grok-*` model ID passes
- * through untouched, so a stored grok-4.5 or grok-4.20-* keeps being sent.
+ *
+ * Every Claude family — Opus, Sonnet, Haiku, Fable, Mythos — maps to whatever
+ * DEFAULT_GROK_MODEL currently names, so the flagship version lives in
+ * config/grok.ts alone and this function needs no edit when it moves.
+ *
+ * A `grok-*` ID passes through rather than being clamped to the default. In
+ * practice only the catalog's own ID can arrive here — `/model`, settings and
+ * ANTHROPIC_MODEL are all filtered by isServableByActiveProvider, which defers
+ * to the catalog's exact-ID acceptsModel — so the branch is a no-op today. It
+ * stays permissive because the failure modes are asymmetric: if GROK_MODELS
+ * gains a second entry, pass-through serves it, whereas clamping would quietly
+ * answer as the wrong model with no way for the user to tell.
  */
 function resolveModel(claudeModel: string | undefined): string {
   if (!claudeModel) return DEFAULT_GROK_MODEL
@@ -249,11 +258,11 @@ function resolveModel(claudeModel: string | undefined): string {
   if (lower.startsWith('grok-')) return claudeModel
 
   // Map Claude families to the Grok flagship
-  if (lower.includes('opus')) return 'grok-4.6'
-  if (lower.includes('sonnet')) return 'grok-4.6'
-  if (lower.includes('haiku')) return 'grok-4.6'
-  if (lower.includes('fable')) return 'grok-4.6'
-  if (lower.includes('mythos')) return 'grok-4.6'
+  if (lower.includes('opus')) return DEFAULT_GROK_MODEL
+  if (lower.includes('sonnet')) return DEFAULT_GROK_MODEL
+  if (lower.includes('haiku')) return DEFAULT_GROK_MODEL
+  if (lower.includes('fable')) return DEFAULT_GROK_MODEL
+  if (lower.includes('mythos')) return DEFAULT_GROK_MODEL
 
   logForDebugging(`Grok resolveModel: unrecognised model '${claudeModel}', falling back to '${DEFAULT_GROK_MODEL}'`, { level: 'warn' })
   return DEFAULT_GROK_MODEL
@@ -433,6 +442,21 @@ async function translateOpenAIStreamToAnthropic(
             continue
           }
 
+          // x.ai reports a mid-generation abort (rate limit, content filter,
+          // backend fault) as an OpenAI-shaped error frame on an already-200
+          // stream. It carries no `choices`, so without this it would fall
+          // through the delta handling below and be discarded — the user would
+          // get whatever text arrived before the abort, presented as a
+          // complete answer. Throw so the catch below marks the stream errored.
+          const errorFrame = event.error as
+            | { message?: string; type?: string; code?: string }
+            | undefined
+          if (errorFrame) {
+            throw new Error(
+              `Grok stream error: ${errorFrame.message ?? JSON.stringify(errorFrame)}`,
+            )
+          }
+
           // Usage information (may appear in the final chunk)
           const usage = event.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined
           if (usage) {
@@ -561,8 +585,14 @@ async function translateOpenAIStreamToAnthropic(
       sink.setUpstreamReader(null)
     }
 
-    // If the stream ended without a finish_reason (truncated connection), warn the user
-    if (!streamErrored && !finishReasonReceived && contentBlockIndex > 0) {
+    // If the stream ended without a finish_reason (truncated connection), warn
+    // the user. Deliberately not gated on contentBlockIndex: that counter only
+    // advances when a block is *closed*, so the commonest truncation of all — a
+    // single answer cut off mid-sentence, one text block still open, index
+    // still 0 — used to skip the warning and be reported as a clean end_turn.
+    // A completed stream always carries a finish_reason, so this cannot fire on
+    // the happy path.
+    if (!streamErrored && !finishReasonReceived) {
       logForDebugging('Grok SSE: stream ended without finish_reason — response may be incomplete', { level: 'warn' })
       if (!textBlockOpen) {
         closeThinkingBlock()
