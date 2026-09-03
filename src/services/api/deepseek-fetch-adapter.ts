@@ -26,6 +26,10 @@ import { getProxyFetchOptions } from '../../utils/proxy.js'
 // 1 MiB per SSE line — a legitimate response never approaches this
 const MAX_SSE_LINE_BYTES = 1_048_576
 
+// How much of a non-SSE 200 body to keep for the error log. Enough for an API
+// error envelope, small enough that it cannot itself become the problem.
+const RAW_PREFIX_LIMIT = 500
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface AnthropicContentBlock {
@@ -162,6 +166,7 @@ function translateMessages(
         } else if (block.type === 'text' && typeof block.text === 'string') {
           textParts.push(block.text)
         } else {
+          logForDebugging(`DeepSeek: dropping unsupported ${block.type} block from user message`, { level: 'warn' })
           textParts.push(`[Unsupported ${block.type} attachment omitted from this request.]`)
         }
       }
@@ -296,14 +301,19 @@ async function translateOpenAIStreamToAnthropic(
     let contentBlockIndex = 0
     let inputTokens = 0
     let outputTokens = 0
+    let outputChars = 0
+    let usageSeen = false
     let textBlockOpen = false
     let thinkingBlockOpen = false
     const toolCalls = new Map<number, { id: string; name: string; args: string }>()
-    let toolBlocksFlushed = false
+    let toolIdSeq = 0
     let hadToolCalls = false
     let streamErrored = false
+    let aborted = false
     let finishReasonReceived = false
     let lengthTruncated = false
+    let sawAnyDataLine = false
+    let rawPrefix = ''
 
     // Emit Anthropic message_start
     safeEnqueue(encoder.encode(formatSSE('message_start', JSON.stringify({
@@ -363,7 +373,7 @@ async function translateOpenAIStreamToAnthropic(
     }
 
     function flushToolBlocks(): void {
-      if (toolBlocksFlushed || toolCalls.size === 0) return
+      if (toolCalls.size === 0) return
       for (const toolCall of toolCalls.values()) {
         safeEnqueue(encoder.encode(formatSSE('content_block_start', JSON.stringify({
           type: 'content_block_start',
@@ -386,14 +396,18 @@ async function translateOpenAIStreamToAnthropic(
         }))))
         contentBlockIndex++
       }
-      toolBlocksFlushed = true
+      toolCalls.clear()
     }
 
 
     const reader = openAIResponse.body?.getReader()
     if (!reader) {
-      closeTextBlock()
-      await finishStream({ inputTokens, outputTokens, hadToolCalls, errored: true, lengthTruncated: false })
+      logError(new Error('DeepSeek: response body is null — no stream to read'))
+      safeEnqueue(encoder.encode(formatSSE('error', JSON.stringify({
+        type: 'error',
+        error: { type: 'api_error', message: 'DeepSeek stream failed: response body is null' },
+      }))))
+      await sink.close()
       return
     }
     sink.setUpstreamReader(reader)
@@ -409,7 +423,15 @@ async function translateOpenAIStreamToAnthropic(
         const { done, value } = await reader.read()
         if (done) break
 
-        buffer += decoder.decode(value, { stream: true })
+        const decoded = decoder.decode(value, { stream: true })
+        // Kept only to diagnose a 200 that carries no SSE at all — the body is
+        // then the API's real complaint (a quota or auth JSON), and without it
+        // the log says nothing more than "something went wrong". Capped, and
+        // never read on the success path.
+        if (rawPrefix.length < RAW_PREFIX_LIMIT) {
+          rawPrefix += decoded.slice(0, RAW_PREFIX_LIMIT - rawPrefix.length)
+        }
+        buffer += decoded
         if (buffer.length > MAX_SSE_LINE_BYTES) {
           throw new Error(`DeepSeek SSE frame exceeded ${MAX_SSE_LINE_BYTES} bytes`)
         }
@@ -421,6 +443,7 @@ async function translateOpenAIStreamToAnthropic(
           if (!trimmed || !trimmed.startsWith('data: ')) continue
 
           const dataStr = trimmed.slice(6)
+          sawAnyDataLine = true
           if (dataStr === '[DONE]') continue
 
           let event: Record<string, unknown>
@@ -434,6 +457,7 @@ async function translateOpenAIStreamToAnthropic(
           // Usage information (may appear in the final chunk)
           const usage = event.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined
           if (usage) {
+            usageSeen = true
             inputTokens = usage.prompt_tokens ?? inputTokens
             outputTokens = usage.completion_tokens ?? outputTokens
           }
@@ -469,27 +493,25 @@ async function translateOpenAIStreamToAnthropic(
           // ── Reasoning content (DeepSeek R1) ──────────────────────────────
           if (delta.reasoning_content) {
             closeTextBlock()
-            flushToolBlocks()
             openThinkingBlock()
             safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
               type: 'content_block_delta',
               index: contentBlockIndex,
               delta: { type: 'thinking_delta', thinking: delta.reasoning_content },
             }))))
-            outputTokens++
+            outputChars += delta.reasoning_content.length
           }
 
           // ── Text content ──────────────────────────────────────────────────
           if (delta.content) {
             closeThinkingBlock()
-            flushToolBlocks()
             openTextBlock()
             safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
               type: 'content_block_delta',
               index: contentBlockIndex,
               delta: { type: 'text_delta', text: delta.content },
             }))))
-            outputTokens++
+            outputChars += delta.content.length
           }
 
           // ── Tool calls ────────────────────────────────────────────────────
@@ -506,7 +528,7 @@ async function translateOpenAIStreamToAnthropic(
                   existing.name = tc.function.name
                 } else {
                   toolCalls.set(tcIndex, {
-                    id: tc.id ?? `toolu_${Date.now()}`,
+                    id: tc.id ?? `toolu_${messageId}_${toolIdSeq++}`,
                     name: tc.function.name,
                     args: '',
                   })
@@ -541,26 +563,42 @@ async function translateOpenAIStreamToAnthropic(
         }
       }
     } catch (err) {
-      streamErrored = true
-      logError(err)
-      const userMsg = '\n\n[The connection to DeepSeek was interrupted. Please try again.]'
-      if (!textBlockOpen) {
-        closeThinkingBlock()
-        flushToolBlocks()
-        openTextBlock()
+      if ((err as { name?: string })?.name === 'AbortError') {
+        aborted = true
+      } else {
+        streamErrored = true
+        logError(err)
+        safeEnqueue(encoder.encode(formatSSE('error', JSON.stringify({
+          type: 'error',
+          error: { type: 'api_error', message: `DeepSeek stream failed: ${err instanceof Error ? err.message : String(err)}` },
+        }))))
       }
-      safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
-        type: 'content_block_delta',
-        index: contentBlockIndex,
-        delta: { type: 'text_delta', text: userMsg },
-      }))))
     } finally {
       reader.releaseLock()
       sink.setUpstreamReader(null)
     }
 
+    // On abort or stream error, skip finishStream — emitting message_delta/message_stop
+    // after an error event would be incoherent.
+    if (aborted || streamErrored) {
+      await sink.close()
+      return
+    }
+
+    // Non-SSE 200: the API returned 200 but sent no SSE data lines (e.g. a plain JSON error body)
+    if (!sawAnyDataLine) {
+      const detail = rawPrefix ? `: ${rawPrefix}` : ''
+      logError(new Error(`DeepSeek: 200 response contained no SSE data lines${detail}`))
+      safeEnqueue(encoder.encode(formatSSE('error', JSON.stringify({
+        type: 'error',
+        error: { type: 'api_error', message: `DeepSeek: 200 response contained no SSE data lines${detail}` },
+      }))))
+      await sink.close()
+      return
+    }
+
     // If the stream ended without a finish_reason (truncated connection), warn the user
-    if (!streamErrored && !finishReasonReceived && contentBlockIndex > 0) {
+    if (!finishReasonReceived) {
       logForDebugging('DeepSeek SSE: stream ended without finish_reason — response may be incomplete', { level: 'warn' })
       if (!textBlockOpen) {
         closeThinkingBlock()
@@ -578,6 +616,11 @@ async function translateOpenAIStreamToAnthropic(
     closeTextBlock()
     closeThinkingBlock()
     flushToolBlocks()
+
+    if (!usageSeen) {
+      outputTokens = Math.ceil(outputChars / 4)
+      logForDebugging('DeepSeek SSE: no usage reported — token counts are estimated', { level: 'warn' })
+    }
 
     await finishStream({ inputTokens, outputTokens, hadToolCalls, errored: streamErrored, lengthTruncated })
   }

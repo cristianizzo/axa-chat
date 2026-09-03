@@ -53,7 +53,7 @@ interface AnthropicTool {
 
 interface OpenAIMessage {
   role: string
-  content: string | null
+  content: string | Array<Record<string, unknown>> | null
   tool_calls?: OpenAIToolCall[]
   tool_call_id?: string
   name?: string
@@ -139,8 +139,9 @@ function translateMessages(
       result.push(assistantMsg)
     } else if (msg.role === 'user') {
       // Tool results must become separate `tool` role messages in OpenAI format
-      const textParts: string[] = []
+      const contentParts: Array<Record<string, unknown>> = []
       const toolResults: OpenAIMessage[] = []
+      let hasImage = false
 
       for (const block of msg.content) {
         if (block.type === 'tool_result') {
@@ -160,17 +161,37 @@ function translateMessages(
             content: isError ? `[tool error] ${outputText}` : outputText,
           })
         } else if (block.type === 'text' && typeof block.text === 'string') {
-          textParts.push(block.text)
+          contentParts.push({ type: 'text', text: block.text })
+        } else if (block.type === 'image') {
+          const source = block.source as { type?: string; media_type?: string; data?: string; url?: string } | undefined
+          if (source?.type === 'base64' && source.media_type && source.data) {
+            contentParts.push({ type: 'image_url', image_url: { url: `data:${source.media_type};base64,${source.data}` } })
+            hasImage = true
+          } else if (source?.type === 'url' && source.url) {
+            contentParts.push({ type: 'image_url', image_url: { url: source.url } })
+            hasImage = true
+          } else {
+            logForDebugging(`Grok translateMessages: image block with unrecognised source type '${source?.type}'`, { level: 'warn' })
+            contentParts.push({ type: 'text', text: `[Unsupported ${block.type} attachment omitted from this request.]` })
+          }
         } else {
-          textParts.push(`[Unsupported ${block.type} attachment omitted from this request.]`)
+          logForDebugging(`Grok translateMessages: unsupported block type '${block.type}' omitted`, { level: 'warn' })
+          contentParts.push({ type: 'text', text: `[Unsupported ${block.type} attachment omitted from this request.]` })
         }
       }
 
       // Tool results first (they logically precede the next user message)
       result.push(...toolResults)
 
-      if (textParts.length > 0) {
-        result.push({ role: 'user', content: textParts.join('') })
+      if (contentParts.length > 0) {
+        if (hasImage) {
+          // OpenAI requires array content when images are present
+          result.push({ role: 'user', content: contentParts })
+        } else {
+          // Plain string for the common text-only path
+          const text = contentParts.map(p => (p as { text?: string }).text ?? '').join('')
+          result.push({ role: 'user', content: text })
+        }
       }
     }
   }
@@ -307,14 +328,18 @@ async function translateOpenAIStreamToAnthropic(
     let contentBlockIndex = 0
     let inputTokens = 0
     let outputTokens = 0
+    let outputChars = 0
+    let usageSeen = false
     let textBlockOpen = false
     let thinkingBlockOpen = false
     const toolCalls = new Map<number, { id: string; name: string; args: string }>()
-    let toolBlocksFlushed = false
+    let toolIdSeq = 0
     let hadToolCalls = false
     let streamErrored = false
+    let aborted = false
     let finishReasonReceived = false
     let lengthTruncated = false
+    let sawAnyDataLine = false
 
     // Emit Anthropic message_start
     safeEnqueue(encoder.encode(formatSSE('message_start', JSON.stringify({
@@ -374,7 +399,7 @@ async function translateOpenAIStreamToAnthropic(
     }
 
     function flushToolBlocks(): void {
-      if (toolBlocksFlushed || toolCalls.size === 0) return
+      if (toolCalls.size === 0) return
       for (const toolCall of toolCalls.values()) {
         safeEnqueue(encoder.encode(formatSSE('content_block_start', JSON.stringify({
           type: 'content_block_start',
@@ -397,17 +422,23 @@ async function translateOpenAIStreamToAnthropic(
         }))))
         contentBlockIndex++
       }
-      toolBlocksFlushed = true
+      toolCalls.clear()
     }
 
 
     const reader = openAIResponse.body?.getReader()
     if (!reader) {
-      closeTextBlock()
-      await finishStream({ inputTokens, outputTokens, hadToolCalls, errored: true, lengthTruncated: false })
+      logError(new Error('Grok: response body is null — no SSE stream received'))
+      safeEnqueue(encoder.encode(formatSSE('error', JSON.stringify({
+        type: 'error',
+        error: { type: 'api_error', message: 'Grok: response body is null — no SSE stream received' },
+      }))))
+      await sink.close()
       return
     }
     sink.setUpstreamReader(reader)
+
+    let rawPreview = ''
 
     try {
       const decoder = new TextDecoder()
@@ -420,7 +451,9 @@ async function translateOpenAIStreamToAnthropic(
         const { done, value } = await reader.read()
         if (done) break
 
-        buffer += decoder.decode(value, { stream: true })
+        const chunk = decoder.decode(value, { stream: true })
+        buffer += chunk
+        if (rawPreview.length < 500) rawPreview += chunk.slice(0, 500 - rawPreview.length)
         if (buffer.length > MAX_SSE_LINE_BYTES) {
           throw new Error(`Grok SSE frame exceeded ${MAX_SSE_LINE_BYTES} bytes`)
         }
@@ -431,6 +464,7 @@ async function translateOpenAIStreamToAnthropic(
           const trimmed = line.trim()
           if (!trimmed || !trimmed.startsWith('data: ')) continue
 
+          sawAnyDataLine = true
           const dataStr = trimmed.slice(6)
           if (dataStr === '[DONE]') continue
 
@@ -460,6 +494,7 @@ async function translateOpenAIStreamToAnthropic(
           // Usage information (may appear in the final chunk)
           const usage = event.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined
           if (usage) {
+            usageSeen = true
             inputTokens = usage.prompt_tokens ?? inputTokens
             outputTokens = usage.completion_tokens ?? outputTokens
           }
@@ -495,27 +530,25 @@ async function translateOpenAIStreamToAnthropic(
           // ── Reasoning content (Grok) ─────────────────────────────────────
           if (delta.reasoning_content) {
             closeTextBlock()
-            flushToolBlocks()
             openThinkingBlock()
             safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
               type: 'content_block_delta',
               index: contentBlockIndex,
               delta: { type: 'thinking_delta', thinking: delta.reasoning_content },
             }))))
-            outputTokens++
+            outputChars += delta.reasoning_content.length
           }
 
           // ── Text content ──────────────────────────────────────────────────
           if (delta.content) {
             closeThinkingBlock()
-            flushToolBlocks()
             openTextBlock()
             safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
               type: 'content_block_delta',
               index: contentBlockIndex,
               delta: { type: 'text_delta', text: delta.content },
             }))))
-            outputTokens++
+            outputChars += delta.content.length
           }
 
           // ── Tool calls ────────────────────────────────────────────────────
@@ -532,7 +565,7 @@ async function translateOpenAIStreamToAnthropic(
                   existing.name = tc.function.name
                 } else {
                   toolCalls.set(tcIndex, {
-                    id: tc.id ?? `toolu_${Date.now()}`,
+                    id: tc.id ?? `toolu_${messageId}_${toolIdSeq++}`,
                     name: tc.function.name,
                     args: '',
                   })
@@ -567,22 +600,39 @@ async function translateOpenAIStreamToAnthropic(
         }
       }
     } catch (err) {
-      streamErrored = true
-      logError(err)
-      const userMsg = '\n\n[The connection to Grok was interrupted. Please try again.]'
-      if (!textBlockOpen) {
-        closeThinkingBlock()
-        flushToolBlocks()
-        openTextBlock()
+      if ((err as { name?: string })?.name === 'AbortError') {
+        aborted = true
+      } else {
+        streamErrored = true
+        logError(err)
+        safeEnqueue(encoder.encode(formatSSE('error', JSON.stringify({
+          type: 'error',
+          error: { type: 'api_error', message: `Grok stream failed: ${err instanceof Error ? err.message : String(err)}` },
+        }))))
       }
-      safeEnqueue(encoder.encode(formatSSE('content_block_delta', JSON.stringify({
-        type: 'content_block_delta',
-        index: contentBlockIndex,
-        delta: { type: 'text_delta', text: userMsg },
-      }))))
     } finally {
       reader.releaseLock()
       sink.setUpstreamReader(null)
+    }
+
+    // Abort or hard error: skip finishStream entirely — emitting message_delta
+    // and message_stop after an error event would be incoherent.
+    if (aborted || streamErrored) {
+      await sink.close()
+      return
+    }
+
+    // 200 response that contained no SSE data lines at all (e.g. x.ai
+    // returning a plain JSON error body on an otherwise-200 response).
+    if (!sawAnyDataLine) {
+      const detail = rawPreview ? `: ${rawPreview}` : ''
+      logError(new Error(`Grok: 200 response contained no SSE data lines${detail}`))
+      safeEnqueue(encoder.encode(formatSSE('error', JSON.stringify({
+        type: 'error',
+        error: { type: 'api_error', message: `Grok: 200 response contained no SSE data lines${detail}` },
+      }))))
+      await sink.close()
+      return
     }
 
     // If the stream ended without a finish_reason (truncated connection), warn
@@ -592,7 +642,7 @@ async function translateOpenAIStreamToAnthropic(
     // still 0 — used to skip the warning and be reported as a clean end_turn.
     // A completed stream always carries a finish_reason, so this cannot fire on
     // the happy path.
-    if (!streamErrored && !finishReasonReceived) {
+    if (!finishReasonReceived) {
       logForDebugging('Grok SSE: stream ended without finish_reason — response may be incomplete', { level: 'warn' })
       if (!textBlockOpen) {
         closeThinkingBlock()
@@ -610,6 +660,12 @@ async function translateOpenAIStreamToAnthropic(
     closeTextBlock()
     closeThinkingBlock()
     flushToolBlocks()
+
+    // Estimate token count from character count when the API didn't report usage
+    if (!usageSeen) {
+      outputTokens = Math.ceil(outputChars / 4)
+      logForDebugging('Grok SSE: no usage reported — token counts are estimated', { level: 'warn' })
+    }
 
     await finishStream({ inputTokens, outputTokens, hadToolCalls, errored: streamErrored, lengthTruncated })
   }
