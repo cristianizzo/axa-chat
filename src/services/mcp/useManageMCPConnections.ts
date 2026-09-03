@@ -416,9 +416,9 @@ export function useManageMCPConnections(
                           `Server disabled during reconnection, closing new connection`,
                         )
                         await result.client.cleanup().catch(error =>
-                          logMCPDebug(
+                          logMCPError(
                             client.name,
-                            `Error cleaning up connection closed after disable: ${error}`,
+                            `Error cleaning up connection closed after disable: ${errorMessage(error)}`,
                           ),
                         )
                       } else {
