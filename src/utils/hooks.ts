@@ -1654,6 +1654,13 @@ function hasHookForEvent(
 }
 
 /**
+ * Hook events whose matching failure has already been reported. getMatchingHooks
+ * runs on the path of every tool call, so a repeating fault is logged once
+ * rather than on every call.
+ */
+const reportedHookMatchingFailures = new Set<HookEvent>()
+
+/**
  * Get hook commands that match the given query
  * @param appState The current app state (optional for backwards compatibility)
  * @param sessionId The current session ID (main session or agent ID)
@@ -1929,7 +1936,25 @@ export async function getMatchingHooks(
       { level: 'verbose' },
     )
     return filteredHooks
-  } catch {
+  } catch (error) {
+    // Fail open: this runs on the path of every tool call, so throwing would
+    // make an internal bug unrecoverable. But never fail open *silently* —
+    // callers cannot tell [] apart from "no hooks configured", so without this
+    // a broken PreToolUse hook looks exactly like an unconfigured one.
+    //
+    // User configuration errors do not reach here: matchesPattern catches its
+    // own invalid-regex case. So anything caught here is an internal fault and
+    // is reported as one, once per event to stay off the hot path.
+    if (!reportedHookMatchingFailures.has(hookEvent)) {
+      reportedHookMatchingFailures.add(hookEvent)
+      logError(
+        Error(
+          `Failed to match ${hookEvent} hooks; they are being skipped for this ` +
+            `event. Further ${hookEvent} matching failures will not be logged.`,
+          { cause: error },
+        ),
+      )
+    }
     return []
   }
 }
