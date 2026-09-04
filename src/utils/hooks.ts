@@ -2011,9 +2011,10 @@ export async function getMatchingHooks(
     // an omission: a hook that was meant to block this tool call is skipped and
     // the call proceeds, which is the behaviour a user installing a PreToolUse
     // hook is specifically trying to prevent. Rethrow so the call is denied
-    // instead. runPreToolUseHooks catches this and stops the single tool call —
-    // the session stays usable and the next call retries, so this is not a
-    // brick.
+    // instead. The throw travels executeHooks -> executePreToolHooks (this
+    // file) -> runPreToolUseHooks in services/tools/toolHooks.ts, which catches
+    // it and stops that one tool call: the session stays usable and the next
+    // call retries, so this is not a brick.
     //
     // Deliberately not extended to PermissionRequest, whose three call sites
     // are already covered: the headless path catches and auto-denies, the
