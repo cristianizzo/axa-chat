@@ -5,9 +5,10 @@ import {
 import { sanitizeToolNameForAnalytics } from '../../../services/analytics/metadata.js'
 import type { ToolPermissionContext } from '../../../Tool.js'
 import {
-  CLAUDE_FOLDER_PERMISSION_PATTERN,
   FILE_EDIT_TOOL_NAME,
   GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
+  LEGACY_PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
+  PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
 } from '../../../tools/FileEditTool/constants.js'
 import { env } from '../../../utils/env.js'
 import { generateSuggestions } from '../../../utils/permissions/filesystem.js'
@@ -18,9 +19,17 @@ import {
 } from '../../../utils/unaryLogging.js'
 import type { ToolUseConfirm } from '../PermissionRequest.js'
 import type {
+  ConfigFolderScope,
   FileOperationType,
   PermissionOption,
 } from './permissionOptions.js'
+
+const CONFIG_FOLDER_SCOPE_PATTERNS: Record<ConfigFolderScope, string> = {
+  'project-config-folder': PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
+  'legacy-project-config-folder':
+    LEGACY_PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
+  'global-config-folder': GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
+}
 
 function logPermissionEvent(
   event: 'accept' | 'reject',
@@ -57,7 +66,7 @@ export type PermissionHandlerOptions = {
   hasFeedback?: boolean
   feedback?: string
   enteredFeedbackMode?: boolean
-  scope?: 'claude-folder' | 'global-claude-folder'
+  scope?: ConfigFolderScope
 }
 
 function handleAcceptOnce(
@@ -101,22 +110,21 @@ function handleAcceptSession(
 
   logPermissionEvent('accept', completionType, languageName, messageId)
 
-  // For claude-folder scope, grant session-level access to all .claude/ files
-  if (
-    options?.scope === 'claude-folder' ||
-    options?.scope === 'global-claude-folder'
-  ) {
-    const pattern =
-      options.scope === 'global-claude-folder'
-        ? GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN
-        : CLAUDE_FOLDER_PERMISSION_PATTERN
+  // For a config-folder scope, grant session-level access to that folder.
+  // The pattern has to match the folder the file is actually in: a project
+  // '.axa' file granted '/.claude/**' would produce a rule that matches
+  // nothing, so the same prompt would come back on the next edit.
+  const configFolderPattern = options?.scope
+    ? CONFIG_FOLDER_SCOPE_PATTERNS[options.scope]
+    : undefined
+  if (configFolderPattern) {
     const suggestions: PermissionUpdate[] = [
       {
         type: 'addRules',
         rules: [
           {
             toolName: FILE_EDIT_TOOL_NAME,
-            ruleContent: pattern,
+            ruleContent: configFolderPattern,
           },
         ],
         behavior: 'allow',

@@ -7,13 +7,19 @@ import { join, normalize, posix, sep } from 'path'
 import { hasAutoMemPathOverride, isAutoMemPath } from 'src/memdir/paths.js'
 import { isAgentMemoryPath } from 'src/tools/AgentTool/agentMemory.js'
 import {
-  CLAUDE_FOLDER_PERMISSION_PATTERN,
   FILE_EDIT_TOOL_NAME,
   GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
+  LEGACY_PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
+  PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
 } from 'src/tools/FileEditTool/constants.js'
 import type { z } from 'zod/v4'
-import { getOriginalCwd, getSessionId } from '../../bootstrap/state.js'
-import { CONFIG_DIR_NAME } from '../../constants/product.js'
+import {
+  getFlagMcpConfigPaths,
+  getOriginalCwd,
+  getSessionId,
+} from '../../bootstrap/state.js'
+import { isGlobalConfigFileName } from '../../constants/oauth.js'
+import { CONFIG_DIR_NAME, MEMORY_FILE_NAME } from '../../constants/product.js'
 import { checkStatsigFeatureGate_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import type { AnyObject, Tool, ToolPermissionContext } from '../../Tool.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
@@ -93,6 +99,19 @@ export const DANGEROUS_DIRECTORIES = [
 ] as const
 
 /**
+ * Every config-folder spelling a session-scoped allow rule may be scoped to,
+ * checked by step 1.6 of checkWritePermissionForTool. Three entries, not two:
+ * the project scope is `.axa` in this fork, but `.claude` stays in
+ * DANGEROUS_DIRECTORIES for projects that predate the rename, so both project
+ * spellings need a way through.
+ */
+const CONFIG_FOLDER_PERMISSION_PATTERNS = [
+  PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
+  LEGACY_PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
+  GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
+] as const
+
+/**
  * Normalizes a path for case-insensitive comparison.
  * This prevents bypassing security checks using mixed-case paths on case-insensitive
  * filesystems (macOS/Windows) like `.cLauDe/Settings.locaL.json`.
@@ -169,7 +188,7 @@ export function getClaudeSkillScope(
         // Reject glob metacharacters. skillName is interpolated into a
         // gitignore pattern consumed by ignore().add() in matchingRuleForInput
         // at step 1.6. A directory literally named '*' (valid on POSIX) would
-        // produce '/.claude/skills/*/**' which matches ALL skills. Return null
+        // produce '/.axa/skills/*/**' which matches ALL skills. Return null
         // to fall through to generateSuggestions() instead.
         if (/[*?[\]]/.test(skillName)) return null
         return { skillName, pattern: prefix + skillName + '/**' }
@@ -1275,17 +1294,19 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
     return internalEditResult
   }
 
-  // 1.6. Check for .claude/** allow rules BEFORE safety checks
-  // This allows session-level permissions to bypass the safety blocks for .claude/
-  // We only allow this for session-level rules to prevent users from accidentally
-  // permanently granting broad access to their .claude/ folder.
+  // 1.6. Check for config-folder allow rules BEFORE safety checks
+  // This allows session-level permissions to bypass the safety blocks for the
+  // config folder. We only allow this for session-level rules to prevent users
+  // from accidentally permanently granting broad access to it.
   //
   // matchingRuleForInput returns the first match across all sources. If the user
-  // also has a broader Edit(.claude) rule in userSettings (e.g. from sandbox
-  // write-allow conversion), that rule would be found first and its source check
-  // below would fail. Scope the search to session-only rules so the dialog's
-  // "allow Claude to edit its own settings for this session" option actually works.
-  const claudeFolderAllowRule = matchingRuleForInput(
+  // also has a broader rule in userSettings for any of the spellings this step
+  // covers — Edit(/.axa/**), Edit(/.claude/**) or Edit(~/.axa/**), e.g. from
+  // sandbox write-allow conversion — that rule would be found first and its
+  // source check below would fail. Scope the search to session-only rules so the
+  // dialog's "allow Claude to edit its own settings for this session" option
+  // actually works.
+  const configFolderAllowRule = matchingRuleForInput(
     path,
     {
       ...toolPermissionContext,
@@ -1296,21 +1317,21 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
     'edit',
     'allow',
   )
-  if (claudeFolderAllowRule) {
-    // Check if this rule is scoped under .claude/ (project or global).
-    // Accepts both the broad patterns ('/.claude/**', '~/.claude/**') and
-    // narrowed ones like '/.claude/skills/my-skill/**' so users can grant
-    // session access to a single skill without also exposing settings.json
-    // or hooks/. The rule already matched the path via matchingRuleForInput;
-    // this is an additional scope check. Reject '..' to prevent a rule like
-    // '/.claude/../**' from leaking this bypass outside .claude/.
-    const ruleContent = claudeFolderAllowRule.ruleValue.ruleContent
+  if (configFolderAllowRule) {
+    // Check if this rule is scoped under a config folder (project, legacy
+    // project, or global). Accepts both the broad patterns ('/.axa/**',
+    // '/.claude/**', '~/.axa/**') and narrowed ones like
+    // '/.axa/skills/my-skill/**' so users can grant session access to a single
+    // skill without also exposing settings.json or hooks/. The rule already
+    // matched the path via matchingRuleForInput; this is an additional scope
+    // check. Reject '..' to prevent a rule like '/.axa/../**' from leaking
+    // this bypass outside the config folder.
+    const ruleContent = configFolderAllowRule.ruleValue.ruleContent
     if (
       ruleContent &&
-      (ruleContent.startsWith(CLAUDE_FOLDER_PERMISSION_PATTERN.slice(0, -2)) ||
-        ruleContent.startsWith(
-          GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN.slice(0, -2),
-        )) &&
+      CONFIG_FOLDER_PERMISSION_PATTERNS.some(pattern =>
+        ruleContent.startsWith(pattern.slice(0, -2)),
+      ) &&
       !ruleContent.includes('..') &&
       ruleContent.endsWith('/**')
     ) {
@@ -1319,7 +1340,7 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
         updatedInput: input,
         decisionReason: {
           type: 'rule',
-          rule: claudeFolderAllowRule,
+          rule: configFolderAllowRule,
         },
       }
     }
@@ -1499,6 +1520,512 @@ export function generateSuggestions(
 }
 
 /**
+ * How much of a config dir (`~/.axa` and `<project>/.axa`) the harness may
+ * reach without prompting.
+ *
+ * - `open`      — read and write silently. AXA.md and the agent-authored note
+ *                 directories: prose the model writes for itself, enumerated in
+ *                 CONFIG_DIR_OPEN_DIRS / CONFIG_DIR_OPEN_FILES.
+ * - `protected` — readable, but writes fall through to the safety gate and
+ *                 prompt. Files that get *executed*, that grant permission, or
+ *                 that record what happened. This is the default: a config-dir
+ *                 path nobody classified lands here.
+ * - `secret`    — neither read nor write without a prompt. Credentials, and the
+ *                 cross-project transcript stores, where the risk is
+ *                 disclosure rather than tampering.
+ * - `outside`   — not under a config dir; no carve-out applies.
+ */
+type ConfigDirAccess = 'open' | 'protected' | 'secret' | 'outside'
+
+/**
+ * Credential material. Withheld from reads as well as writes, because reading
+ * these is exfiltration, not just tampering.
+ *
+ * `backups/` is here because it holds `config.json.backup.<ts>` copies —
+ * whole-file snapshots of the OAuth tokens, and the source findMostRecentBackup
+ * restores from, so a crafted backup is also a way to inject config later.
+ */
+const CONFIG_DIR_SECRET_DIRS = new Set([
+  'backups',
+  // Not credentials, but disclosure rather than tampering is the risk, which
+  // is what puts them on the read side of the line. `projects/` holds session
+  // transcripts for *every* project on the machine, so a silent read lets an
+  // agent working in one repo read another repo's history. Today a read of
+  // ~/.axa/projects/<other>/x.jsonl reaches step 12 of
+  // checkReadPermissionForTool and asks, because step 6 only covers working
+  // directories; classifying these 'protected' would have quietly removed that
+  // prompt. `sessions/` is the same data by another name.
+  'projects',
+  'sessions',
+  // `ide/` holds the IDE lockfiles, and each one carries an `authToken`
+  // (utils/ide.ts, parsed at readLockfile and presented at connectToIde to
+  // authenticate the websocket). Reading one discloses that token, which is why
+  // it is here and not merely `protected` — `protected` is readable. Writing one
+  // points the IDE channel at a chosen port with a token axa will then present.
+  'ide',
+])
+const CONFIG_DIR_SECRET_FILES = new Set(['.credentials.json'])
+/**
+ * The global config file is matched through `isGlobalConfigFileName`
+ * (constants/oauth.ts) rather than by a literal here. Its name is *computed* —
+ * `config${fileSuffixForOauthConfig()}.json` — and has four spellings, of which
+ * `config-custom-oauth.json` is live in a shipped binary: the other two suffixes
+ * are behind `USER_TYPE === 'ant'`, which scripts/build.ts `--define`s away, but
+ * `CLAUDE_CODE_CUSTOM_OAUTH_URL` is tested before that switch and is not gated
+ * on it. Holding the literal `config.json` here covered one spelling of four.
+ * The predicate lives beside the function that computes the name so the two
+ * cannot drift.
+ */
+
+/**
+ * `grok-api-key` and any future `<provider>-api-key`. Matched by shape rather
+ * than by name so adding a provider does not silently open a hole — the user
+ * cannot reissue the Grok key, so a truncating write is unrecoverable.
+ */
+const CONFIG_DIR_API_KEY_FILE_PATTERN = /api[-_]?key$/
+
+/**
+ * Directories under a config dir whose contents are executed, or whose
+ * integrity the session depends on:
+ *
+ * - `hooks/`           — arbitrary code, run on the next tool call.
+ * - `plugins/`         — plugin code, plus the hooks and MCP servers a plugin
+ *                        declares.
+ * - `shell-snapshots/` — `source`d into every Bash invocation
+ *                        (shell/bashProvider.ts).
+ * - `session-env/`     — hook env scripts, concatenated into every Bash
+ *                        invocation (sessionEnvironment.ts).
+ * - `local/`           — the installed binary and its node_modules.
+ * - `chrome/`          — `chrome-native-host`, a `#!/bin/sh` wrapper written and
+ *                        chmod 0755'd by createWrapperScript
+ *                        (claudeInChrome/setup.ts). It exists because Chrome's
+ *                        native-host manifest `path` cannot carry arguments, so
+ *                        the manifest points at this script and Chrome executes
+ *                        it. Same property as `hooks/`, executed by a different
+ *                        process. (`chrome-native-host.bat` on Windows.)
+ *
+ * And four that are worse than merely executed, because the same file that
+ * carries the code also states the permission it runs under — or, in the last
+ * case, states the instructions everything else runs under:
+ *
+ * - `skills/`, `commands/` — a SKILL.md body is run through
+ *   `executeShellCommandsInPrompt` (skills/loadSkillsDir.ts), which matches
+ *   ```! … ``` and !`…` and calls `BashTool.call()` directly, bypassing
+ *   validateInput. The permission context it is handed has `alwaysAllowRules.
+ *   command` set to that same file's `allowed-tools` frontmatter, so the file
+ *   authorizes its own shell. `commands/` is the same loader
+ *   (`loadSkillsFromCommandsDir`), so it inherits the property exactly. The
+ *   `loadedFrom !== 'mcp'` guard beside the call is the authors saying skill
+ *   markdown from an untrusted source must not execute inline shell; a silent
+ *   write here would make the filesystem such a source while leaving it on the
+ *   trusted side of that guard.
+ * - `agents/`            — an agent definition's *body* is prompt text and does
+ *   not execute, but its frontmatter is permission-granting twice over:
+ *   `permissionMode` accepts `bypassPermissions` (PERMISSION_MODES in
+ *   types/permissions.ts), and `mcpServers` accepts an inline stdio config
+ *   whose `command` is spawned by `connectAgentMcpServers` (AgentTool/
+ *   runAgent.ts). Writing an agent file is therefore writing a process launcher.
+ * - `output-styles/`     — the weakest of the four, and listed for that reason.
+ *   An output style grants no tools; what it does is *replace the system
+ *   prompt* (getOutputStyleDirStyles, outputStyles/loadOutputStylesDir.ts).
+ *   Writing one rewrites the instructions the model is operating under, which
+ *   is the same tampering risk reached by a different route than execution.
+ *   The argument to expect is "it is only markdown, like `rules/`" — true of
+ *   the file, false of what consumes it.
+ *
+ * The first three were already always-ask at project scope via
+ * `isClaudeConfigFilePath`. Listing them here keeps that decision intact at
+ * user scope instead of silently reversing it — this carve-out runs at step
+ * 1.5, ahead of the safety check that consults that function at step 1.7.
+ * `output-styles` is absent from that function, so at project scope it has
+ * only the ordinary safety check behind it. That gap predates this change and
+ * is not created by it; it belongs with whoever owns that enumeration.
+ *
+ * The population those four are drawn from is `CLAUDE_CONFIG_DIRECTORIES`
+ * (utils/markdownConfigLoader.ts), every member of which `loadMarkdownFilesFor`
+ * `Subdir` reads from `join(getClaudeConfigHomeDir(), subdir)`. The other two,
+ * `workflows` and `templates`, have no loader calling them today — only
+ * `commands`, `agents` and `output-styles` do, plus a variable `subdir` in
+ * hooks/fileSuggestions.ts. They are left to the default; list them here if a
+ * loader appears.
+ *
+ * Every name here is redundant with the default, which is `protected`. The set
+ * is kept and still consulted because these are the names most likely to be
+ * proposed for the allow-list below, and the reason each one must stay off it
+ * is only useful if it travels with the name.
+ */
+const CONFIG_DIR_PROTECTED_DIRS = new Set([
+  'hooks',
+  'plugins',
+  'shell-snapshots',
+  'session-env',
+  'local',
+  'chrome',
+  'skills',
+  'commands',
+  'agents',
+  'output-styles',
+])
+
+/**
+ * The allow-list: everything under a config dir that is silently writable.
+ * Anything not named here is `protected`, i.e. readable but prompted on write.
+ *
+ * This is an allow-list rather than a deny-list because the config dir is a
+ * shared namespace that other subsystems keep adding to, and a deny-list makes
+ * every new arrival permissive by default. That is not hypothetical: `skills`,
+ * `commands`, `agents`, `cowork_settings.json`, `remote-settings.json` and
+ * `cowork_plugins` were all reachable under the deny-list version, each found
+ * by a different reviewer, none by the list itself. A list cannot tell you what
+ * it is missing.
+ *
+ * The failure mode is now inverted with it: forgetting an entry costs a
+ * permission prompt the user did not need, instead of a silent write to the
+ * top-precedence settings layer.
+ *
+ * Contents are prompt/markdown text and notes, never code and never permission
+ * rules:
+ * - `agent-memory/`, `plans/` — agent-authored notes and plans.
+ * - `magic-docs/`             — `prompt.md`, a user-supplied prompt override
+ *                               (services/MagicDocs/prompts.ts).
+ * - `rules/`                  — the same content class as the memory file:
+ *                               `processMdRules` (utils/claudemd.ts) reads
+ *                               `<config>/rules/**.md` at user and project scope
+ *                               and concatenates them into project memory. The
+ *                               only frontmatter it honours is `globs`, a
+ *                               matcher — unlike `agents/` and `skills/`, a rule
+ *                               file grants nothing. Opening the memory file but
+ *                               not `rules/` would split one feature in half.
+ *
+ * Note these mostly have their *own* earlier carve-outs in
+ * checkEditableInternalPath and are listed again here so that the classifier is
+ * independently correct rather than relying on being unreachable.
+ */
+const CONFIG_DIR_OPEN_DIRS = new Set([
+  'agent-memory',
+  // The 'local' scope of the same feature: getAgentMemoryDir writes
+  // <cwd>/.axa/agent-memory-local/<agentType>/ (AgentTool/agentMemory.ts).
+  // isAgentMemoryPath already allows it earlier, so this changes no behaviour —
+  // it is here because the point of listing the earlier carve-outs again is that
+  // this classifier be independently correct rather than correct-by-unreachable,
+  // and a second spelling of a listed feature is exactly what that misses.
+  'agent-memory-local',
+  'plans',
+  'magic-docs',
+  'rules',
+])
+
+/** The memory file itself, at the config dir root. */
+const CONFIG_DIR_OPEN_FILES = new Set([
+  normalizeCaseForComparison(MEMORY_FILE_NAME),
+])
+
+/**
+ * Mode-dependent name prefixes, stripped before the set lookup above.
+ *
+ * `--cowork` / CLAUDE_CODE_USE_COWORK_PLUGINS swap whole config-dir entries for
+ * a twin: `getPluginsDirectoryName()` (plugins/pluginDirectories.ts) returns
+ * `cowork_plugins` instead of `plugins`, under the same config home. Listing
+ * only `plugins` protected the default mode and left the flagged mode writable.
+ * Matching by shape means the next such twin is covered when it is added, not
+ * when someone remembers to list it.
+ */
+const CONFIG_DIR_MODE_PREFIX_PATTERN = /^cowork_/
+
+/**
+ * Settings files anywhere under a config dir.
+ *
+ * Deliberately matched by shape, because the set of names the code can produce
+ * is larger than the set anyone lists from memory. All four of these are real
+ * and all four carry `permissions.deny`, i.e. the rules this engine enforces:
+ *
+ * - `settings.json`        — user and project scope.
+ * - `settings.local.json`  — `getRelativeSettingsFilePathForSource`.
+ * - `cowork_settings.json` — `getUserSettingsFilePath` (settings/settings.ts)
+ *                            returns this *instead of* settings.json in cowork
+ *                            mode, so in that mode it simply is userSettings.
+ * - `remote-settings.json` — the managed-policy sync cache, written into the
+ *                            config home by remoteManagedSettings/syncCacheState.
+ *
+ * A write to any of them is a write to the rules that decide whether the write
+ * was allowed, which is why they never become silently writable.
+ *
+ * The optional leading segment makes this over-inclusive: an unrelated
+ * `foo-settings.json` would also match. That is the intended direction of
+ * error. A false positive costs one permission prompt; a false negative is a
+ * silent write to a deny list.
+ */
+const CONFIG_DIR_SETTINGS_FILE_PATTERN =
+  /^([a-z0-9]+[_-])?settings(\.[^.]+)?\.json$/
+/**
+ * `history.jsonl` and its rotations — classified `secret`, i.e. withheld from
+ * reads, not merely from writes.
+ *
+ * makeLogEntryReader (src/history.ts) calls it "global history file (shared
+ * across all projects)", and each entry carries `display`, the raw prompt text,
+ * plus `pastedContents`. That is the same cross-project disclosure that puts
+ * `projects/` and `sessions/` on the secret list, in a single file. Classifying
+ * it on tampering risk alone would have left every prompt the user has typed in
+ * any repo silently readable from this one.
+ */
+const CONFIG_DIR_HISTORY_FILE_PATTERN = /^history\.jsonl(\..*)?$/
+
+/**
+ * Resolved forms of the two config dir roots. Session-stable, and resolving
+ * them costs lstat/realpath syscalls, so memoize on the inputs rather than
+ * recomputing on every permission check. Same pattern as
+ * getResolvedWorkingDirPaths.
+ */
+const getResolvedConfigDirRoots = memoize(
+  (homeConfigDir: string, projectConfigDir: string): string[][] =>
+    [homeConfigDir, projectConfigDir].map(root =>
+      getPathsForPermissionCheck(root).map(normalize),
+    ),
+  (homeConfigDir: string, projectConfigDir: string) =>
+    `${homeConfigDir}\u0000${projectConfigDir}`,
+)
+
+/**
+ * The path of `absolutePath` relative to whichever config dir root contains
+ * it, or null if no root does. `''` means the root itself.
+ */
+function relativeToConfigDirRoot(normalizedPath: string): string | null {
+  const roots = getResolvedConfigDirRoots(
+    getClaudeConfigHomeDir(),
+    join(getOriginalCwd(), CONFIG_DIR_NAME),
+  )
+  const pathLower = normalizeCaseForComparison(normalizedPath)
+  for (const rootForms of roots) {
+    for (const rootForm of rootForms) {
+      const rootLower = normalizeCaseForComparison(rootForm)
+      if (pathLower === rootLower) return ''
+      for (const s of new Set([sep, '/'])) {
+        if (pathLower.startsWith(rootLower + s.toLowerCase())) {
+          return normalizedPath.slice(rootForm.length + s.length)
+        }
+      }
+    }
+  }
+  return null
+}
+
+function classifyConfigDirRelativePath(
+  relative: string,
+): 'open' | 'protected' | 'secret' {
+  const segments = relative.split(/[\\/]/).filter(s => s.length > 0)
+  // The config dir itself: creating/truncating it is not an edit we want to
+  // wave through.
+  if (segments.length === 0) return 'protected'
+
+  // Strip the mode prefix so `cowork_plugins` is judged as `plugins`.
+  const first = normalizeCaseForComparison(segments[0]!).replace(
+    CONFIG_DIR_MODE_PREFIX_PATTERN,
+    '',
+  )
+  const base = normalizeCaseForComparison(segments[segments.length - 1]!)
+
+  if (
+    CONFIG_DIR_SECRET_DIRS.has(first) ||
+    CONFIG_DIR_SECRET_FILES.has(base) ||
+    isGlobalConfigFileName(base) ||
+    CONFIG_DIR_HISTORY_FILE_PATTERN.test(base) ||
+    CONFIG_DIR_API_KEY_FILE_PATTERN.test(base)
+  ) {
+    return 'secret'
+  }
+
+  if (
+    CONFIG_DIR_PROTECTED_DIRS.has(first) ||
+    CONFIG_DIR_SETTINGS_FILE_PATTERN.test(base)
+  ) {
+    return 'protected'
+  }
+
+  // The memory file, at the config dir root only.
+  if (segments.length === 1 && CONFIG_DIR_OPEN_FILES.has(base)) return 'open'
+  if (CONFIG_DIR_OPEN_DIRS.has(first)) return 'open'
+
+  // The default is PROTECTED: anything under a config dir that is not on the
+  // allow-list above is readable but prompts on write. If you are adding a
+  // config-dir feature and your writes now prompt, that is this line, and the
+  // fix is to add the directory to CONFIG_DIR_OPEN_DIRS — after checking it
+  // against `isClaudeConfigFilePath`, which is consulted at step 1.7 of
+  // checkWritePermissionForTool while this runs at step 1.5, so an `open` here
+  // silently overrides an always-ask there.
+  return 'protected'
+}
+
+/**
+ * Classify `absolutePath` against the config dirs.
+ *
+ * Every resolved form of the path — lexical and symlink-chain — must land
+ * inside a config dir, and the most restrictive classification across those
+ * forms wins. Without that, a symlink placed inside `~/.axa/agents/` pointing
+ * at `~/.ssh/authorized_keys` would inherit this carve-out. Same guard as the
+ * template job directory above.
+ */
+function classifyConfigDirPath(absolutePath: string): ConfigDirAccess {
+  let access: 'open' | 'protected' | 'secret' = 'open'
+  for (const form of getPathsForPermissionCheck(absolutePath)) {
+    const relative = relativeToConfigDirRoot(normalize(form))
+    if (relative === null) return 'outside'
+    const formAccess = classifyConfigDirRelativePath(relative)
+    if (formAccess === 'secret') return 'secret'
+    if (formAccess === 'protected') access = 'protected'
+  }
+  return access
+}
+
+/**
+ * Config-dir paths that are silently *readable* despite prompting on write.
+ *
+ * The read side needs its own allow-list rather than "everything that is not
+ * `secret`". Deriving reads from the write classes made the read path a
+ * deny-list — the shape this change removed from the write path — so an
+ * unlisted directory was silently readable, and the enumeration had to be
+ * complete for that to be safe. It was not: `debug/`, `telemetry/`, `traces/`,
+ * `uploads/` and `usage-data/` are all real, none was classified, and nobody had
+ * looked at what they hold.
+ *
+ * Rather than inspect those five and inherit the sixth, reads now fall closed
+ * too. Note this is cheap to get wrong in the safe direction: on main, *every*
+ * one of these paths already reached step 12 of checkReadPermissionForTool and
+ * asked, so a narrow list here is not a regression against main — it just
+ * declines to widen. Anything omitted keeps main's behaviour exactly.
+ *
+ * What is listed is the config-authoring surface, which is the use case this
+ * carve-out exists for — you cannot help someone edit an agent definition or a
+ * settings file that you are not allowed to read:
+ *
+ * - `skills/`, `commands/`, `agents/`, `output-styles/`, `hooks/`, `plugins/` —
+ *   definitions the model routinely reads to explain or edit. Writes still
+ *   prompt; these are permission-granting, executed, or prompt-replacing, which
+ *   is a tampering risk, not a disclosure one.
+ *
+ * Settings files are deliberately NOT here, even though the write-side
+ * classifier treats them as config-authoring surface. A settings file can carry
+ * credentials directly — `apiKeyHelper`, `awsAuthRefresh` and the `env` block
+ * all live in the settings schema — so making it silently readable is a
+ * disclosure widening, not a convenience. Reading one still prompts, exactly as
+ * on main. Only the credential *files* are `secret`; the settings file is not,
+ * so nothing else stops it.
+ */
+const CONFIG_DIR_READABLE_DIRS = new Set([
+  'skills',
+  'commands',
+  'agents',
+  'output-styles',
+  'hooks',
+  'plugins',
+])
+
+/**
+ * Does any resolved form of `absolutePath` land on an active config file that a
+ * command-line flag pointed somewhere arbitrary?
+ *
+ * Two flags do this, and they are one hazard, not two:
+ *
+ * - `--settings <path>` — settings hold credentials (`apiKeyHelper`,
+ *   `awsAuthRefresh`, `env`), and the deny rules protecting the OAuth tokens
+ *   live there too, so a silent write is circular: an agent could delete the
+ *   rules first.
+ * - `--mcp-config <path>` — MCP server entries carry `env` blocks and a spawned
+ *   `command`, so a silent write there is code execution on the next launch.
+ *   Its inline-JSON form is parsed straight from the argument and has no path,
+ *   so there is nothing to protect. Do not generalise that to `--settings`:
+ *   CLI-inline `--settings '{...}'` *does* get a path, because loadSettingsFromFlag
+ *   writes it to a temp file. It is safe for a different reason — the temp dir
+ *   is outside every config dir, so the carve-out never classifies it 'open'.
+ *
+ * Either can be aimed inside a config directory that this file otherwise treats
+ * as freely readable or writable, and those branches run before step 1.7's
+ * always-ask, so without this they override it.
+ *
+ * Checking every resolved form, not just the literal path, is the point: a
+ * symlink at `~/.axa/agent-memory/alias.json` pointing at such a file elsewhere
+ * under the config dir passes the classifier — every form is still `open` — and
+ * a check on the literal path alone would not see what it resolves to.
+ *
+ * Both sides are expanded, not just the candidate. `--settings` stores a
+ * realpath-canonical path but `--mcp-config` stores a lexically resolved one, so
+ * comparing expanded-candidate against stored-string catches a symlink aimed at
+ * the flag path while missing the case where the flag path is *itself* a symlink
+ * and the tool targets its target. Laundering has two directions and covering
+ * one of them is the recurring defect in this area; comparing form-set against
+ * form-set is what makes the direction stop mattering.
+ *
+ * DO NOT memoize `configForms`. It looks like a session-stable set derived from
+ * flag state, and it is not: `getPathsForPermissionCheck` is a *live filesystem
+ * resolution*, so the answer changes when the filesystem changes under a fixed
+ * path. Replace an active `--settings <p>` with a symlink to elsewhere and a
+ * cached expansion of `<p>` no longer contains the target, so a write addressed
+ * to the target stops matching — reopening the exact laundering direction the
+ * paragraph above closes, through the cache instead of through the comparison.
+ *
+ * That sequence is reachable. The reflex answer is "surely Bash blocks that",
+ * and it does not: `ln` is absent from `PathCommand` / `PATH_EXTRACTORS` in
+ * tools/BashTool/pathValidation.ts, so `ln -sf` is `passthrough` there as a
+ * non-path-restricted command and is never mapped to a write on the link
+ * location. `mv` and `cp` are in that table; `ln` is the gap. (bashSecurity.ts
+ * blocks the zsh builtin `zf_ln` as a binary-check bypass, which reads as
+ * though the binary were checked. It is not.)
+ *
+ * The cost is real and was measured: ~52us of the ~104us per permission check,
+ * on a path this now runs for *every* file check. Most of it is the branch at
+ * fsOperations.ts:324-337 for a `getSettingsPaths()` entry that does not exist
+ * on most machines (`/Library/.../managed-settings.json`), where the walk
+ * resolves ancestor directory symlinks. That is also why the obvious cheap
+ * revalidation fails: correctness depends on every entry the walk consulted,
+ * ancestors included, so a sound revalidation costs about what the walk costs.
+ * A basename prefilter is unsound for the same reason the old comparison was —
+ * resolution changes the basename. And "only run this where a carve-out would
+ * return allow" is the guard-beside-one-consumer bug that produced five
+ * findings on this file; it is not an optimization, it is the defect.
+ */
+function resolvesToFlagConfigFile(absolutePath: string): boolean {
+  const normalizeForm = (path: string): string =>
+    normalizeCaseForComparison(normalize(path))
+  const configForms = new Set(
+    [...getSettingsPaths(), ...getFlagMcpConfigPaths()].flatMap(path =>
+      getPathsForPermissionCheck(path).map(normalizeForm),
+    ),
+  )
+  return getPathsForPermissionCheck(absolutePath).some(
+    // isClaudeSettingsPath is kept alongside the expanded set because it also
+    // matches `<anything>/.claude/settings.json` by suffix, for other projects,
+    // which is a pattern rather than a path and so cannot be expanded.
+    form => isClaudeSettingsPath(form) || configForms.has(normalizeForm(form)),
+  )
+}
+
+/**
+ * Is every resolved form of `absolutePath` on the read allow-list above?
+ *
+ * All forms must qualify, so the strictest wins, for the same reason
+ * classifyConfigDirPath checks every form: otherwise a symlink under
+ * `~/.axa/agents/` would launder a read of something else.
+ *
+ * Flag-supplied config files are screened by the caller, which covers the
+ * 'open' arm this function is never reached on.
+ */
+function isReadableConfigDirPath(absolutePath: string): boolean {
+  for (const form of getPathsForPermissionCheck(absolutePath)) {
+    const relative = relativeToConfigDirRoot(normalize(form))
+    if (relative === null) return false
+    const segments = relative.split(/[\\/]/).filter(s => s.length > 0)
+    if (segments.length === 0) return false
+    const first = normalizeCaseForComparison(segments[0]!).replace(
+      CONFIG_DIR_MODE_PREFIX_PATTERN,
+      '',
+    )
+    if (!CONFIG_DIR_READABLE_DIRS.has(first)) {
+      return false
+    }
+  }
+  return true
+}
+
+/**
  * Check if a path is an internal path that can be edited without permission.
  * Returns a PermissionResult - either 'allow' if matched, or 'passthrough' to continue checking.
  */
@@ -1509,6 +2036,16 @@ export function checkEditableInternalPath(
   // SECURITY: Normalize path to prevent traversal bypasses via .. segments
   // This is defense-in-depth; individual helper functions also normalize
   const normalizedPath = normalize(absolutePath)
+
+  // First, ahead of every carve-out below. A flag can aim the active settings
+  // or MCP config file at any path, including inside one of these carve-outs —
+  // `--settings <cwd>/.axa/agent-memory/x.json` is allowed by isAgentMemoryPath,
+  // which matches that whole tree under any filename. Every carve-out here
+  // grants a silent write, and none of them inspects what the file *is*, so the
+  // screen has to run before all of them rather than beside any one of them.
+  if (resolvesToFlagConfigFile(normalizedPath)) {
+    return { behavior: 'passthrough', message: '' }
+  }
 
   // Plan files for current session
   if (isSessionPlanFile(normalizedPath)) {
@@ -1627,6 +2164,49 @@ export function checkEditableInternalPath(
     }
   }
 
+  // The config dir itself, at both scopes: ~/.axa (or CLAUDE_CONFIG_DIR) and
+  // <project>/.axa. CONFIG_DIR_NAME is in DANGEROUS_DIRECTORIES, so without
+  // this every edit under a config dir prompts — and there is no way for the
+  // user to grant it themselves, because step 1.7 runs before allow rules, so
+  // an `Edit(~/.axa/**)` rule in settings.json is unreachable.
+  //
+  // What this actually opens is narrow, and narrower than the motivating
+  // examples: agent definitions, skills and slash commands stay on the prompting
+  // side, because those files grant permission rather than merely holding text
+  // (see CONFIG_DIR_PROTECTED_DIRS). What is left is AXA.md and the
+  // agent-authored note directories — see CONFIG_DIR_OPEN_DIRS, which is the
+  // whole of it, since classifyConfigDirRelativePath defaults to 'protected'.
+  //
+  // The exclusions are structural on purpose, not a matter of policy the user
+  // can relax. settings.json in particular: the deny rules protecting the OAuth
+  // tokens live *in* settings.json, so if an agent could rewrite it silently it
+  // could delete those rules first and the whole mitigation would be circular.
+  // Same reasoning for hooks/ and the other executed paths — a write there is
+  // code execution on the next tool call.
+  //
+  // Deliberately last in this function: the earlier carve-outs must keep their
+  // allow, and they return before this point, which is why the default here can
+  // be restrictive without stranding them.
+  //
+  // Do NOT read that as "the earlier carve-outs are not classified 'open'" — an
+  // earlier revision of this comment said so and it is false: `agent-memory`,
+  // `agent-memory-local` and `plans` are all in CONFIG_DIR_OPEN_DIRS, and
+  // relativeToConfigDirRoot resolves against the project `.axa` as well as the
+  // config home. Only memdir is genuinely elsewhere (`~/.axa/projects/`, which
+  // is 'secret'). The ordering is what protects them, not the classification —
+  // and a guard that has to run for those paths too therefore cannot live here.
+  // That is why the flag-config screen is at the top of this function.
+  if (classifyConfigDirPath(normalizedPath) === 'open') {
+    return {
+      behavior: 'allow',
+      updatedInput: input,
+      decisionReason: {
+        type: 'other',
+        reason: 'Config directory files are allowed for writing',
+      },
+    }
+  }
+
   return { behavior: 'passthrough', message: '' }
 }
 
@@ -1641,6 +2221,15 @@ export function checkReadableInternalPath(
   // SECURITY: Normalize path to prevent traversal bypasses via .. segments
   // This is defense-in-depth; individual helper functions also normalize
   const normalizedPath = normalize(absolutePath)
+
+  // First, ahead of every carve-out below, for the same reason as the identical
+  // screen at the top of checkEditableInternalPath: the carve-outs each return
+  // 'allow' for a whole tree under any filename, and isAgentMemoryPath matches
+  // the tree a flag can be aimed into. Reads and writes need this in the same
+  // place — closing one and not the other is what happened here twice.
+  if (resolvesToFlagConfigFile(normalizedPath)) {
+    return { behavior: 'passthrough', message: '' }
+  }
 
   // Session memory directory
   if (isSessionMemoryPath(normalizedPath)) {
@@ -1795,6 +2384,41 @@ export function checkReadableInternalPath(
       decisionReason: {
         type: 'other',
         reason: 'Bundled skill reference files are allowed for reading',
+      },
+    }
+  }
+
+  // The config dir itself, at both scopes. Broader than the write carve-out by
+  // one class — some paths that prompt on write are readable, because there the
+  // risk is tampering rather than disclosure — but only by an explicitly listed
+  // class, not by "everything that is not secret".
+  //
+  // That distinction is the whole point. Allowing `open || protected` here would
+  // make the read path a deny-list even though the write path is an allow-list,
+  // and it is the read path where the harm is irreversible: a prompt refused
+  // after a write is a file you can restore, a prompt refused after a read is a
+  // token the model has already seen. Anything not on CONFIG_DIR_READABLE_DIRS
+  // falls through to step 12 of checkReadPermissionForTool and asks, which is
+  // what main did for all of these.
+  //
+  // Flag-supplied config files are screened at the top of this function, so
+  // both arms below are already safe for them. Do not re-add a screen here:
+  // this branch is unreachable for the paths that need it most, because
+  // isAgentMemoryPath above returns 'allow' for the tree a flag can be aimed
+  // into. An earlier revision put the screen on this branch and left exactly
+  // that hole.
+  const configDirAccess = classifyConfigDirPath(normalizedPath)
+  if (
+    configDirAccess === 'open' ||
+    (configDirAccess === 'protected' &&
+      isReadableConfigDirPath(normalizedPath))
+  ) {
+    return {
+      behavior: 'allow',
+      updatedInput: input,
+      decisionReason: {
+        type: 'other',
+        reason: 'Config directory files are allowed for reading',
       },
     }
   }

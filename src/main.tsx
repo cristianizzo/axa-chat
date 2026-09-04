@@ -165,7 +165,7 @@ import { setCwd } from 'src/utils/Shell.js';
 import { type ProcessedResume, processResumedConversation } from 'src/utils/sessionRestore.js';
 import { parseSettingSourcesFlag } from 'src/utils/settings/constants.js';
 import { plural } from 'src/utils/stringUtils.js';
-import { type ChannelEntry, getInitialMainLoopModel, getIsNonInteractiveSession, getSdkBetas, getSessionId, getUserMsgOptIn, setAllowedChannels, setAllowedSettingSources, setChromeFlagOverride, setClientType, setCwdState, setDirectConnectServerUrl, setFlagSettingsPath, setInitialMainLoopModel, setInlinePlugins, setIsInteractive, setKairosActive, setOriginalCwd, setQuestionPreviewFormat, setSdkBetas, setSessionBypassPermissionsMode, setSessionPersistenceDisabled, setSessionSource, setUserMsgOptIn, switchSession } from './bootstrap/state.js';
+import { type ChannelEntry, getInitialMainLoopModel, getIsNonInteractiveSession, getSdkBetas, getSessionId, getUserMsgOptIn, setAllowedChannels, setAllowedSettingSources, setChromeFlagOverride, setClientType, setCwdState, setDirectConnectServerUrl, setFlagMcpConfigPaths, setFlagSettingsPath, setInitialMainLoopModel, setInlinePlugins, setIsInteractive, setKairosActive, setOriginalCwd, setQuestionPreviewFormat, setSdkBetas, setSessionBypassPermissionsMode, setSessionPersistenceDisabled, setSessionSource, setUserMsgOptIn, switchSession } from './bootstrap/state.js';
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const autoModeStateModule = feature('TRANSCRIPT_CLASSIFIER') ? require('./utils/permissions/autoModeState.js') as typeof import('./utils/permissions/autoModeState.js') : null;
@@ -1417,6 +1417,10 @@ async function run(): Promise<CommanderCommand> {
       const processedConfigs = mcpConfig.map(config => config.trim()).filter(config => config.length > 0);
       let allConfigs: Record<string, McpServerConfig> = {};
       const allErrors: ValidationError[] = [];
+      // Recorded for the permission engine, which must not hand out silent
+      // read/write on an active MCP config: its entries carry env blocks and a
+      // spawned command, so a write there is code execution on the next launch.
+      const resolvedMcpConfigPaths: string[] = [];
       for (const configItem of processedConfigs) {
         let configs: Record<string, McpServerConfig> | null = null;
         let errors: ValidationError[] = [];
@@ -1438,6 +1442,10 @@ async function run(): Promise<CommanderCommand> {
         } else {
           // Try as file path
           const configPath = resolve(configItem);
+          // Record before parsing: an unreadable or malformed config file is
+          // still the file the user pointed the flag at, and still the one that
+          // must not become silently writable.
+          resolvedMcpConfigPaths.push(configPath);
           const result = parseMcpConfigFromFilePath({
             filePath: configPath,
             expandVars: true,
@@ -1459,6 +1467,7 @@ async function run(): Promise<CommanderCommand> {
           };
         }
       }
+      setFlagMcpConfigPaths(resolvedMcpConfigPaths);
       if (allErrors.length > 0) {
         const formattedErrors = allErrors.map(err => `${err.path ? err.path + ': ' : ''}${err.message}`).join('\n');
         logForDebugging(`--mcp-config validation failed (${allErrors.length} errors): ${formattedErrors}`, {
