@@ -128,11 +128,30 @@ export function registerPendingAsyncHook({
   // 'backgrounded' forever, which checkForAsyncHookResponses skips on every
   // pass, and it survives until shutdown.
   const timeoutTimer = setTimeout(() => {
-    void expireAsyncHook(processId)
+    // Identity, not presence. processId is `async_hook_${child.pid}` (see the
+    // two call sites in hooks.ts) and the OS reuses pids, so a later hook can
+    // register under this same key and replace the entry below. Nothing clears
+    // the timers of an entry dropped from the map, so this timer stays armed
+    // and would otherwise expire a hook that is not the one it was armed for —
+    // killing it and reporting a deadline it never reached, under the *new*
+    // entry's timeout value. An orphaned timer must produce no outcome, not the
+    // wrong one, because timedOut has a single reader and that reader reports
+    // to the model.
+    //
+    // This is the false report only; the replacement itself loses the earlier
+    // hook, which is a separate pre-existing defect of keying the map on a pid.
+    if (pendingHooks.get(processId) === entry) {
+      void expireAsyncHook(processId)
+    }
   }, timeout)
   timeoutTimer.unref()
 
-  pendingHooks.set(processId, {
+  // Declared after the timer on purpose: stopTimers closes over timeoutTimer
+  // while the timer closes over entry, so one of the two must be forward-
+  // referenced. The timer only reads entry inside its callback, which runs
+  // after this assignment, so the temporal dead zone is satisfied. Swapping the
+  // order to remove the forward reference breaks stopTimers instead.
+  const entry: PendingAsyncHook = {
     processId,
     hookId,
     hookName,
@@ -149,7 +168,8 @@ export function registerPendingAsyncHook({
       stopProgressInterval()
       clearTimeout(timeoutTimer)
     },
-  })
+  }
+  pendingHooks.set(processId, entry)
 }
 
 /**
