@@ -120,7 +120,7 @@ export function getFilePermissionOptions({
   if ((projectConfigFolderScope !== null || inGlobalConfigFolder) && operationType !== 'read') {
     options.push({
       label: `Yes, and allow ${ASSISTANT_NAME} to edit its own settings for this session`,
-      value: 'yes-claude-folder',
+      value: 'yes-config-folder',
       option: {
         type: 'accept-session',
         scope: inGlobalConfigFolder ? 'global-config-folder' : projectConfigFolderScope!
