@@ -1957,13 +1957,16 @@ const CONFIG_DIR_READABLE_DIRS = new Set([
 function resolvesToFlagConfigFile(absolutePath: string): boolean {
   const normalizeForm = (path: string): string =>
     normalizeCaseForComparison(normalize(path))
-  const flagConfigForms = new Set(
-    getFlagMcpConfigPaths().flatMap(path =>
+  const configForms = new Set(
+    [...getSettingsPaths(), ...getFlagMcpConfigPaths()].flatMap(path =>
       getPathsForPermissionCheck(path).map(normalizeForm),
     ),
   )
   return getPathsForPermissionCheck(absolutePath).some(
-    form => isClaudeSettingsPath(form) || flagConfigForms.has(normalizeForm(form)),
+    // isClaudeSettingsPath is kept alongside the expanded set because it also
+    // matches `<anything>/.claude/settings.json` by suffix, for other projects,
+    // which is a pattern rather than a path and so cannot be expanded.
+    form => isClaudeSettingsPath(form) || configForms.has(normalizeForm(form)),
   )
 }
 
@@ -2191,6 +2194,15 @@ export function checkReadableInternalPath(
   // This is defense-in-depth; individual helper functions also normalize
   const normalizedPath = normalize(absolutePath)
 
+  // First, ahead of every carve-out below, for the same reason as the identical
+  // screen at the top of checkEditableInternalPath: the carve-outs each return
+  // 'allow' for a whole tree under any filename, and isAgentMemoryPath matches
+  // the tree a flag can be aimed into. Reads and writes need this in the same
+  // place — closing one and not the other is what happened here twice.
+  if (resolvesToFlagConfigFile(normalizedPath)) {
+    return { behavior: 'passthrough', message: '' }
+  }
+
   // Session memory directory
   if (isSessionMemoryPath(normalizedPath)) {
     return {
@@ -2361,21 +2373,17 @@ export function checkReadableInternalPath(
   // falls through to step 12 of checkReadPermissionForTool and asks, which is
   // what main did for all of these.
   //
-  // The 'open' arm is NOT redundant with step 5 of checkReadPermissionForTool
-  // ("edit access implies read access"). It reads that way, and an earlier
-  // revision of this comment said so, but step 5 defers to
-  // checkWritePermissionForTool, which now declines for an active flag-supplied
-  // config file — so for exactly the paths the guard below exists to protect,
-  // this arm is the only thing standing between them and a silent read.
-  //
-  // Hence the guard wraps the whole branch rather than sitting inside
-  // isReadableConfigDirPath, which only the 'protected' arm consults.
+  // Flag-supplied config files are screened at the top of this function, so
+  // both arms below are already safe for them. Do not re-add a screen here:
+  // this branch is unreachable for the paths that need it most, because
+  // isAgentMemoryPath above returns 'allow' for the tree a flag can be aimed
+  // into. An earlier revision put the screen on this branch and left exactly
+  // that hole.
   const configDirAccess = classifyConfigDirPath(normalizedPath)
   if (
-    !resolvesToFlagConfigFile(normalizedPath) &&
-    (configDirAccess === 'open' ||
-      (configDirAccess === 'protected' &&
-        isReadableConfigDirPath(normalizedPath)))
+    configDirAccess === 'open' ||
+    (configDirAccess === 'protected' &&
+      isReadableConfigDirPath(normalizedPath))
   ) {
     return {
       behavior: 'allow',
