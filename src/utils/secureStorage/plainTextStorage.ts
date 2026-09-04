@@ -46,7 +46,13 @@ export const plainTextStorage = {
     try {
       const { storageDir, storagePath } = getStoragePath()
       try {
-        getFsImplementation().mkdirSync(storageDir)
+        // 0700 applies only when this actually creates the directory, and
+        // storageDir is the whole config home, which on any existing install
+        // already exists at 0755. So this hardens a fresh install and changes
+        // nothing for everyone else — it is not the fix, and nothing below
+        // should depend on the directory being private. The mode on the write
+        // is the fix.
+        getFsImplementation().mkdirSync(storageDir, { mode: 0o700 })
       } catch (e: unknown) {
         const code = getErrnoCode(e)
         if (code !== 'EEXIST') {
@@ -54,10 +60,21 @@ export const plainTextStorage = {
         }
       }
 
+      // SECURITY: create the file private rather than chmod'ing it private
+      // after the credentials are already on disk. Without `mode` this goes to
+      // fs.writeFileSync with no mode and lands at 0666 & ~umask — measured at
+      // 0644, in a 0755 directory, holding a plaintext token. That is an
+      // exposure window, not a race: nothing has to be timed, the directory
+      // just has to be listable.
       writeFileSync_DEPRECATED(storagePath, jsonStringify(data), {
         encoding: 'utf8',
         flush: false,
+        mode: 0o600,
       })
+      // Still needed, and not redundant with the line above: `mode` applies
+      // only when open(2) creates the file, so a credentials file that already
+      // exists at a wider mode — including every one written by a build before
+      // this change — keeps that mode through the rewrite. This narrows it.
       chmodSync(storagePath, 0o600)
       return {
         success: true,
