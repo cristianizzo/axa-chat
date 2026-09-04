@@ -9,7 +9,12 @@ import {
 import { shouldOfferTerminalSetup } from '../../commands/terminalSetup/terminalSetup.js'
 import { getDesktopUpsellConfig } from '../../components/DesktopUpsell/DesktopUpsellStartup.js'
 import { color } from '../../components/design-system/color.js'
-import { ASSISTANT_NAME, PRODUCT_NAME } from '../../constants/product.js'
+import {
+  ASSISTANT_NAME,
+  CONFIG_DIR_NAME,
+  MEMORY_FILE_NAME,
+  PRODUCT_NAME,
+} from '../../constants/product.js'
 import { shouldShowOverageCreditUpsell } from '../../components/LogoV2/OverageCreditUpsell.js'
 import { getShortcutDisplay } from '../../keybindings/shortcutFormat.js'
 import { isKairosCronEnabled } from '../../tools/ScheduleCronTool/prompt.js'
@@ -392,7 +397,7 @@ const externalTips: Tip[] = [
   {
     id: 'custom-commands',
     content: async () =>
-      'Create skills by adding .md files to .claude/skills/ in your project or ~/.claude/skills/ for skills that work in any project',
+      `Create skills by adding .md files to ${CONFIG_DIR_NAME}/skills/ in your project or ~/${CONFIG_DIR_NAME}/skills/ for skills that work in any project`,
     cooldownSessions: 15,
     async isRelevant() {
       const config = getGlobalConfig()
@@ -639,7 +644,7 @@ const internalOnlyTips: Tip[] =
         {
           id: 'important-claudemd',
           content: async () =>
-            '[ANT-ONLY] Use "IMPORTANT:" prefix for must-follow CLAUDE.md rules',
+            `[ANT-ONLY] Use "IMPORTANT:" prefix for must-follow ${MEMORY_FILE_NAME} rules`,
           cooldownSessions: 30,
           isRelevant: async () => true,
         },

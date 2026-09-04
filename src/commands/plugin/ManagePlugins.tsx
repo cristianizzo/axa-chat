@@ -12,6 +12,7 @@ import { MCPToolDetailView } from '../../components/mcp/MCPToolDetailView.js';
 import { MCPToolListView } from '../../components/mcp/MCPToolListView.js';
 import type { ClaudeAIServerInfo, HTTPServerInfo, SSEServerInfo, StdioServerInfo } from '../../components/mcp/types.js';
 import { SearchBox } from '../../components/SearchBox.js';
+import { CONFIG_DIR_NAME } from '../../constants/product.js';
 import { useSearchInput } from '../../hooks/useSearchInput.js';
 import { useTerminalSize } from '../../hooks/useTerminalSize.js';
 // eslint-disable-next-line custom-rules/prefer-use-keybindings -- useInput needed for raw search mode text input
@@ -1043,8 +1044,8 @@ export function ManagePlugins({
           {
             if (isBuiltin) break; // guarded above; narrows pluginScope
             if (!isInstallableScope(pluginScope)) break;
-            // If the plugin is enabled in .claude/settings.json (shared with the
-            // team), divert to a confirmation dialog that offers to disable in
+            // If the plugin is enabled in the project settings.json (shared with
+            // the team), divert to a confirmation dialog that offers to disable in
             // settings.local.json instead. Check the settings file directly —
             // `pluginScope` (from installed_plugins.json) can be 'user' even when
             // the plugin is ALSO project-enabled, and uninstalling the user-scope
@@ -1523,7 +1524,7 @@ export function ManagePlugins({
         return;
       }
       clearAllCaches();
-      setResult(`✓ Disabled ${selectedPlugin.plugin.name} in .claude/settings.local.json. Run /reload-plugins to apply.`);
+      setResult(`✓ Disabled ${selectedPlugin.plugin.name} in ${CONFIG_DIR_NAME}/settings.local.json. Run /reload-plugins to apply.`);
       if (onManageComplete) void onManageComplete();
       setParentViewState({
         type: 'menu'
@@ -1757,16 +1758,16 @@ export function ManagePlugins({
       </Box>;
   }
 
-  // Confirm-project-uninstall: warn about shared .claude/settings.json,
+  // Confirm-project-uninstall: warn about the shared project settings.json,
   // offer to disable in settings.local.json instead.
   if (viewState === 'confirm-project-uninstall' && selectedPlugin) {
     return <Box flexDirection="column">
         <Text bold color="warning">
-          {selectedPlugin.plugin.name} is enabled in .claude/settings.json
+          {selectedPlugin.plugin.name} is enabled in {CONFIG_DIR_NAME}/settings.json
           (shared with your team)
         </Text>
         <Box marginTop={1} flexDirection="column">
-          <Text>Disable it just for you in .claude/settings.local.json?</Text>
+          <Text>Disable it just for you in {CONFIG_DIR_NAME}/settings.local.json?</Text>
           <Text dimColor>
             This has the same effect as uninstalling, without affecting other
             contributors.

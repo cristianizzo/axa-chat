@@ -2,6 +2,7 @@ import { relative } from 'path';
 import React from 'react';
 import { getCwdState } from '../../bootstrap/state.js';
 import { SandboxSettings } from '../../components/sandbox/SandboxSettings.js';
+import { CONFIG_DIR_NAME } from '../../constants/product.js';
 import { color } from '../../ink.js';
 import { getPlatform } from '../../utils/platform.js';
 import { addToExcludedCommands, SandboxManager } from '../../utils/sandbox/sandbox-adapter.js';
@@ -65,7 +66,7 @@ export async function call(onDone: (result?: string) => void, _context: unknown,
 
       // Get the local settings path and make it relative to cwd
       const localSettingsPath = getSettingsFilePathForSource('localSettings');
-      const relativePath = localSettingsPath ? relative(getCwdState(), localSettingsPath) : '.claude/settings.local.json';
+      const relativePath = localSettingsPath ? relative(getCwdState(), localSettingsPath) : `${CONFIG_DIR_NAME}/settings.local.json`;
       const message = color('success', themeName)(`Added "${cleanPattern}" to excluded commands in ${relativePath}`);
       onDone(message);
       return null;
