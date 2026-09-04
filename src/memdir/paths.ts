@@ -80,7 +80,7 @@ export function isExtractModeActive(): boolean {
  * Returns the base directory for persistent memory storage.
  * Resolution order:
  *   1. CLAUDE_CODE_REMOTE_MEMORY_DIR env var (explicit override, set in CCR)
- *   2. ~/.claude (default config home)
+ *   2. ~/.axa (default config home; CLAUDE_CONFIG_DIR relocates it)
  */
 export function getMemoryBaseDir(): string {
   if (process.env.CLAUDE_CODE_REMOTE_MEMORY_DIR) {

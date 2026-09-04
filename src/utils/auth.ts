@@ -7,6 +7,7 @@ import { join } from 'path'
 import { CODEX_PROVIDER_ID } from 'src/config/codex.js'
 import { OLLAMA_PROVIDER_ID } from 'src/config/ollama.js'
 import { CLAUDE_AI_PROFILE_SCOPE } from 'src/constants/oauth.js'
+import { BINARY_NAME } from 'src/constants/product.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
@@ -2204,8 +2205,8 @@ export async function validateForceLoginOrg(): Promise<OrgValidationResult> {
         `Unable to verify organization for the current authentication token.\n` +
         `This machine requires organization ${requiredOrgUuid} but the profile could not be fetched.\n` +
         `This may be a network error, or the token may lack the user:profile scope required for\n` +
-        `verification (tokens from 'claude setup-token' do not include this scope).\n` +
-        `Try again, or obtain a full-scope token via 'claude auth login'.`,
+        `verification (tokens from '${BINARY_NAME} setup-token' do not include this scope).\n` +
+        `Try again, or obtain a full-scope token via '${BINARY_NAME} auth login'.`,
     }
   }
 
@@ -2235,7 +2236,7 @@ export async function validateForceLoginOrg(): Promise<OrgValidationResult> {
     message:
       `Your authentication token belongs to organization ${tokenOrgUuid},\n` +
       `but this machine requires organization ${requiredOrgUuid}.\n\n` +
-      `Please log in with the correct organization: claude auth login`,
+      `Please log in with the correct organization: ${BINARY_NAME} auth login`,
   }
 }
 

@@ -3,13 +3,15 @@
  *
  * Memories are constrained to four types capturing context NOT derivable
  * from the current project state. Code patterns, architecture, git history,
- * and file structure are derivable (via grep/git/CLAUDE.md) and should NOT
+ * and file structure are derivable (via grep/git/AXA.md) and should NOT
  * be saved as memories.
  *
  * The two TYPES_SECTION_* exports below are intentionally duplicated rather
  * than generated from a shared spec — keeping them flat makes per-mode edits
  * trivial without reasoning through a helper's conditional rendering.
  */
+
+import { MEMORY_FILE_NAME } from '../constants/product.js'
 
 export const MEMORY_TYPES = [
   'user',
@@ -186,7 +188,7 @@ export const WHAT_NOT_TO_SAVE_SECTION: readonly string[] = [
   '- Code patterns, conventions, architecture, file paths, or project structure — these can be derived by reading the current project state.',
   '- Git history, recent changes, or who-changed-what — `git log` / `git blame` are authoritative.',
   '- Debugging solutions or fix recipes — the fix is in the code; the commit message has the context.',
-  '- Anything already documented in CLAUDE.md files.',
+  `- Anything already documented in ${MEMORY_FILE_NAME} files.`,
   '- Ephemeral task details: in-progress work, temporary state, current conversation context.',
   '',
   // H2: explicit-save gate. Eval-validated (memory-prompt-iteration case 3,

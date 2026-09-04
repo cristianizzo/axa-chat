@@ -1,8 +1,9 @@
 /**
  * Auto mode subcommand handlers — dump default/merged classifier rules and
- * critique user-written rules. Dynamically imported when `claude auto-mode ...` runs.
+ * critique user-written rules. Dynamically imported when `axa auto-mode ...` runs.
  */
 
+import { BINARY_NAME } from '../../constants/product.js'
 import { errorMessage } from '../../utils/errors.js'
 import {
   getMainLoopModel,
@@ -83,7 +84,7 @@ export async function autoModeCritiqueHandler(options: {
     process.stdout.write(
       'No custom auto mode rules found.\n\n' +
         'Add rules to your settings file under autoMode.{allow, soft_deny, environment}.\n' +
-        'Run `claude auto-mode defaults` to see the default rules for reference.\n',
+        `Run \`${BINARY_NAME} auto-mode defaults\` to see the default rules for reference.\n`,
     )
     return
   }

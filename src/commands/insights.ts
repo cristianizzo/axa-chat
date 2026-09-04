@@ -14,6 +14,11 @@ import {
 import { tmpdir } from 'os'
 import { extname, join } from 'path'
 import type { Command } from '../commands.js'
+import {
+  BINARY_NAME,
+  CONFIG_DIR_NAME,
+  MEMORY_FILE_NAME,
+} from '../constants/product.js'
 import { queryWithModel } from '../services/api/claude.js'
 import {
   AGENT_TOOL_NAME,
@@ -80,6 +85,9 @@ const getRunningRemoteHosts: () => Promise<string[]> =
       }
     : async () => []
 
+// The `/root/.claude` paths below are not this fork's config dir and must not be
+// renamed to CONFIG_DIR_NAME: they address a remote Anthropic coder workspace
+// over ssh/scp, where the transcripts were written by upstream Claude Code.
 const getRemoteHostSessionCount: (hs: string) => Promise<number> =
   process.env.USER_TYPE === 'ant'
     ? async (homespace: string) => {
@@ -1395,15 +1403,15 @@ Include 3 friction categories with 2 examples each.`,
 
 ## CC FEATURES REFERENCE (pick from these for features_to_try):
 1. **MCP Servers**: Connect Claude to external tools, databases, and APIs via Model Context Protocol.
-   - How to use: Run \`claude mcp add <server-name> -- <command>\`
+   - How to use: Run \`${BINARY_NAME} mcp add <server-name> -- <command>\`
    - Good for: database queries, Slack integration, GitHub issue lookup, connecting to internal APIs
 
 2. **Custom Skills**: Reusable prompts you define as markdown files that run with a single /command.
-   - How to use: Create \`.claude/skills/commit/SKILL.md\` with instructions. Then type \`/commit\` to run it.
+   - How to use: Create \`${CONFIG_DIR_NAME}/skills/commit/SKILL.md\` with instructions. Then type \`/commit\` to run it.
    - Good for: repetitive workflows - /commit, /review, /test, /deploy, /pr, or complex multi-step workflows
 
 3. **Hooks**: Shell commands that auto-run at specific lifecycle events.
-   - How to use: Add to \`.claude/settings.json\` under "hooks" key.
+   - How to use: Add to \`${CONFIG_DIR_NAME}/settings.json\` under "hooks" key.
    - Good for: auto-formatting code, running type checks, enforcing conventions
 
 4. **Headless Mode**: Run Claude non-interactively from scripts and CI/CD.
@@ -1417,7 +1425,7 @@ Include 3 friction categories with 2 examples each.`,
 RESPOND WITH ONLY A VALID JSON OBJECT:
 {
   "claude_md_additions": [
-    {"addition": "A specific line or block to add to CLAUDE.md based on workflow patterns. E.g., 'Always run tests after modifying auth-related files'", "why": "1 sentence explaining why this would help based on actual sessions", "prompt_scaffold": "Instructions for where to add this in CLAUDE.md. E.g., 'Add under ## Testing section'"}
+    {"addition": "A specific line or block to add to ${MEMORY_FILE_NAME} based on workflow patterns. E.g., 'Always run tests after modifying auth-related files'", "why": "1 sentence explaining why this would help based on actual sessions", "prompt_scaffold": "Instructions for where to add this in ${MEMORY_FILE_NAME}. E.g., 'Add under ## Testing section'"}
   ],
   "features_to_try": [
     {"feature": "Feature name from CC FEATURES REFERENCE above", "one_liner": "What it does", "why_for_you": "Why this would help YOU based on your sessions", "example_code": "Actual command or config to copy"}
@@ -2069,8 +2077,8 @@ function generateHtmlReport(
         ? `
     <h2 id="section-features">Existing CC Features to Try</h2>
     <div class="claude-md-section">
-      <h3>Suggested CLAUDE.md Additions</h3>
-      <p style="font-size: 12px; color: #64748b; margin-bottom: 12px;">Just copy this into Claude Code to add it to your CLAUDE.md.</p>
+      <h3>Suggested ${MEMORY_FILE_NAME} Additions</h3>
+      <p style="font-size: 12px; color: #64748b; margin-bottom: 12px;">Just copy this into Claude Code to add it to your ${MEMORY_FILE_NAME}.</p>
       <div class="claude-md-actions">
         <button class="copy-all-btn" onclick="copyAllCheckedClaudeMd()">Copy All Checked</button>
       </div>
@@ -2078,7 +2086,7 @@ function generateHtmlReport(
         .map(
           (add, i) => `
         <div class="claude-md-item">
-          <input type="checkbox" id="cmd-${i}" class="cmd-checkbox" checked data-text="${escapeHtml(add.prompt_scaffold || add.where || 'Add to CLAUDE.md')}\\n\\n${escapeHtml(add.addition)}">
+          <input type="checkbox" id="cmd-${i}" class="cmd-checkbox" checked data-text="${escapeHtml(add.prompt_scaffold || add.where || `Add to ${MEMORY_FILE_NAME}`)}\\n\\n${escapeHtml(add.addition)}">
           <label for="cmd-${i}">
             <code class="cmd-code">${escapeHtml(add.addition)}</code>
             <button class="copy-btn" onclick="copyCmdItem(${i})">Copy</button>

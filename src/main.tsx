@@ -27,7 +27,7 @@ import pickBy from 'lodash-es/pickBy.js';
 import uniqBy from 'lodash-es/uniqBy.js';
 import React from 'react';
 import { getOauthConfig } from './constants/oauth.js';
-import { ASSISTANT_NAME, BINARY_NAME, PRODUCT_NAME, getRemoteSessionUrl } from './constants/product.js';
+import { ASSISTANT_NAME, BINARY_NAME, CONFIG_DIR_NAME, PRODUCT_NAME, getRemoteSessionUrl } from './constants/product.js';
 import { getSystemContext, getUserContext } from './context.js';
 import { init, initializeTelemetryAfterTrust } from './entrypoints/init.js';
 import { addToHistory } from './history.js';
@@ -1007,7 +1007,7 @@ async function run(): Promise<CommanderCommand> {
     profileCheckpoint('action_handler_start');
 
     // --bare = one-switch minimal mode. Sets SIMPLE so all the existing
-    // gates fire (CLAUDE.md, skills, hooks inside executeHooks, agent
+    // gates fire (AXA.md, skills, hooks inside executeHooks, agent
     // dir-walk). Must be set before setup() / any of the gated work runs.
     if ((options as {
       bare?: boolean;
@@ -1030,7 +1030,7 @@ async function run(): Promise<CommanderCommand> {
       });
     }
 
-    // Assistant mode: when .claude/settings.json has assistant: true AND
+    // Assistant mode: when .axa/settings.json has assistant: true AND
     // the tengu_kairos GrowthBook gate is on, force brief on. Permission
     // mode is left to the user — settings defaultMode or --permission-mode
     // apply as normal. REPL-typed messages already default to 'next'
@@ -1040,10 +1040,10 @@ async function run(): Promise<CommanderCommand> {
     // kairosEnabled is computed once here and reused at the
     // getAssistantSystemPromptAddendum() call site further down.
     //
-    // Trust gate: .claude/settings.json is attacker-controllable in an
+    // Trust gate: .axa/settings.json is attacker-controllable in an
     // untrusted clone. We run ~1000 lines before showSetupScreens() shows
     // the trust dialog, and by then we've already appended
-    // .claude/agents/assistant.md to the system prompt. Refuse to activate
+    // .axa/agents/assistant.md to the system prompt. Refuse to activate
     // until the directory has been explicitly trusted.
     let kairosEnabled = false;
     let assistantTeamContext: Awaited<ReturnType<NonNullable<typeof assistantModule>['initializeAssistantTeam']>> | undefined;
@@ -1629,7 +1629,7 @@ async function run(): Promise<CommanderCommand> {
       }
     }
 
-    // Store additional directories for CLAUDE.md loading (controlled by env var)
+    // Store additional directories for AXA.md loading (controlled by env var)
     setAdditionalDirectoriesForClaudeMd(addDir);
 
     // Channel server allowlist from --channels flag — servers whose
@@ -1951,7 +1951,7 @@ async function run(): Promise<CommanderCommand> {
     }
     if (getIsNonInteractiveSession()) {
       // Apply full merged settings env now (including project-scoped
-      // .claude/settings.json PATH/GIT_DIR/GIT_WORK_TREE) so gitExe() and
+      // .axa/settings.json PATH/GIT_DIR/GIT_WORK_TREE) so gitExe() and
       // the git spawn below see it. Trust is implicit in -p mode; the
       // docstring at managedEnv.ts:96-97 says this applies "potentially
       // dangerous environment variables such as LD_PRELOAD, PATH" from all
@@ -1976,7 +1976,7 @@ async function run(): Promise<CommanderCommand> {
       // (same gate as prefetchSystemContextIfSafe).
       void getSystemContext();
       // Kick getUserContext now too — its first await (fs.readFile in
-      // getMemoryFiles) yields naturally, so the CLAUDE.md directory walk
+      // getMemoryFiles) yields naturally, so the AXA.md directory walk
       // runs during the ~280ms overlap window before the context
       // Promise.all join in print.ts. The void getUserContext() in
       // startDeferredPrefetches becomes a memoize cache-hit.
@@ -2533,7 +2533,7 @@ async function run(): Promise<CommanderCommand> {
     void logPermissionContextForAnts(null, 'initialization');
     logManagedSettings();
 
-    // Register PID file for concurrent-session detection (~/.claude/sessions/)
+    // Register PID file for concurrent-session detection (~/.axa/sessions/)
     // and fire multi-clauding telemetry. Lives here (not init.ts) so only the
     // REPL path registers — not subcommands like `claude doctor`. Chained:
     // count must run after register's write completes or it misses our own file.
@@ -3785,7 +3785,7 @@ async function run(): Promise<CommanderCommand> {
       // knows the session originated externally. Linux xdg-open and
       // browsers with "always allow" set dispatch the link with no OS-level
       // confirmation, so this is the only signal the user gets that the
-      // prompt — and the working directory / CLAUDE.md it implies — came
+      // prompt — and the working directory / AXA.md it implies — came
       // from an external source rather than something they typed.
       let deepLinkBanner: ReturnType<typeof createSystemMessage> | null = null;
       if (feature('LODESTONE')) {
@@ -4227,7 +4227,7 @@ async function run(): Promise<CommanderCommand> {
   });
 
   // Plugin uninstall command
-  pluginCmd.command('uninstall <plugin>').alias('remove').alias('rm').description('Uninstall an installed plugin').option('-s, --scope <scope>', 'Uninstall from scope: user, project, or local', 'user').option('--keep-data', "Preserve the plugin's persistent data directory (~/.claude/plugins/data/{id}/)").addOption(coworkOption()).action(async (plugin: string, options: {
+  pluginCmd.command('uninstall <plugin>').alias('remove').alias('rm').description('Uninstall an installed plugin').option('-s, --scope <scope>', 'Uninstall from scope: user, project, or local', 'user').option('--keep-data', `Preserve the plugin's persistent data directory (~/${CONFIG_DIR_NAME}/plugins/data/{id}/)`).addOption(coworkOption()).action(async (plugin: string, options: {
     scope?: string;
     cowork?: boolean;
     keepData?: boolean;
@@ -4389,7 +4389,7 @@ async function run(): Promise<CommanderCommand> {
   // claude rollback (ant-only)
   // Rolls back to previous releases
   if ("external" === 'ant') {
-    program.command('rollback [target]').description('[ANT-ONLY] Roll back to a previous release\n\nExamples:\n  claude rollback                                    Go 1 version back from current\n  claude rollback 3                                  Go 3 versions back from current\n  claude rollback 2.0.73-dev.20251217.t190658        Roll back to a specific version').option('-l, --list', 'List recent published versions with ages').option('--dry-run', 'Show what would be installed without installing').option('--safe', 'Roll back to the server-pinned safe version (set by oncall during incidents)').action(async (target?: string, options?: {
+    program.command('rollback [target]').description(`[ANT-ONLY] Roll back to a previous release\n\nExamples:\n  ${BINARY_NAME} rollback                                    Go 1 version back from current\n  ${BINARY_NAME} rollback 3                                  Go 3 versions back from current\n  ${BINARY_NAME} rollback 2.0.73-dev.20251217.t190658        Roll back to a specific version`).option('-l, --list', 'List recent published versions with ages').option('--dry-run', 'Show what would be installed without installing').option('--safe', 'Roll back to the server-pinned safe version (set by oncall during incidents)').action(async (target?: string, options?: {
       list?: boolean;
       dryRun?: boolean;
       safe?: boolean;

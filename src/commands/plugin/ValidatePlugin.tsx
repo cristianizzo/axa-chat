@@ -2,6 +2,7 @@ import { c as _c } from "react/compiler-runtime";
 import figures from 'figures';
 import * as React from 'react';
 import { useEffect } from 'react';
+import { BINARY_NAME } from '../../constants/product.js';
 import { Box, Text } from '../../ink.js';
 import { errorMessage } from '../../utils/errors.js';
 import { logError } from '../../utils/log.js';
@@ -23,7 +24,7 @@ export function ValidatePlugin(t0) {
     t1 = () => {
       const runValidation = async function runValidation() {
         if (!path) {
-          onComplete("Usage: /plugin validate <path>\n\nValidate a plugin or marketplace manifest file or directory.\n\nExamples:\n  /plugin validate .claude-plugin/plugin.json\n  /plugin validate /path/to/plugin-directory\n  /plugin validate .\n\nWhen given a directory, automatically validates .claude-plugin/marketplace.json\nor .claude-plugin/plugin.json (prefers marketplace if both exist).\n\nOr from the command line:\n  claude plugin validate <path>");
+          onComplete(`Usage: /plugin validate <path>\n\nValidate a plugin or marketplace manifest file or directory.\n\nExamples:\n  /plugin validate .claude-plugin/plugin.json\n  /plugin validate /path/to/plugin-directory\n  /plugin validate .\n\nWhen given a directory, automatically validates .claude-plugin/marketplace.json\nor .claude-plugin/plugin.json (prefers marketplace if both exist).\n\nOr from the command line:\n  ${BINARY_NAME} plugin validate <path>`);
           return;
         }
         ;

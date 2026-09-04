@@ -1,3 +1,4 @@
+import { CONFIG_DIR_NAME } from '../../constants/product.js'
 import { registerBundledSkill } from '../bundledSkills.js'
 
 // Prompt text contains `ps` commands as instructions for Claude to run,
@@ -31,7 +32,7 @@ Signs of a stuck session:
    - Child processes: \`pgrep -lP <pid>\`
    - If high CPU: sample again after 1-2s to confirm it's sustained
    - If a child looks hung (e.g., a git command), note its full command line with \`ps -p <child_pid> -o command=\`
-   - Check the session's debug log if you can infer the session ID: \`~/.claude/debug/<session-id>.txt\` (the last few hundred lines often show what it was doing before hanging)
+   - Check the session's debug log if you can infer the session ID: \`~/${CONFIG_DIR_NAME}/debug/<session-id>.txt\` (the last few hundred lines often show what it was doing before hanging)
 
 3. **Consider a stack dump** for a truly frozen process (advanced, optional):
    - macOS: \`sample <pid> 3\` gives a 3-second native stack sample

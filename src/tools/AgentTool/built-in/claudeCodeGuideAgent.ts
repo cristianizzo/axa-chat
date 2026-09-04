@@ -1,3 +1,4 @@
+import { CONFIG_DIR_NAME, MEMORY_FILE_NAME } from 'src/constants/product.js'
 import { BASH_TOOL_NAME } from 'src/tools/BashTool/toolName.js'
 import { FILE_READ_TOOL_NAME } from 'src/tools/FileReadTool/prompt.js'
 import { GLOB_TOOL_NAME } from 'src/tools/GlobTool/prompt.js'
@@ -74,7 +75,7 @@ function getClaudeCodeGuideBasePrompt(): string {
 4. Fetch the specific documentation pages
 5. Provide clear, actionable guidance based on official documentation
 6. Use ${WEB_SEARCH_TOOL_NAME} if docs don't cover the topic
-7. Reference local project files (CLAUDE.md, .claude/ directory) when relevant using ${localSearchHint}
+7. Reference local project files (${MEMORY_FILE_NAME}, ${CONFIG_DIR_NAME}/ directory) when relevant using ${localSearchHint}
 
 **Guidelines:**
 - Always prioritize official documentation over assumptions
@@ -135,7 +136,7 @@ export const CLAUDE_CODE_GUIDE_AGENT: BuiltInAgentDefinition = {
       )
     }
 
-    // 2. Custom agents from .claude/agents/
+    // 2. Custom agents from .axa/agents/
     const customAgents =
       toolUseContext.options.agentDefinitions.activeAgents.filter(
         (a: AgentDefinition) => a.source !== 'built-in',

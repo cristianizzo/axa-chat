@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { MEMORY_FILE_NAME } from '../../constants/product.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
 
@@ -51,7 +52,7 @@ What NOT to document:
 - Exhaustive lists of files, functions, or parameters
 - Step-by-step implementation details
 - Low-level code mechanics
-- Information already in CLAUDE.md or other project docs
+- Information already in ${MEMORY_FILE_NAME} or other project docs
 
 Use the Edit tool with file_path: {{docPath}}
 
@@ -60,7 +61,8 @@ REMEMBER: Only update if there is substantial new information. The Magic Doc hea
 
 /**
  * Load custom Magic Docs prompt from file if it exists
- * Custom prompts can be placed at ~/.claude/magic-docs/prompt.md
+ * Custom prompts can be placed at ~/.axa/magic-docs/prompt.md — the path below
+ * is built from the config home, so CLAUDE_CONFIG_DIR relocates it too.
  * Use {{variableName}} syntax for variable substitution (e.g., {{docContents}}, {{docPath}}, {{docTitle}})
  */
 async function loadMagicDocsPrompt(): Promise<string> {
