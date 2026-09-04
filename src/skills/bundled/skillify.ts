@@ -199,6 +199,11 @@ export function registerSkillifySkill(): void {
         // prompt cannot name a location nothing is loaded from. Join the
         // remaining segments too, so the separator stays the platform's own
         // rather than mixing in the literal slashes of a hardcoded suffix.
+        //
+        // The repo option above keeps its literal slashes on purpose: it is a
+        // repo-relative path shown as documentation, not a path resolved on
+        // this machine, so there is no platform separator for it to be wrong
+        // about. Only this one names a real absolute location.
         .replace(
           '{{userSkillPath}}',
           join(getSkillsPath('userSettings', 'skills'), '<name>', 'SKILL.md'),

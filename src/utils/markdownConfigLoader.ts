@@ -321,8 +321,11 @@ export function getProjectConfigDirs(
   // repo's copy too would duplicate every command/agent/skill
   // (anthropics/claude-code#29599, #28182, #26992).
   //
-  // projectDirs already reflects existence (getProjectDirsUpToHome checked
-  // each dir), so we compare against that instead of stat'ing again.
+  // The "does the worktree have it?" test needs no stat of its own:
+  // projectDirs already reflects existence, because getProjectDirsUpToHome
+  // stat-checked every level it returned, so membership in that list is the
+  // answer. This says nothing about the main repo's copy, which no walk has
+  // looked at — that one is stat'ed below before it joins the list.
   const gitRoot = findGitRoot(cwd)
   const canonicalRoot = findCanonicalGitRoot(cwd)
   if (gitRoot && canonicalRoot && canonicalRoot !== gitRoot) {
