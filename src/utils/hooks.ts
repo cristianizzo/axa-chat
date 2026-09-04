@@ -1496,10 +1496,24 @@ async function prepareIfConditionMatcher(
       // for this event, including hooks that have no `if` condition and never
       // needed this matcher. Contain it to the `if` evaluation it belongs to.
       //
-      // Matching everything is the fail-safe direction: `if` filtering is
-      // "no match -> skip hook", so a matcher that can't be built must run the
-      // hook rather than silence it. BashTool takes the same branch itself when
-      // its parse is unavailable.
+      // Matching everything is the fail-safe direction for a hook that blocks:
+      // `if` filtering is "no match -> skip hook", so a matcher that can't be
+      // built must run the hook rather than silence it.
+      //
+      // It is not fail-safe for every hook, and the exception is worth naming.
+      // A PreToolUse hook returning permissionBehavior 'allow' auto-approves the
+      // call, so running it here can approve a call its `if` condition was
+      // written to exclude. That direction is still chosen, because BashTool's
+      // own preparePermissionMatcher returns `() => true` whenever the command
+      // is not a simple parse: the same exposure already exists without this
+      // branch, and choosing the opposite here would make the error path
+      // stricter than the ordinary one.
+      //
+      // Note this deliberately diverges from `patternMatcher` being absent
+      // below, which returns false and skips the hook. That is "this tool has
+      // no matcher to offer", a stable property of the tool. This is "the
+      // tool's matcher failed once", where dropping every blocking hook for the
+      // event is the fail-open being fixed here.
       logError(
         Error(
           `Could not prepare the hook "if" matcher for ${toolName}; ` +
