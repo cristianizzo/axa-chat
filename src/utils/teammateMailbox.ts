@@ -329,77 +329,6 @@ export async function markMessageAsReadByIndex(
 }
 
 /**
- * Mark all messages in a teammate's inbox as read
- * Uses file locking to prevent race conditions
- * @param agentName - The agent name to mark messages as read for
- * @param teamName - Optional team name
- */
-export async function markMessagesAsRead(
-  agentName: string,
-  teamName?: string,
-): Promise<void> {
-  const inboxPath = getInboxPath(agentName, teamName)
-  logForDebugging(
-    `[TeammateMailbox] markMessagesAsRead called: agentName=${agentName}, teamName=${teamName}, path=${inboxPath}`,
-  )
-
-  const lockFilePath = `${inboxPath}.lock`
-
-  let release: (() => Promise<void>) | undefined
-  try {
-    logForDebugging(`[TeammateMailbox] markMessagesAsRead: acquiring lock...`)
-    release = await lockfile.lock(inboxPath, {
-      lockfilePath: lockFilePath,
-      ...LOCK_OPTIONS,
-    })
-    logForDebugging(`[TeammateMailbox] markMessagesAsRead: lock acquired`)
-
-    // Re-read messages after acquiring lock to get the latest state
-    const messages = await readMailboxForUpdate(inboxPath)
-    logForDebugging(
-      `[TeammateMailbox] markMessagesAsRead: read ${messages.length} messages after lock`,
-    )
-
-    if (messages.length === 0) {
-      logForDebugging(
-        `[TeammateMailbox] markMessagesAsRead: no messages to mark`,
-      )
-      return
-    }
-
-    const unreadCount = count(messages, m => !m.read)
-    logForDebugging(
-      `[TeammateMailbox] markMessagesAsRead: ${unreadCount} unread of ${messages.length} total`,
-    )
-
-    // messages comes from jsonParse — fresh, unshared objects safe to mutate
-    for (const m of messages) m.read = true
-
-    await writeMailboxAtomic(inboxPath, messages)
-    logForDebugging(
-      `[TeammateMailbox] markMessagesAsRead: WROTE ${unreadCount} message(s) as read to ${inboxPath}`,
-    )
-  } catch (error) {
-    const code = getErrnoCode(error)
-    if (code === 'ENOENT') {
-      logForDebugging(
-        `[TeammateMailbox] markMessagesAsRead: file does not exist at ${inboxPath}`,
-      )
-      return
-    }
-    logForDebugging(
-      `[TeammateMailbox] markMessagesAsRead FAILED for ${agentName}: ${error}`,
-    )
-    logError(error)
-  } finally {
-    if (release) {
-      await release()
-      logForDebugging(`[TeammateMailbox] markMessagesAsRead: lock released`)
-    }
-  }
-}
-
-/**
  * Format teammate messages as XML for attachment display
  */
 export function formatTeammateMessages(
@@ -1128,7 +1057,8 @@ export function isStructuredProtocolMessage(messageText: string): boolean {
 
 /**
  * Marks only messages matching a predicate as read, leaving others unread.
- * Uses the same file-locking mechanism as markMessagesAsRead.
+ * Takes the inbox lock and replaces the file atomically, like every other
+ * mutation path here.
  */
 export async function markMessagesAsReadByPredicate(
   agentName: string,
@@ -1189,11 +1119,11 @@ function messageKey(m: TeammateMessage): string {
  * Marks exactly the given messages as read, leaving anything that arrived
  * afterwards unread.
  *
- * Callers that snapshot the inbox and then do async work must use this rather
- * than markMessagesAsRead. A teammate can write to the inbox at any point
- * during that work, and markMessagesAsRead marks whatever is on disk when it
- * runs — so a message that arrived after the snapshot is marked read without
- * ever having been delivered, and no later poll will pick it up.
+ * This is the only way to retire a snapshot. Marking the whole inbox instead
+ * marks whatever is on disk at that moment, and a teammate can write at any
+ * point during the async work between the snapshot and the mark — so a message
+ * that arrived in that window is marked read without ever having been
+ * delivered, and no later poll picks it up.
  */
 export async function markMessagesAsReadBySnapshot(
   agentName: string,
