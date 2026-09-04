@@ -71,6 +71,22 @@ export const DANGEROUS_FILES = [
   '.profile',
   '.ripgreprc',
   '.mcp.json',
+  // NOT legacy naming — a `.claude` sweep matches this line and reads it as
+  // drift from the rename, which is the opposite of what it is. `~/.claude.json`
+  // is the live global config of a *real, current* Claude Code install: another
+  // product's session state, not a pre-rename spelling of anything this fork
+  // owns. A write there corrupts that install's session and forces a re-login,
+  // and it is just as hazardous on a machine that never had a legacy config dir.
+  // Nothing in this repo may write this file; for auto-editing, this entry is
+  // what enforces that. Matched on basename anywhere in the path, hence bare.
+  //
+  // Polarity, because the `.claude` handling in this file runs both ways and
+  // inspection cannot tell them apart: this is a denylist **entry**, so deleting
+  // it *under-blocks* — protection silently gone, no code path breaks, nothing
+  // fails a typecheck. `.claude` in DANGEROUS_DIRECTORIES is an entry too, but
+  // `.claude` in the worktree-path check below is an *exemption from* that
+  // denylist, and deleting that one over-blocks instead. Ask "does removing this
+  // under-block or over-block?", never "is this literal deliberate?".
   '.claude.json',
 ] as const
 
