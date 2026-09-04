@@ -17,11 +17,14 @@ import {
 } from '../Tool.js'
 import { getTools } from '../tools.js'
 import { createAbortController } from '../utils/abortController.js'
+import { errorMessage } from '../utils/errors.js'
 import { createFileStateCacheWithSizeLimit } from '../utils/fileStateCache.js'
+import { gracefulShutdownSync } from '../utils/gracefulShutdown.js'
 import { logError } from '../utils/log.js'
 import { createAssistantMessage } from '../utils/messages.js'
 import { getMainLoopModel } from '../utils/model/model.js'
 import { hasPermissionsToUseTool } from '../utils/permissions/permissions.js'
+import { SandboxManager } from '../utils/sandbox/sandbox-adapter.js'
 import { setCwd } from '../utils/Shell.js'
 import { jsonStringify } from '../utils/slowOperations.js'
 import { getErrorParts } from '../utils/toolErrors.js'
@@ -44,6 +47,39 @@ export async function startMCPServer(
     READ_FILE_STATE_CACHE_SIZE,
   )
   setCwd(cwd)
+
+  // This entrypoint exposes the full tool set, Bash included, so it needs the
+  // same sandbox gate the REPL and the print/SDK path already apply. Without
+  // it, sandbox.enabled + missing deps made isSandboxingEnabled() false, so
+  // shouldUseSandbox() returned false and commands ran unsandboxed —
+  // sandbox.failIfUnavailable was ignored entirely.
+  //
+  // stdio MCP has no channel to prompt the user, so initialize() gets no ask
+  // callback; the runtime denies any host that no config rule allows.
+  const sandboxUnavailableReason = SandboxManager.getSandboxUnavailableReason()
+  if (sandboxUnavailableReason) {
+    if (SandboxManager.isSandboxRequired()) {
+      process.stderr.write(
+        `\nError: sandbox required but unavailable: ${sandboxUnavailableReason}\n` +
+          `  sandbox.failIfUnavailable is set — refusing to start without a working sandbox.\n\n`,
+      )
+      gracefulShutdownSync(1, 'other')
+      return
+    }
+    process.stderr.write(
+      `\n⚠ Sandbox disabled: ${sandboxUnavailableReason}\n` +
+        `  Commands will run WITHOUT sandboxing. Network and filesystem restrictions will NOT be enforced.\n\n`,
+    )
+  } else if (SandboxManager.isSandboxingEnabled()) {
+    try {
+      await SandboxManager.initialize()
+    } catch (err) {
+      process.stderr.write(`\n❌ Sandbox Error: ${errorMessage(err)}\n`)
+      gracefulShutdownSync(1, 'other')
+      return
+    }
+  }
+
   const server = new Server(
     {
       name: 'claude/tengu',
