@@ -1564,6 +1564,32 @@ const CONFIG_DIR_API_KEY_FILE_PATTERN = /api[-_]?key$/
  * - `local/`           — the installed binary and its node_modules.
  * - `sessions/`, `projects/` — session locks and transcripts. An agent that can
  *                        rewrite a transcript can rewrite its own history.
+ *
+ * And three that are worse than merely executed, because the same file that
+ * carries the code also states the permission it runs under:
+ *
+ * - `skills/`, `commands/` — a SKILL.md body is run through
+ *   `executeShellCommandsInPrompt` (skills/loadSkillsDir.ts), which matches
+ *   ```! … ``` and !`…` and calls `BashTool.call()` directly, bypassing
+ *   validateInput. The permission context it is handed has `alwaysAllowRules.
+ *   command` set to that same file's `allowed-tools` frontmatter, so the file
+ *   authorizes its own shell. `commands/` is the same loader
+ *   (`loadSkillsFromCommandsDir`), so it inherits the property exactly. The
+ *   `loadedFrom !== 'mcp'` guard beside the call is the authors saying skill
+ *   markdown from an untrusted source must not execute inline shell; a silent
+ *   write here would make the filesystem such a source while leaving it on the
+ *   trusted side of that guard.
+ * - `agents/`            — an agent definition's *body* is prompt text and does
+ *   not execute, but its frontmatter is permission-granting twice over:
+ *   `permissionMode` accepts `bypassPermissions` (PERMISSION_MODES in
+ *   types/permissions.ts), and `mcpServers` accepts an inline stdio config
+ *   whose `command` is spawned by `connectAgentMcpServers` (AgentTool/
+ *   runAgent.ts). Writing an agent file is therefore writing a process launcher.
+ *
+ * All three were already always-ask at project scope via
+ * `isClaudeConfigFilePath`. Listing them here keeps that decision intact at
+ * user scope instead of silently reversing it — this carve-out runs at step
+ * 1.5, ahead of the safety check that consults that function at step 1.7.
  */
 const CONFIG_DIR_PROTECTED_DIRS = new Set([
   'hooks',
@@ -1573,6 +1599,9 @@ const CONFIG_DIR_PROTECTED_DIRS = new Set([
   'local',
   'sessions',
   'projects',
+  'skills',
+  'commands',
+  'agents',
 ])
 /** `settings.json`, `settings.local.json`, at any scope. */
 const CONFIG_DIR_SETTINGS_FILE_PATTERN = /^settings(\.[^.]+)?\.json$/
