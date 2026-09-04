@@ -293,6 +293,69 @@ export function getProjectDirsUpToHome(
 }
 
 /**
+ * The project directories loadMarkdownFilesForSubdir reads <subdir> from:
+ * the upward walk from cwd, plus the git-worktree fallback below.
+ *
+ * Exported so callers that must act on the same set — the skill-change
+ * watcher, which watches what the loader reads — can share this list rather
+ * than rebuild it. Two independent computations of the same paths is how the
+ * watcher drifted from the loader in the first place.
+ *
+ * @param subdir Subdirectory (eg. "commands", "agents")
+ * @param cwd Current working directory for project directory traversal
+ */
+export function getProjectConfigDirs(
+  subdir: ClaudeConfigDirectory,
+  cwd: string,
+): string[] {
+  const projectDirs = getProjectDirsUpToHome(subdir, cwd)
+
+  // For git worktrees where the worktree does NOT have .axa/<subdir> checked
+  // out (e.g. sparse-checkout), fall back to the main repository's copy.
+  // getProjectDirsUpToHome stops at the worktree root (where the .git file is),
+  // so it never sees the main repo on its own.
+  //
+  // Only add the main repo's copy when the worktree root's .axa/<subdir>
+  // is absent. A standard `git worktree add` checks out the full tree, so the
+  // worktree already has identical .axa/<subdir> content — loading the main
+  // repo's copy too would duplicate every command/agent/skill
+  // (anthropics/claude-code#29599, #28182, #26992).
+  //
+  // The "does the worktree have it?" test needs no stat of its own:
+  // projectDirs already reflects existence, because getProjectDirsUpToHome
+  // stat-checked every level it returned, so membership in that list is the
+  // answer. This says nothing about the main repo's copy, which no walk has
+  // looked at — that one is stat'ed below before it joins the list.
+  const gitRoot = findGitRoot(cwd)
+  const canonicalRoot = findCanonicalGitRoot(cwd)
+  if (gitRoot && canonicalRoot && canonicalRoot !== gitRoot) {
+    const worktreeSubdir = normalizePathForComparison(
+      join(gitRoot, CONFIG_DIR_NAME, subdir),
+    )
+    const worktreeHasSubdir = projectDirs.some(
+      dir => normalizePathForComparison(dir) === worktreeSubdir,
+    )
+    if (!worktreeHasSubdir) {
+      const mainRepoSubdir = join(canonicalRoot, CONFIG_DIR_NAME, subdir)
+      if (!projectDirs.includes(mainRepoSubdir)) {
+        // Stat it for the same reason the walk stats every level it returns:
+        // every path in this list is an existing directory, and callers rely
+        // on that. The main repo need not have the subdir at all — the branch
+        // above only established that the worktree does not.
+        try {
+          statSync(mainRepoSubdir)
+          projectDirs.push(mainRepoSubdir)
+        } catch (e: unknown) {
+          if (!isFsInaccessible(e)) throw e
+        }
+      }
+    }
+  }
+
+  return projectDirs
+}
+
+/**
  * Loads markdown files from managed, user, and project directories
  * @param subdir Subdirectory (eg. "agents" or "commands")
  * @param cwd Current working directory for project directory traversal
@@ -309,37 +372,7 @@ export const loadMarkdownFilesForSubdir = memoize(
     // Claude-branded location this fork does not own. Renaming the directory
     // here would just stop reading what they actually deployed.
     const managedDir = join(getManagedFilePath(), LEGACY_CONFIG_DIR_NAME, subdir)
-    const projectDirs = getProjectDirsUpToHome(subdir, cwd)
-
-    // For git worktrees where the worktree does NOT have .axa/<subdir> checked
-    // out (e.g. sparse-checkout), fall back to the main repository's copy.
-    // getProjectDirsUpToHome stops at the worktree root (where the .git file is),
-    // so it never sees the main repo on its own.
-    //
-    // Only add the main repo's copy when the worktree root's .axa/<subdir>
-    // is absent. A standard `git worktree add` checks out the full tree, so the
-    // worktree already has identical .axa/<subdir> content — loading the main
-    // repo's copy too would duplicate every command/agent/skill
-    // (anthropics/claude-code#29599, #28182, #26992).
-    //
-    // projectDirs already reflects existence (getProjectDirsUpToHome checked
-    // each dir), so we compare against that instead of stat'ing again.
-    const gitRoot = findGitRoot(cwd)
-    const canonicalRoot = findCanonicalGitRoot(cwd)
-    if (gitRoot && canonicalRoot && canonicalRoot !== gitRoot) {
-      const worktreeSubdir = normalizePathForComparison(
-        join(gitRoot, CONFIG_DIR_NAME, subdir),
-      )
-      const worktreeHasSubdir = projectDirs.some(
-        dir => normalizePathForComparison(dir) === worktreeSubdir,
-      )
-      if (!worktreeHasSubdir) {
-        const mainClaudeSubdir = join(canonicalRoot, CONFIG_DIR_NAME, subdir)
-        if (!projectDirs.includes(mainClaudeSubdir)) {
-          projectDirs.push(mainClaudeSubdir)
-        }
-      }
-    }
+    const projectDirs = getProjectConfigDirs(subdir, cwd)
 
     const [managedFiles, userFiles, projectFilesNested] = await Promise.all([
       // Always load managed (policy settings)

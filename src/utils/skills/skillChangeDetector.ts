@@ -1,7 +1,10 @@
 import chokidar, { type FSWatcher } from 'chokidar'
 import { CONFIG_DIR_NAME } from '../../constants/product.js'
 import * as platformPath from 'path'
-import { getAdditionalDirectoriesForClaudeMd } from '../../bootstrap/state.js'
+import {
+  getAdditionalDirectoriesForClaudeMd,
+  getProjectRoot,
+} from '../../bootstrap/state.js'
 import {
   clearCommandMemoizationCaches,
   clearCommandsCache,
@@ -20,6 +23,11 @@ import { registerCleanup } from '../cleanupRegistry.js'
 import { logForDebugging } from '../debug.js'
 import { getFsImplementation } from '../fsOperations.js'
 import { executeConfigChangeHooks, hasBlockingResult } from '../hooks.js'
+import { logError } from '../log.js'
+import {
+  getProjectConfigDirs,
+  getProjectDirsUpToHome,
+} from '../markdownConfigLoader.js'
 import { createSignal } from '../signal.js'
 
 /**
@@ -173,7 +181,7 @@ async function getWatchablePaths(): Promise<string[]> {
   const fs = getFsImplementation()
   const paths: string[] = []
 
-  // User skills directory (~/.claude/skills)
+  // User skills directory (~/<config dir>/skills)
   const userSkillsPath = getSkillsPath('userSettings', 'skills')
   if (userSkillsPath) {
     try {
@@ -184,7 +192,7 @@ async function getWatchablePaths(): Promise<string[]> {
     }
   }
 
-  // User commands directory (~/.claude/commands)
+  // User commands directory (~/<config dir>/commands)
   const userCommandsPath = getSkillsPath('userSettings', 'commands')
   if (userCommandsPath) {
     try {
@@ -195,29 +203,40 @@ async function getWatchablePaths(): Promise<string[]> {
     }
   }
 
-  // Project skills directory (.claude/skills)
-  const projectSkillsPath = getSkillsPath('projectSettings', 'skills')
-  if (projectSkillsPath) {
+  // Project skills and commands directories. There is no single project
+  // directory to watch: getSkillDirCommands walks from the cwd up to the git
+  // root and loads <config dir>/skills from every level that exists, so
+  // watching only the innermost one loads a skill from an intermediate
+  // directory but never hot-reloads it.
+  //
+  // Each branch calls the same function its loader calls, so the watched set
+  // cannot drift from the loaded set. The two calls are deliberately NOT the
+  // same function, and should not be unified: legacy commands-as-skills go
+  // through loadMarkdownFilesForSubdir, which also reads the main repo's
+  // <config dir>/commands when a worktree has no checked-out copy of its own,
+  // whereas getSkillDirCommands has no such fallback for skills. Using the
+  // fallback version on the skills branch would watch a directory no loader
+  // reads — the same defect as watching the wrong directory, with the sign
+  // flipped. Both already filter to directories that exist, so neither needs
+  // a stat.
+  //
+  // Both re-throw filesystem errors they did not expect. initialize() is
+  // called with `void`, so letting one escape would take down watching of
+  // the user directories too, for a fault that only concerns the project
+  // ones. Report it and keep the paths already collected.
+  //
+  // The two walks are guarded separately: they read different directories, so
+  // a fault in one says nothing about the other, and a shared guard would stop
+  // watching project commands because the skills walk failed, or vice versa.
+  const projectRoot = getProjectRoot()
+  for (const collect of [
+    () => getProjectDirsUpToHome('skills', projectRoot),
+    () => getProjectConfigDirs('commands', projectRoot),
+  ]) {
     try {
-      // For project settings, resolve to absolute path
-      const absolutePath = platformPath.resolve(projectSkillsPath)
-      await fs.stat(absolutePath)
-      paths.push(absolutePath)
-    } catch {
-      // Path doesn't exist, skip it
-    }
-  }
-
-  // Project commands directory (.claude/commands)
-  const projectCommandsPath = getSkillsPath('projectSettings', 'commands')
-  if (projectCommandsPath) {
-    try {
-      // For project settings, resolve to absolute path
-      const absolutePath = platformPath.resolve(projectCommandsPath)
-      await fs.stat(absolutePath)
-      paths.push(absolutePath)
-    } catch {
-      // Path doesn't exist, skip it
+      paths.push(...collect())
+    } catch (error) {
+      logError(error)
     }
   }
 

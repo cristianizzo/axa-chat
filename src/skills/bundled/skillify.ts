@@ -1,7 +1,10 @@
+import { join } from 'path'
+import { CONFIG_DIR_NAME } from '../../constants/product.js'
 import { getSessionMemoryContent } from '../../services/SessionMemory/sessionMemoryUtils.js'
 import type { Message } from '../../types/message.js'
 import { getMessagesAfterCompactBoundary } from '../../utils/messages.js'
 import { registerBundledSkill } from '../bundledSkills.js'
+import { getSkillsPath } from '../loadSkillsDir.js'
 
 function extractUserMessages(messages: Message[]): string[] {
   return messages
@@ -65,8 +68,8 @@ You will use the AskUserQuestion to understand what the user wants to automate. 
 - If you think the skill will require arguments, suggest arguments based on what you observed. Make sure you understand what someone would need to provide.
 - If it's not clear, ask if this skill should run inline (in the current conversation) or forked (as a sub-agent with its own context). Forked is better for self-contained tasks that don't need mid-process user input; inline is better when the user wants to steer mid-process.
 - Ask where the skill should be saved. Suggest a default based on context (repo-specific workflows → repo, cross-repo personal workflows → user). Options:
-  - **This repo** (\`.claude/skills/<name>/SKILL.md\`) — for workflows specific to this project
-  - **Personal** (\`~/.claude/skills/<name>/SKILL.md\`) — follows you across all repos
+  - **This repo** (\`${CONFIG_DIR_NAME}/skills/<name>/SKILL.md\`) — for workflows specific to this project
+  - **Personal** (\`{{userSkillPath}}\`) — follows you across all repos
 
 **Round 3: Breaking down each step**
 For each major step, if it's not glaringly obvious, ask:
@@ -190,6 +193,21 @@ export function registerSkillifySkill(): void {
       const prompt = SKILLIFY_PROMPT.replace('{{sessionMemory}}', sessionMemory)
         .replace('{{userMessages}}', userMessages.join('\n\n---\n\n'))
         .replace('{{userDescriptionBlock}}', userDescriptionBlock)
+        // The user skills directory is not always `~/<config dir>/skills`: the
+        // config home is overridable by environment variable. Ask the loader
+        // for the directory it reads rather than reconstructing it, so the
+        // prompt cannot name a location nothing is loaded from. Join the
+        // remaining segments too, so the separator stays the platform's own
+        // rather than mixing in the literal slashes of a hardcoded suffix.
+        //
+        // The repo option above keeps its literal slashes on purpose: it is a
+        // repo-relative path shown as documentation, not a path resolved on
+        // this machine, so there is no platform separator for it to be wrong
+        // about. Only this one names a real absolute location.
+        .replace(
+          '{{userSkillPath}}',
+          join(getSkillsPath('userSettings', 'skills'), '<name>', 'SKILL.md'),
+        )
 
       return [{ type: 'text', text: prompt }]
     },

@@ -3057,10 +3057,46 @@ export function mergePluginSources(sources: {
   // Session first, then non-overridden marketplace, then builtin.
   // Downstream first-match consumers see session plugins before
   // installed ones for any that slipped past the name filter.
-  return {
-    plugins: [...sessionPlugins, ...marketplacePlugins, ...sources.builtin],
-    errors,
-  }
+  const ordered = [
+    ...sessionPlugins,
+    ...marketplacePlugins,
+    ...sources.builtin,
+  ]
+
+  // Two enabled plugins can still share a bare name here — two marketplaces
+  // publishing the same plugin name, or a marketplace shadowing a builtin.
+  // Contributions are namespaced on the bare name (commands and agents by
+  // plugin name, MCP servers as `plugin:<name>:<server>`), so a collision
+  // does not fail loudly: each consumer resolves it independently and the
+  // user can end up with one plugin's command and the other's agent. Keep
+  // the first enabled plugin for a name, drop the rest, and surface which
+  // one won so the collision is diagnosable from the /plugin screen.
+  //
+  // Disabled plugins are never dropped: they contribute nothing to collide
+  // with, and the plugin management UI lists them so the user can enable
+  // them.
+  const winnerByName = new Map<string, LoadedPlugin>()
+  const plugins = ordered.filter(p => {
+    if (!p.enabled) return true
+    const winner = winnerByName.get(p.name)
+    if (winner) {
+      logForDebugging(
+        `Plugin name collision on "${p.name}": ${winner.source} is used, ${p.source} is ignored`,
+        { level: 'warn' },
+      )
+      errors.push({
+        type: 'generic-error',
+        source: p.source,
+        plugin: p.name,
+        error: `Plugin name collision: "${p.name}" is provided by both ${winner.source} and ${p.source}. Using ${winner.source}; ${p.source} is ignored. Disable one of them to choose which is used.`,
+      })
+      return false
+    }
+    winnerByName.set(p.name, p)
+    return true
+  })
+
+  return { plugins, errors }
 }
 
 /**

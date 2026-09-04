@@ -1,5 +1,8 @@
 import { realpath } from 'fs/promises'
-import { CONFIG_DIR_NAME } from '../constants/product.js'
+import {
+  CONFIG_DIR_NAME,
+  LEGACY_CONFIG_DIR_NAME,
+} from '../constants/product.js'
 import ignore from 'ignore'
 import memoize from 'lodash-es/memoize.js'
 import {
@@ -74,7 +77,20 @@ export type LoadedFrom =
   | 'mcp'
 
 /**
- * Returns a claude config directory path for a given source.
+ * Returns the config directory path a given source loads skills or commands
+ * from.
+ *
+ * Must stay in step with the config directory `getSkillDirCommands` actually
+ * reads from, because the /skills menu shows these paths to the user: a
+ * directory named here that the loader does not read is a location the user
+ * is told about and that holds nothing.
+ *
+ * `projectSettings` returns the relative `<config dir>/<dir>` form on
+ * purpose. There is no single project directory — the loader walks from the
+ * cwd up to the git root and reads every level that exists — so this is the
+ * shape shared by all of them, suitable for display but not a complete list.
+ * Callers that need the actual set (the skill-change watcher) call
+ * `getProjectDirsUpToHome`, the same walk the loader uses.
  */
 export function getSkillsPath(
   source: SettingSource | 'plugin',
@@ -82,11 +98,19 @@ export function getSkillsPath(
 ): string {
   switch (source) {
     case 'policySettings':
-      return join(getManagedFilePath(), '.claude', dir)
+      // Legacy name, and it must stay legacy: the managed directory is
+      // deployed by an administrator into a system-wide, Claude-branded
+      // location this fork does not own, so renaming it here would stop us
+      // reading what was actually installed. markdownConfigLoader makes the
+      // same call for the same reason. Spelled through the constant rather
+      // than a literal so it does not read as the `.claude` path this repo
+      // treats as a defect — the next reader would "fix" it and break
+      // managed skills.
+      return join(getManagedFilePath(), LEGACY_CONFIG_DIR_NAME, dir)
     case 'userSettings':
       return join(getClaudeConfigHomeDir(), dir)
     case 'projectSettings':
-      return `.claude/${dir}`
+      return join(CONFIG_DIR_NAME, dir)
     case 'plugin':
       return 'plugin'
     default:
@@ -639,7 +663,11 @@ async function loadSkillsFromCommandsDir(
 export const getSkillDirCommands = memoize(
   async (cwd: string): Promise<Command[]> => {
     const userSkillsDir = join(getClaudeConfigHomeDir(), 'skills')
-    const managedSkillsDir = join(getManagedFilePath(), '.claude', 'skills')
+    const managedSkillsDir = join(
+      getManagedFilePath(),
+      LEGACY_CONFIG_DIR_NAME,
+      'skills',
+    )
     const projectSkillsDirs = getProjectDirsUpToHome('skills', cwd)
 
     logForDebugging(
