@@ -587,7 +587,8 @@ export const PowerShellTool = buildTool({
       // Large output: file on disk has more than getMaxOutputLength() bytes.
       // stdout already contains the first chunk. Copy the output file to the
       // tool-results dir so the model can read it via FileRead. If > 64 MB,
-      // truncate after copying. Matches BashTool.tsx:983-1005.
+      // truncate first, so the copy inherits the cap. Mirrors the persistence
+      // block in BashTool's call().
       //
       // Placed AFTER the preSpawnError/ShellError throws (matches BashTool's
       // ordering, where persistence is post-try/finally): a failing command
@@ -604,6 +605,9 @@ export const PowerShellTool = buildTool({
           const dest = getToolResultPath(result.outputTaskId, false);
           if (fileStat.size > MAX_PERSISTED_SIZE) {
             await fsTruncate(result.outputFilePath, MAX_PERSISTED_SIZE);
+            // Report what the persisted file actually holds — see the same
+            // clamp in BashTool's persistence block.
+            persistedOutputSize = MAX_PERSISTED_SIZE;
           }
           try {
             await link(result.outputFilePath, dest);

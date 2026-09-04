@@ -728,7 +728,7 @@ export const BashTool = buildTool({
     // Large output: the file on disk has more than getMaxOutputLength() bytes.
     // stdout already contains the first chunk (from getStdout()). Copy the
     // output file to the tool-results dir so the model can read it via
-    // FileRead. If > 64 MB, truncate after copying.
+    // FileRead. If > 64 MB, truncate first, so the copy inherits the cap.
     const MAX_PERSISTED_SIZE = 64 * 1024 * 1024;
     let persistedOutputPath: string | undefined;
     let persistedOutputSize: number | undefined;
@@ -740,6 +740,12 @@ export const BashTool = buildTool({
         const dest = getToolResultPath(result.outputTaskId, false);
         if (fileStat.size > MAX_PERSISTED_SIZE) {
           await fsTruncate(result.outputFilePath, MAX_PERSISTED_SIZE);
+          // Report what the persisted file actually holds. persistedOutputSize
+          // becomes originalSize in buildLargeToolResultMessage, which tells
+          // the model "Output too large (N). Full output saved to: <path>" —
+          // quoting the pre-truncation size there points the model at bytes
+          // that were just discarded.
+          persistedOutputSize = MAX_PERSISTED_SIZE;
         }
         try {
           await link(result.outputFilePath, dest);

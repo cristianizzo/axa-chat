@@ -557,7 +557,10 @@ function isSandboxingEnabled(): boolean {
  * explicit security setting was being ignored. This is a security footgun —
  * users configure allowedDomains expecting enforcement, get none.
  *
- * Call this once at startup (REPL/print) and surface the reason if present.
+ * Call this once at startup and surface the reason if present. Every
+ * entrypoint that can execute tools does: the REPL, runHeadless() for
+ * -p/SDK/stream-json, and the stdio MCP server. Each pairs it with
+ * isSandboxRequired() to hard-exit when sandbox.failIfUnavailable is set.
  * Does not cover the case where the user never enabled sandbox (no noise).
  */
 function getSandboxUnavailableReason(): string | undefined {
@@ -784,8 +787,31 @@ async function initialize(
       // Clear the promise on error so initialization can be retried
       initializationPromise = undefined
 
-      // Log error but don't throw - let sandboxing fail gracefully
-      logForDebugging(`Failed to initialize sandbox: ${errorMessage(error)}`)
+      // Anything reaching here is a fault, not a platform limitation: the
+      // unsupported-platform, missing-dependency and enabledPlatforms cases
+      // all return at the isSandboxingEnabled() guard above, before this
+      // promise is ever created. Hence 'warn' rather than 'debug'.
+      //
+      // Reporting stops at the log on purpose. This adapter is shared by the
+      // REPL, the print/SDK path and the MCP server, so it cannot know how to
+      // present anything: a write to stderr here lands inside a live Ink
+      // frame, since the REPL calls initialize() from its component body.
+      // Presentation belongs to each entrypoint, as it already does for
+      // getSandboxUnavailableReason().
+      logForDebugging(`Failed to initialize sandbox: ${errorMessage(error)}`, {
+        level: 'warn',
+      })
+
+      // Rethrow only when the user asked for a mandatory sandbox. Every
+      // caller — REPL, the print/SDK path and the MCP server — treats a
+      // rejection as fatal and exits 1, which is what failIfUnavailable
+      // asks for. Without that setting, exiting would be a regression, and
+      // continuing does not fail open: wrapWithSandbox() finds
+      // initializationPromise cleared and throws for every command that
+      // needs the sandbox.
+      if (isSandboxRequired()) {
+        throw error
+      }
     }
   })()
 
