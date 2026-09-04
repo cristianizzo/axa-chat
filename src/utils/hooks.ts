@@ -130,7 +130,10 @@ import {
 import { logError } from './log.js'
 import { createCombinedAbortSignal } from './combinedAbortSignal.js'
 import type { PermissionResult } from './permissions/PermissionResult.js'
-import { registerPendingAsyncHook } from './hooks/AsyncHookRegistry.js'
+import {
+  CONFIG_ASYNC_HOOK_TIMEOUT_MS,
+  registerPendingAsyncHook,
+} from './hooks/AsyncHookRegistry.js'
 import { enqueuePendingNotification } from './messageQueueManager.js'
 import {
   extractTextContent,
@@ -279,7 +282,7 @@ function executeInBackground({
  * Checks if a hook should be skipped due to lack of workspace trust.
  *
  * ALL hooks require workspace trust because they execute arbitrary commands from
- * .claude/settings.json. This is a defense-in-depth security measure.
+ * .axa/settings.json. This is a defense-in-depth security measure.
  *
  * Context: Hooks are captured via captureHooksConfigSnapshot() before the trust
  * dialog is shown. While most hooks won't execute until after trust is established
@@ -1022,7 +1025,10 @@ async function execCommandHook(
       processId,
       hookId,
       shellCommand,
-      asyncResponse: { async: true, asyncTimeout: hookTimeoutMs },
+      // Not hookTimeoutMs: that is the synchronous execution limit from
+      // `timeout` in settings, and this hook is not being executed
+      // synchronously. See CONFIG_ASYNC_HOOK_TIMEOUT_MS.
+      asyncResponse: { async: true, asyncTimeout: CONFIG_ASYNC_HOOK_TIMEOUT_MS },
       hookEvent,
       hookName,
       command: hook.command,
@@ -1395,6 +1401,9 @@ async function execCommandHook(
   }
 }
 
+/** Matcher patterns already reported as invalid, to keep the hot path quiet. */
+const reportedInvalidHookMatchers = new Set<string>()
+
 /**
  * Check if a match query matches a hook matcher pattern
  * @param matchQuery The query to match (e.g., 'Write', 'Edit', 'Bash')
@@ -1434,9 +1443,21 @@ function matchesPattern(matchQuery: string, matcher: string): boolean {
       }
     }
     return false
-  } catch {
-    // If the regex is invalid, log error and return false
-    logForDebugging(`Invalid regex pattern in hook matcher: ${matcher}`)
+  } catch (error) {
+    // An invalid matcher means the hook never fires. For a PreToolUse or
+    // PermissionRequest hook that is a security check the user believes is
+    // active, so this must not be a debug-level line nobody reads. Reported
+    // once per pattern — matching runs on the path of every tool call.
+    if (!reportedInvalidHookMatchers.has(matcher)) {
+      reportedInvalidHookMatchers.add(matcher)
+      logError(
+        Error(
+          `Invalid regex in hook matcher "${matcher}"; hooks using this ` +
+            `matcher will never run until it is fixed`,
+          { cause: error },
+        ),
+      )
+    }
     return false
   }
 }
@@ -1464,10 +1485,52 @@ async function prepareIfConditionMatcher(
   const toolName = normalizeLegacyToolName(hookInput.tool_name)
   const tool = tools && findToolByName(tools, hookInput.tool_name)
   const input = tool?.inputSchema.safeParse(hookInput.tool_input)
-  const patternMatcher =
-    input?.success && tool?.preparePermissionMatcher
-      ? await tool.preparePermissionMatcher(input.data)
-      : undefined
+  let patternMatcher: ((pattern: string) => boolean) | undefined
+  if (input?.success && tool?.preparePermissionMatcher) {
+    try {
+      patternMatcher = await tool.preparePermissionMatcher(input.data)
+    } catch (error) {
+      // preparePermissionMatcher is tool-supplied and does real work — BashTool
+      // awaits a tree-sitter parse in there — so it can reject. Left unhandled
+      // the rejection escapes getMatchingHooks entirely and drops every hook
+      // for this event, including hooks that have no `if` condition and never
+      // needed this matcher. Contain it to the `if` evaluation it belongs to.
+      //
+      // Matching everything is the fail-safe direction for a hook that blocks:
+      // `if` filtering is "no match -> skip hook", so a matcher that can't be
+      // built must run the hook rather than silence it.
+      //
+      // It is not fail-safe for every hook, and the exception is worth naming.
+      // A PreToolUse hook returning permissionBehavior 'allow' auto-approves the
+      // call, so running it here can approve a call its `if` condition was
+      // written to exclude. That direction is still chosen, because BashTool's
+      // own preparePermissionMatcher returns `() => true` whenever the command
+      // is not a simple parse: the same exposure already exists without this
+      // branch, and choosing the opposite here would make the error path
+      // stricter than the ordinary one.
+      //
+      // Picking the direction per hook is not available here, and the reason is
+      // structural rather than a missing parameter: permissionBehavior is not
+      // hook configuration. No hook schema in schemas/hooks.ts declares it — it
+      // is set on HookResult by parsing the hook's stdout, so a hook's behaviour
+      // is only known once it has run, and whether to run it is exactly what
+      // this filter decides. Do not try to thread the value in.
+      //
+      // Note this deliberately diverges from `patternMatcher` being absent
+      // below, which returns false and skips the hook. That is "this tool has
+      // no matcher to offer", a stable property of the tool. This is "the
+      // tool's matcher failed once", where dropping every blocking hook for the
+      // event is the fail-open being fixed here.
+      logError(
+        Error(
+          `Could not prepare the hook "if" matcher for ${toolName}; ` +
+            `"if" conditions on this tool call will match rather than be skipped`,
+          { cause: error },
+        ),
+      )
+      patternMatcher = () => true
+    }
+  }
 
   return ifCondition => {
     const parsed = permissionRuleValueFromString(ifCondition)
@@ -1652,6 +1715,13 @@ function hasHookForEvent(
   if (appState?.sessionHooks.get(sessionId)?.hooks[hookEvent]) return true
   return false
 }
+
+/**
+ * Hook events whose matching failure has already been reported. getMatchingHooks
+ * runs on the path of every tool call, so a repeating fault is logged once
+ * rather than on every call.
+ */
+const reportedHookMatchingFailures = new Set<HookEvent>()
 
 /**
  * Get hook commands that match the given query
@@ -1929,7 +1999,39 @@ export async function getMatchingHooks(
       { level: 'verbose' },
     )
     return filteredHooks
-  } catch {
+  } catch (error) {
+    // Never fail silently: callers cannot tell [] apart from "no hooks
+    // configured", so without this a broken PreToolUse hook looks exactly like
+    // an unconfigured one. Reported once per event to stay off the hot path —
+    // this runs on the path of every tool call.
+    //
+    // User configuration errors do not reach here: matchesPattern catches its
+    // own invalid-regex case, and prepareIfConditionMatcher catches its own
+    // matcher-construction failure. Anything caught here is an internal fault.
+    if (!reportedHookMatchingFailures.has(hookEvent)) {
+      reportedHookMatchingFailures.add(hookEvent)
+      logError(
+        Error(`Failed to match ${hookEvent} hooks`, { cause: error }),
+      )
+    }
+    // PreToolUse is the one event where returning [] is a decision rather than
+    // an omission: a hook that was meant to block this tool call is skipped and
+    // the call proceeds, which is the behaviour a user installing a PreToolUse
+    // hook is specifically trying to prevent. Rethrow so the call is denied
+    // instead. The throw travels executeHooks -> executePreToolHooks (this
+    // file) -> runPreToolUseHooks in services/tools/toolHooks.ts, which catches
+    // it and stops that one tool call: the session stays usable and the next
+    // call retries, so this is not a brick.
+    //
+    // Deliberately not extended to PermissionRequest, whose three call sites
+    // are already covered: the headless path catches and auto-denies, the
+    // coordinator path catches and falls through to the user dialog, and the
+    // interactive path runs inside an uncaught `void (async () => {})()` where
+    // a throw would only add an unhandled rejection while the dialog resolves
+    // the permission anyway.
+    if (hookEvent === 'PreToolUse') {
+      throw error
+    }
     return []
   }
 }
@@ -3658,7 +3760,7 @@ export async function executeStopFailureHooks(
   timeoutMs: number = TOOL_HOOK_EXECUTION_TIMEOUT_MS,
 ): Promise<void> {
   const appState = toolUseContext?.getAppState()
-  // executeHooksOutsideREPL hardcodes main sessionId (:2738). Agent frontmatter
+  // executeHooksOutsideREPL hardcodes main sessionId. Agent frontmatter
   // hooks (registerFrontmatterHooks) key by agentId; gating with agentId here
   // would pass the gate but fail execution. Align gate with execution.
   const sessionId = getSessionId()
@@ -3667,9 +3769,10 @@ export async function executeStopFailureHooks(
   const lastAssistantText =
     extractTextContent(lastMessage.message.content, '\n').trim() || undefined
 
-  // Some createAssistantAPIErrorMessage call sites omit `error` (e.g.
-  // image-size at errors.ts:431). Default to 'unknown' so matcher filtering
-  // at getMatchingHooks:1525 always applies.
+  // `error` is optional on createAssistantAPIErrorMessage and some call sites
+  // omit it — the image-too-large path in services/api/errors.ts is one.
+  // Default to 'unknown' so matcher filtering in getMatchingHooks always
+  // applies.
   const error = lastMessage.error ?? 'unknown'
   const hookInput: StopFailureHookInput = {
     ...createBaseHookInput(undefined, undefined, toolUseContext),
@@ -4381,15 +4484,24 @@ export function hasInstructionsLoadedHook(): boolean {
 }
 
 /**
- * Execute InstructionsLoaded hooks when an instruction file (CLAUDE.md or
- * .claude/rules/*.md) is loaded into context. Fire-and-forget — this hook is
- * for observability/audit only and does not support blocking.
+ * Execute InstructionsLoaded hooks when an instruction file — a memory file
+ * (AXA.md) or a file in a rules directory — is loaded into context.
+ * Fire-and-forget: this hook is for observability/audit only and does not
+ * support blocking.
+ *
+ * The rules directory is deliberately not spelled out here, because the scopes
+ * this hook fires for do not share one. Project rules live under the config dir
+ * (.axa/rules, from CONFIG_DIR_NAME in claudemd.ts), while Managed rules stay
+ * under .claude/rules — see getManagedClaudeRulesDir in config.ts, where that
+ * path is an administrator-deployed system location rather than this fork's
+ * config dir. Naming only one of them here would exclude files the hook really
+ * does fire for.
  *
  * Dispatch sites:
  * - Eager load at session start (getMemoryFiles in claudemd.ts)
  * - Eager reload after compaction (getMemoryFiles cache cleared by
  *   runPostCompactCleanup; next call reports load_reason: 'compact')
- * - Lazy load when Claude touches a file that triggers nested CLAUDE.md or
+ * - Lazy load when Claude touches a file that triggers nested AXA.md or
  *   conditional rules with paths: frontmatter (memoryFilesToAttachments in
  *   attachments.ts)
  */

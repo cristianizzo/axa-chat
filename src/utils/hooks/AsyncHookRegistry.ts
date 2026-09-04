@@ -21,8 +21,50 @@ export type PendingAsyncHook = {
   command: string
   responseAttachmentSent: boolean
   shellCommand?: ShellCommand
-  stopProgressInterval: () => void
+  /**
+   * Set when the hook was killed for exceeding its timeout. Checked before the
+   * plain 'killed' handling so the timeout is reported rather than discarded.
+   */
+  timedOut: boolean
+  /** Stops both the progress interval and the timeout timer for this hook. */
+  stopTimers: () => void
 }
+
+/**
+ * Deadline applied to a hook that answered `{"async": true}` without naming an
+ * asyncTimeout. Carried over from the previous `asyncTimeout || 15000`; it is
+ * not documented anywhere outside this file.
+ */
+const DEFAULT_ASYNC_HOOK_TIMEOUT_MS = 15_000
+
+/**
+ * Deadline for a hook backgrounded because settings marked it `async`, rather
+ * than because it answered `{"async": true}` on stdout.
+ *
+ * Such a hook never named a deadline: `timeout` in settings bounds *synchronous*
+ * execution, and reusing it here would kill a `{"timeout": 30, "async": true}`
+ * hook after 30s — the combination someone writes precisely because the hook is
+ * slow, and which ran unbounded before this deadline existed. So this is a
+ * backstop against outliving the session, not a latency budget, and it is set
+ * far longer than the default a self-declared async hook gets.
+ *
+ * It does not cover every backgrounded hook. `asyncRewake` returns from
+ * executeInBackground before `background()` and before the hook is registered
+ * here, so it never receives this deadline. Because `background()` is skipped,
+ * the timer wrapSpawn armed from the synchronous `timeout` is never cleared and
+ * stays in force instead — such a hook is bounded, but by the synchronous limit
+ * this constant exists to stop being used for asynchronous work. Closing that
+ * would mean registering a hook whose stdout is captured in memory, which
+ * `background()` spills to disk; it is a separate change.
+ */
+export const CONFIG_ASYNC_HOOK_TIMEOUT_MS = 10 * 60 * 1000
+
+/**
+ * Largest delay setTimeout accepts. Anything above it — Infinity included — is
+ * silently turned into 1ms, so requests beyond this are clamped down to it
+ * rather than allowed through.
+ */
+const MAX_ASYNC_HOOK_TIMEOUT_MS = 2 ** 31 - 1
 
 // Global registry state
 const pendingHooks = new Map<string, PendingAsyncHook>()
@@ -48,7 +90,20 @@ export function registerPendingAsyncHook({
   toolName?: string
   pluginId?: string
 }): void {
-  const timeout = asyncResponse.asyncTimeout || 15000 // Default 15s
+  // asyncTimeout is read off the hook's own stdout, so it can be any JSON
+  // value: isAsyncHookJSONOutput only checks `json.async === true`, and no zod
+  // schema is applied to the parsed line. Narrow it to a usable timer delay
+  // rather than trusting it, keeping the existing default.
+  //
+  // The upper clamp is not cosmetic. setTimeout silently rewrites a delay above
+  // 2**31-1 — or Infinity, which `JSON.parse('{"asyncTimeout":1e999}')` yields —
+  // to 1ms, so an unclamped hook asking for the longest possible deadline would
+  // be killed almost immediately: the exact inverse of what it asked for.
+  const requestedTimeout = asyncResponse.asyncTimeout
+  const timeout =
+    typeof requestedTimeout === 'number' && requestedTimeout > 0
+      ? Math.min(requestedTimeout, MAX_ASYNC_HOOK_TIMEOUT_MS)
+      : DEFAULT_ASYNC_HOOK_TIMEOUT_MS
   logForDebugging(
     `Hooks: Registering async hook ${processId} (${hookName}) with timeout ${timeout}ms`,
   )
@@ -66,7 +121,51 @@ export function registerPendingAsyncHook({
       return { stdout, stderr, output: stdout + stderr }
     },
   })
-  pendingHooks.set(processId, {
+  // Backgrounding a ShellCommand clears the timeout timer wrapSpawn installed
+  // (ShellCommand.background -> #cleanupListeners), and the compensating size
+  // watchdog only runs in file mode — hooks run in pipe mode. So nothing else
+  // bounds an async hook: without this timer a hook that never exits stays
+  // 'backgrounded' forever, which checkForAsyncHookResponses skips on every
+  // pass, and it survives until shutdown.
+  const timeoutTimer = setTimeout(() => {
+    // Identity, not presence. processId is `async_hook_${child.pid}` (see the
+    // two call sites in hooks.ts), so a later hook can register under this same
+    // key and replace the entry below.
+    //
+    // How that happens is worth stating, because the obvious reading is wrong:
+    // two live children never share a pid, so this is not two concurrent hooks
+    // colliding. The earlier process must already have exited, freeing its pid
+    // for reuse, while its entry outlives it — reaping is not immediate.
+    // checkForAsyncHookResponses runs when attachments are assembled rather
+    // than on a timer, so a finished entry sits in the map until the next turn,
+    // and an idle session holds it for as long as it stays idle.
+    //
+    // Nothing clears the timers of an entry dropped from the map, so this timer
+    // stays armed and would otherwise expire a hook it was never armed for:
+    // killing it and reporting a deadline it never reached, quoting the *new*
+    // entry's timeout. An orphaned timer must produce no outcome rather than
+    // the wrong one, because timedOut leaves this module through exactly one
+    // read — checkForAsyncHookResponses, where it becomes the systemMessage the
+    // model is shown. (Its only other read is the early return in
+    // expireAsyncHook itself, guarding re-entry into the write below.)
+    //
+    // This closes the false report only. The replacement still drops the
+    // earlier hook's result, and checkForAsyncHookResponses deletes by the same
+    // key after an await, so it can delete a replacement it never read. Both
+    // are the same pre-existing cause — keying the map on an OS-owned
+    // identifier — and are tracked separately rather than widened into here.
+    if (pendingHooks.get(processId) === entry) {
+      expireAsyncHook(processId)
+    }
+  }, timeout)
+  timeoutTimer.unref()
+
+  // Declared after the timer on purpose: stopTimers closes over timeoutTimer
+  // while the timer closes over entry, so one of the two must be forward-
+  // referenced. The timer only reads entry inside its callback, which runs
+  // after this assignment, so the temporal dead zone is satisfied. Swapping the
+  // order to remove the forward reference breaks stopTimers instead.
+  const entry: PendingAsyncHook = {
     processId,
     hookId,
     hookName,
@@ -78,8 +177,43 @@ export function registerPendingAsyncHook({
     timeout,
     responseAttachmentSent: false,
     shellCommand,
-    stopProgressInterval,
-  })
+    timedOut: false,
+    stopTimers: () => {
+      stopProgressInterval()
+      clearTimeout(timeoutTimer)
+    },
+  }
+  pendingHooks.set(processId, entry)
+}
+
+/**
+ * Kills an async hook that outlived its timeout, and flags it so the next
+ * checkForAsyncHookResponses pass reports it instead of dropping it.
+ *
+ * The report is deliberately left to that pass rather than emitted here: this
+ * module is imported by attachments.ts, so reaching the notification helpers
+ * directly would close an import cycle through messages.ts.
+ *
+ * Hooks whose process already exited are left alone — they have real output to
+ * deliver, and the normal path owns them.
+ */
+function expireAsyncHook(processId: string): void {
+  const hook = pendingHooks.get(processId)
+  if (!hook || hook.responseAttachmentSent || hook.timedOut) {
+    return
+  }
+  if (hook.shellCommand?.status === 'completed') {
+    return
+  }
+  logForDebugging(
+    `Hooks: Async hook ${processId} (${hook.hookName}) exceeded its ${hook.timeout}ms asyncTimeout, killing it`,
+    { level: 'warn' },
+  )
+  hook.timedOut = true
+  hook.stopTimers()
+  if (hook.shellCommand && hook.shellCommand.status !== 'killed') {
+    hook.shellCommand.kill()
+  }
 }
 
 export function getPendingAsyncHooks(): PendingAsyncHook[] {
@@ -93,7 +227,7 @@ async function finalizeHook(
   exitCode: number,
   outcome: 'success' | 'error' | 'cancelled',
 ): Promise<void> {
-  hook.stopProgressInterval()
+  hook.stopTimers()
   const taskOutput = hook.shellCommand?.taskOutput
   const stdout = taskOutput ? await taskOutput.getStdout() : ''
   const stderr = taskOutput?.getStderr() ?? ''
@@ -153,17 +287,49 @@ export async function checkForAsyncHookResponses(): Promise<
         logForDebugging(
           `Hooks: Hook ${hook.processId} has no shell command, removing from registry`,
         )
-        hook.stopProgressInterval()
+        hook.stopTimers()
         return { type: 'remove' as const, processId: hook.processId }
       }
 
       logForDebugging(`Hooks: Hook shell status ${hook.shellCommand.status}`)
 
+      // Must precede the 'killed' branch: expireAsyncHook kills the process, so
+      // a timed-out hook would otherwise be silently discarded there.
+      if (hook.timedOut) {
+        const exitCode = (await hook.shellCommand.result).code
+        hook.responseAttachmentSent = true
+        await finalizeHook(hook, exitCode, 'error')
+        return {
+          type: 'response' as const,
+          processId: hook.processId,
+          isSessionStart: hook.hookEvent === 'SessionStart',
+          payload: {
+            processId: hook.processId,
+            response: {
+              // No advice to raise "asyncTimeout" here: a hook backgrounded by
+              // the `async` setting never emits an async response to raise it
+              // in, so that instruction would be impossible to follow for one
+              // of the two ways a hook reaches this registry.
+              systemMessage:
+                `Async hook "${hook.hookName}" (${hook.hookEvent}) exceeded its ` +
+                `${hook.timeout}ms asyncTimeout and was killed.`,
+            },
+            hookName: hook.hookName,
+            hookEvent: hook.hookEvent,
+            toolName: hook.toolName,
+            pluginId: hook.pluginId,
+            stdout,
+            stderr,
+            exitCode,
+          },
+        }
+      }
+
       if (hook.shellCommand.status === 'killed') {
         logForDebugging(
           `Hooks: Hook ${hook.processId} is ${hook.shellCommand.status}, removing from registry`,
         )
-        hook.stopProgressInterval()
+        hook.stopTimers()
         hook.shellCommand.cleanup()
         return { type: 'remove' as const, processId: hook.processId }
       }
@@ -176,7 +342,7 @@ export async function checkForAsyncHookResponses(): Promise<
         logForDebugging(
           `Hooks: Skipping hook ${hook.processId} - already delivered/sent or no stdout`,
         )
-        hook.stopProgressInterval()
+        hook.stopTimers()
         return { type: 'remove' as const, processId: hook.processId }
       }
 
@@ -272,7 +438,7 @@ export function removeDeliveredAsyncHooks(processIds: string[]): void {
     const hook = pendingHooks.get(processId)
     if (hook && hook.responseAttachmentSent) {
       logForDebugging(`Hooks: Removing delivered hook ${processId}`)
-      hook.stopProgressInterval()
+      hook.stopTimers()
       pendingHooks.delete(processId)
     }
   }
@@ -303,7 +469,7 @@ export async function finalizePendingAsyncHooks(): Promise<void> {
 // Test utility function to clear all hooks
 export function clearAllAsyncHooks(): void {
   for (const hook of pendingHooks.values()) {
-    hook.stopProgressInterval()
+    hook.stopTimers()
   }
   pendingHooks.clear()
 }
