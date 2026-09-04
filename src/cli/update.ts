@@ -1,5 +1,7 @@
 import chalk from 'chalk'
+import { BINARY_NAME } from 'src/constants/product.js'
 import { logEvent } from 'src/services/analytics/index.js'
+import { getLocalInstallDir } from 'src/utils/localInstaller.js'
 import {
   getLatestVersion,
   type InstallStatus,
@@ -252,7 +254,7 @@ export async function update() {
     } catch (error) {
       process.stderr.write('Error: Failed to install native update\n')
       process.stderr.write(String(error) + '\n')
-      process.stderr.write('Try running "claude doctor" for diagnostics\n')
+      process.stderr.write(`Try running "${BINARY_NAME} doctor" for diagnostics\n`)
       await gracefulShutdown(1)
     }
   }
@@ -386,12 +388,12 @@ export async function update() {
       if (useLocalUpdate) {
         process.stderr.write('Try manually updating with:\n')
         process.stderr.write(
-          `  cd ~/.claude/local && npm update ${MACRO.PACKAGE_URL}\n`,
+          `  cd ${getLocalInstallDir()} && npm update ${MACRO.PACKAGE_URL}\n`,
         )
       } else {
         process.stderr.write('Try running with sudo or fix npm permissions\n')
         process.stderr.write(
-          'Or consider using native installation with: claude install\n',
+          `Or consider using native installation with: ${BINARY_NAME} install\n`,
         )
       }
       await gracefulShutdown(1)
@@ -401,11 +403,11 @@ export async function update() {
       if (useLocalUpdate) {
         process.stderr.write('Try manually updating with:\n')
         process.stderr.write(
-          `  cd ~/.claude/local && npm update ${MACRO.PACKAGE_URL}\n`,
+          `  cd ${getLocalInstallDir()} && npm update ${MACRO.PACKAGE_URL}\n`,
         )
       } else {
         process.stderr.write(
-          'Or consider using native installation with: claude install\n',
+          `Or consider using native installation with: ${BINARY_NAME} install\n`,
         )
       }
       await gracefulShutdown(1)
