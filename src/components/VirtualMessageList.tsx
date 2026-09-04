@@ -314,14 +314,17 @@ export function VirtualMessageList({
   const prevItemKeyRef = useRef(itemKey);
   // Appending is only valid while the already-keyed prefix is untouched, and
   // length alone doesn't prove that. Messages.tsx builds this array through
-  // collapse passes that rewrite the MIDDLE: toggling verbose (ctrl+O) expands
-  // a collapsed background-bash notification back into its N originals, which
-  // grows the array while leaving index 0 the same object. Re-deriving the key
-  // of whatever now sits at the last previously-keyed index costs one itemKey
-  // call and catches those shifts — keys are uuid-based and unique within the
-  // array, so a match means that element did not move. On mismatch we rebuild
-  // into a NEW array, which is also what makes useVirtualScroll drop the
-  // heightCache entries for the keys that went away.
+  // stages that rewrite the MIDDLE, two of them gated on verbose: applyGrouping
+  // (a grouped_tool_use collapses N same-tool uses into one entry keyed
+  // `grouped-<first uuid>`) and collapseBackgroundBashNotifications. Toggling
+  // verbose on re-expands both, which GROWS the array while leaving index 0 the
+  // same object — so a length/first-element guard keeps the whole stale prefix
+  // and hands React duplicate keys. Re-deriving the key of whatever now sits at
+  // the last previously-keyed index costs one itemKey call and catches those
+  // shifts: keys are uuid-based and unique within the array, so a match means
+  // that element did not move. On mismatch we rebuild into a NEW array, which
+  // is also what makes useVirtualScroll drop heightCache entries for keys that
+  // went away.
   const prevLen = keysRef.current.length;
   const prefixIntact = prevItemKeyRef.current === itemKey && messages.length >= prevLen && (prevLen === 0 || itemKey(messages[prevLen - 1]!) === keysRef.current[prevLen - 1]);
   if (prefixIntact) {
