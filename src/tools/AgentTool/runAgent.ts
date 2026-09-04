@@ -188,7 +188,7 @@ async function connectAgentMcpServers(
   newlyCreatedClients: MCPServerConnection[],
   agentTools: Tool[],
 ): Promise<void> {
-  for (const spec of agentDefinition.mcpServers ?? []) {
+  for (const spec of agentDefinition.mcpServers) {
     let config: ScopedMcpServerConfig | null = null
     let name: string
     let isNewlyCreated = false
