@@ -213,8 +213,15 @@ export async function update() {
   // pretending. The native updater this fork inherited resolved its versions from
   // Anthropic's Claude Code release bucket and installed that binary under our
   // name; it was removed rather than repointed, because this fork publishes no
-  // release bucket of its own. Exit non-zero: the update the user asked for did
-  // not happen.
+  // release bucket of its own.
+  //
+  // Point at `/update`, not at a checkout: this fork ships as a source tree, so
+  // its updates are commits rather than published versions (the same distinction
+  // drawn on `autoUpdate` in utils/config.ts), and `/update` handles both the git
+  // and tarball cases. Anyone reaching this message installed via the flow that
+  // was just removed, which never gave them a checkout to return to.
+  //
+  // Exit non-zero: the update the user asked for did not happen.
   if (diagnostic.installationType === 'native') {
     logForDebugging('update: Native installation, no update channel available')
     process.stderr.write('\n')
@@ -224,10 +231,10 @@ export async function update() {
       ) + '\n',
     )
     process.stderr.write(
-      `${PRODUCT_NAME} publishes no native build, so there is nothing to download.\n`,
+      `${PRODUCT_NAME} ships as a source tree, so there is no build to download.\n`,
     )
     process.stderr.write(
-      `Rebuild from the source checkout you installed ${BINARY_NAME} from instead.\n`,
+      `Start ${BINARY_NAME} and run /update to pull the latest commits and rebuild.\n`,
     )
     await gracefulShutdown(1)
     // gracefulShutdown returns normally when a shutdown is already in progress,

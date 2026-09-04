@@ -4416,8 +4416,8 @@ async function run(): Promise<CommanderCommand> {
   }).description(`Retired: ${PRODUCT_NAME} publishes no native build`).option('--force', 'Ignored').action(async () => {
     process.stderr.write('\n');
     process.stderr.write(chalk.yellow(`\`${BINARY_NAME} install\` has been removed.`) + '\n');
-    process.stderr.write(`${PRODUCT_NAME} publishes no native build, so there is nothing to download.\n`);
-    process.stderr.write(`Build from source instead: \`bun run build\` in your checkout.\n`);
+    process.stderr.write(`${PRODUCT_NAME} ships as a source tree, so there is no build to download.\n`);
+    process.stderr.write(`Start ${BINARY_NAME} and run /update to pull the latest commits and rebuild.\n`);
     process.exit(1);
   });
 

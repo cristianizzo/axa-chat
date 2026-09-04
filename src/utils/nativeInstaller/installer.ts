@@ -25,7 +25,6 @@ import {
   rm,
   stat,
   unlink,
-  writeFile,
 } from 'fs/promises'
 import { homedir } from 'os'
 import { basename, delimiter, dirname, join, resolve } from 'path'
