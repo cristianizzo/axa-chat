@@ -1973,23 +1973,36 @@ export async function getMatchingHooks(
     )
     return filteredHooks
   } catch (error) {
-    // Fail open: this runs on the path of every tool call, so throwing would
-    // make an internal bug unrecoverable. But never fail open *silently* —
-    // callers cannot tell [] apart from "no hooks configured", so without this
-    // a broken PreToolUse hook looks exactly like an unconfigured one.
+    // Never fail silently: callers cannot tell [] apart from "no hooks
+    // configured", so without this a broken PreToolUse hook looks exactly like
+    // an unconfigured one. Reported once per event to stay off the hot path —
+    // this runs on the path of every tool call.
     //
     // User configuration errors do not reach here: matchesPattern catches its
-    // own invalid-regex case. So anything caught here is an internal fault and
-    // is reported as one, once per event to stay off the hot path.
+    // own invalid-regex case, and prepareIfConditionMatcher catches its own
+    // matcher-construction failure. Anything caught here is an internal fault.
     if (!reportedHookMatchingFailures.has(hookEvent)) {
       reportedHookMatchingFailures.add(hookEvent)
       logError(
-        Error(
-          `Failed to match ${hookEvent} hooks; they are being skipped for this ` +
-            `event. Further ${hookEvent} matching failures will not be logged.`,
-          { cause: error },
-        ),
+        Error(`Failed to match ${hookEvent} hooks`, { cause: error }),
       )
+    }
+    // PreToolUse is the one event where returning [] is a decision rather than
+    // an omission: a hook that was meant to block this tool call is skipped and
+    // the call proceeds, which is the behaviour a user installing a PreToolUse
+    // hook is specifically trying to prevent. Rethrow so the call is denied
+    // instead. runPreToolUseHooks catches this and stops the single tool call —
+    // the session stays usable and the next call retries, so this is not a
+    // brick.
+    //
+    // Deliberately not extended to PermissionRequest, whose three call sites
+    // are already covered: the headless path catches and auto-denies, the
+    // coordinator path catches and falls through to the user dialog, and the
+    // interactive path runs inside an uncaught `void (async () => {})()` where
+    // a throw would only add an unhandled rejection while the dialog resolves
+    // the permission anyway.
+    if (hookEvent === 'PreToolUse') {
+      throw error
     }
     return []
   }
