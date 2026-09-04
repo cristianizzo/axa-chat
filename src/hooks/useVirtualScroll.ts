@@ -194,6 +194,17 @@ export function useVirtualScroll(
     const ratio = prevColumns.current / columns
     prevColumns.current = columns
     for (const [k, h] of heightCache.current) {
+      // A cached 0 is not a height, it's the "MessageRow rendered null"
+      // sentinel written by the measurement effect below — re-wrapping at a
+      // new width cannot make an item that renders nothing render something,
+      // so it must survive the scale. Scaling it hit the Math.max clamp and
+      // promoted it to 1: the item then counts as visible for cursor
+      // navigation and adds a phantom row to every offset. Mounted items are
+      // re-measured back to 0 on the next commit, but unmounted ones keep the
+      // 1 for the rest of the session. The clamp itself is still needed for
+      // real measurements — a genuine 1-row item shrinking by ratio would
+      // round to 0 and be misread as this same sentinel.
+      if (h === 0) continue
       heightCache.current.set(k, Math.max(1, Math.round(h * ratio)))
     }
     offsetVersionRef.current++
