@@ -335,7 +335,16 @@ export function getProjectConfigDirs(
     if (!worktreeHasSubdir) {
       const mainRepoSubdir = join(canonicalRoot, CONFIG_DIR_NAME, subdir)
       if (!projectDirs.includes(mainRepoSubdir)) {
-        projectDirs.push(mainRepoSubdir)
+        // Stat it for the same reason the walk stats every level it returns:
+        // every path in this list is an existing directory, and callers rely
+        // on that. The main repo need not have the subdir at all — the branch
+        // above only established that the worktree does not.
+        try {
+          statSync(mainRepoSubdir)
+          projectDirs.push(mainRepoSubdir)
+        } catch (e: unknown) {
+          if (!isFsInaccessible(e)) throw e
+        }
       }
     }
   }
