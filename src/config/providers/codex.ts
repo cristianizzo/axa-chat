@@ -47,7 +47,9 @@ export const CODEX_PROVIDER = {
     smallFastModel: CLAUDE_FAMILY_TO_CODEX_MODEL.haiku,
     // Every request reaches the Codex backend through the translating fetch
     // adapter, which renders a `tool_result` as a `function_call_output` whose
-    // `output` is a plain string built from the text and images of its blocks.
+    // `output` is a plain string built from the text blocks alone: images are
+    // pulled out and sent as a follow-up user turn, because the Responses API
+    // has no place for them inside `output`.
     // ToolSearchTool answers a search that matched with `tool_reference`
     // blocks, which contribute nothing to that string, and one that matched
     // nothing with a plain string, which survives: the model would read "No
