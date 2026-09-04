@@ -144,8 +144,10 @@ export function registerPendingAsyncHook({
     // stays armed and would otherwise expire a hook it was never armed for:
     // killing it and reporting a deadline it never reached, quoting the *new*
     // entry's timeout. An orphaned timer must produce no outcome rather than
-    // the wrong one, because timedOut has a single reader and that reader
-    // reports to the model.
+    // the wrong one, because timedOut leaves this module through exactly one
+    // read — checkForAsyncHookResponses, where it becomes the systemMessage the
+    // model is shown. (Its only other read is the early return in
+    // expireAsyncHook itself, guarding re-entry into the write below.)
     //
     // This closes the false report only. The replacement still drops the
     // earlier hook's result, and checkForAsyncHookResponses deletes by the same
@@ -153,7 +155,7 @@ export function registerPendingAsyncHook({
     // are the same pre-existing cause — keying the map on an OS-owned
     // identifier — and are tracked separately rather than widened into here.
     if (pendingHooks.get(processId) === entry) {
-      void expireAsyncHook(processId)
+      expireAsyncHook(processId)
     }
   }, timeout)
   timeoutTimer.unref()
