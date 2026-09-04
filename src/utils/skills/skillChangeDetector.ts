@@ -210,11 +210,15 @@ async function getWatchablePaths(): Promise<string[]> {
   // directory but never hot-reloads it.
   //
   // Each branch calls the same function its loader calls, so the watched set
-  // cannot drift from the loaded set. They differ because the loaders differ:
-  // legacy commands-as-skills go through loadMarkdownFilesForSubdir, which
-  // adds the main repo's copy when a worktree has no checked-out
-  // <config dir>/commands, while the skills walk has no such fallback.
-  // Both already filter to directories that exist, so neither needs a stat.
+  // cannot drift from the loaded set. The two calls are deliberately NOT the
+  // same function, and should not be unified: legacy commands-as-skills go
+  // through loadMarkdownFilesForSubdir, which also reads the main repo's
+  // <config dir>/commands when a worktree has no checked-out copy of its own,
+  // whereas getSkillDirCommands has no such fallback for skills. Using the
+  // fallback version on the skills branch would watch a directory no loader
+  // reads — the same defect as watching the wrong directory, with the sign
+  // flipped. Both already filter to directories that exist, so neither needs
+  // a stat.
   //
   // Both re-throw filesystem errors they did not expect. initialize() is
   // called with `void`, so letting one escape would take down watching of
