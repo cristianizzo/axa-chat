@@ -333,9 +333,9 @@ export function getProjectConfigDirs(
       dir => normalizePathForComparison(dir) === worktreeSubdir,
     )
     if (!worktreeHasSubdir) {
-      const mainClaudeSubdir = join(canonicalRoot, CONFIG_DIR_NAME, subdir)
-      if (!projectDirs.includes(mainClaudeSubdir)) {
-        projectDirs.push(mainClaudeSubdir)
+      const mainRepoSubdir = join(canonicalRoot, CONFIG_DIR_NAME, subdir)
+      if (!projectDirs.includes(mainRepoSubdir)) {
+        projectDirs.push(mainRepoSubdir)
       }
     }
   }
