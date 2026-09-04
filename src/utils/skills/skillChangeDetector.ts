@@ -23,7 +23,10 @@ import { registerCleanup } from '../cleanupRegistry.js'
 import { logForDebugging } from '../debug.js'
 import { getFsImplementation } from '../fsOperations.js'
 import { executeConfigChangeHooks, hasBlockingResult } from '../hooks.js'
-import { getProjectDirsUpToHome } from '../markdownConfigLoader.js'
+import {
+  getProjectConfigDirs,
+  getProjectDirsUpToHome,
+} from '../markdownConfigLoader.js'
 import { createSignal } from '../signal.js'
 
 /**
@@ -199,16 +202,21 @@ async function getWatchablePaths(): Promise<string[]> {
     }
   }
 
-  // Project skills and commands directories. The loader does not read a
-  // single project directory: getSkillDirCommands walks from the cwd up to
-  // the git root and loads <config dir>/skills at every level, and the
-  // legacy commands-as-skills path does the same for <config dir>/commands.
-  // Watching only the innermost level would load a skill from an
-  // intermediate directory but never hot-reload it, so call the same walk
-  // the loader calls rather than rebuilding one path here. That walk already
-  // filters to directories that exist, so these need no stat.
-  paths.push(...getProjectDirsUpToHome('skills', getProjectRoot()))
-  paths.push(...getProjectDirsUpToHome('commands', getProjectRoot()))
+  // Project skills and commands directories. There is no single project
+  // directory to watch: getSkillDirCommands walks from the cwd up to the git
+  // root and loads <config dir>/skills from every level that exists, so
+  // watching only the innermost one loads a skill from an intermediate
+  // directory but never hot-reloads it.
+  //
+  // Each branch calls the same function its loader calls, so the watched set
+  // cannot drift from the loaded set. They differ because the loaders differ:
+  // legacy commands-as-skills go through loadMarkdownFilesForSubdir, which
+  // adds the main repo's copy when a worktree has no checked-out
+  // <config dir>/commands, while the skills walk has no such fallback.
+  // Both already filter to directories that exist, so neither needs a stat.
+  const projectRoot = getProjectRoot()
+  paths.push(...getProjectDirsUpToHome('skills', projectRoot))
+  paths.push(...getProjectConfigDirs('commands', projectRoot))
 
   // Additional directories (--add-dir) skills
   for (const dir of getAdditionalDirectoriesForClaudeMd()) {
