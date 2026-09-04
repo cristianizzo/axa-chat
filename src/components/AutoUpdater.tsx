@@ -215,9 +215,11 @@ export function AutoUpdater({
             {/* getLocalInstallDir() rather than a literal path: the install dir
                 is `local` under getClaudeConfigHomeDir(), which CLAUDE_CONFIG_DIR
                 relocates, so a hardcoded path would hand the user a `cd` into a
-                directory they do not have. installer.ts already resolves it this
-                way for the same reason. */}
-            {hasLocalInstall ? `cd ${getLocalInstallDir()} && npm update ${MACRO.PACKAGE_URL}` : `npm i -g ${MACRO.PACKAGE_URL}`}
+                directory they do not have. nativeInstaller/installer.ts derives
+                the same path from the same premise. Quoted because a relocated
+                config home may contain spaces, which the previous literal could
+                not. */}
+            {hasLocalInstall ? `cd "${getLocalInstallDir()}" && npm update ${MACRO.PACKAGE_URL}` : `npm i -g ${MACRO.PACKAGE_URL}`}
           </Text>
         </Text>}
     </Box>;
