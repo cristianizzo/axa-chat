@@ -1598,8 +1598,9 @@ const CONFIG_DIR_API_KEY_FILE_PATTERN = /api[-_]?key$/
  *                        it. Same property as `hooks/`, executed by a different
  *                        process. (`chrome-native-host.bat` on Windows.)
  *
- * And three that are worse than merely executed, because the same file that
- * carries the code also states the permission it runs under:
+ * And four that are worse than merely executed, because the same file that
+ * carries the code also states the permission it runs under — or, in the last
+ * case, states the instructions everything else runs under:
  *
  * - `skills/`, `commands/` — a SKILL.md body is run through
  *   `executeShellCommandsInPrompt` (skills/loadSkillsDir.ts), which matches
@@ -1618,11 +1619,29 @@ const CONFIG_DIR_API_KEY_FILE_PATTERN = /api[-_]?key$/
  *   types/permissions.ts), and `mcpServers` accepts an inline stdio config
  *   whose `command` is spawned by `connectAgentMcpServers` (AgentTool/
  *   runAgent.ts). Writing an agent file is therefore writing a process launcher.
+ * - `output-styles/`     — the weakest of the four, and listed for that reason.
+ *   An output style grants no tools; what it does is *replace the system
+ *   prompt* (getOutputStyleDirStyles, outputStyles/loadOutputStylesDir.ts).
+ *   Writing one rewrites the instructions the model is operating under, which
+ *   is the same tampering risk reached by a different route than execution.
+ *   The argument to expect is "it is only markdown, like `rules/`" — true of
+ *   the file, false of what consumes it.
  *
- * All three were already always-ask at project scope via
+ * The first three were already always-ask at project scope via
  * `isClaudeConfigFilePath`. Listing them here keeps that decision intact at
  * user scope instead of silently reversing it — this carve-out runs at step
  * 1.5, ahead of the safety check that consults that function at step 1.7.
+ * `output-styles` is absent from that function, so at project scope it has
+ * only the ordinary safety check behind it. That gap predates this change and
+ * is not created by it; it belongs with whoever owns that enumeration.
+ *
+ * The population those four are drawn from is `CLAUDE_CONFIG_DIRECTORIES`
+ * (utils/markdownConfigLoader.ts), every member of which `loadMarkdownFilesFor`
+ * `Subdir` reads from `join(getClaudeConfigHomeDir(), subdir)`. The other two,
+ * `workflows` and `templates`, have no loader calling them today — only
+ * `commands`, `agents` and `output-styles` do, plus a variable `subdir` in
+ * hooks/fileSuggestions.ts. They are left to the default; list them here if a
+ * loader appears.
  *
  * Every name here is redundant with the default, which is `protected`. The set
  * is kept and still consulted because these are the names most likely to be
@@ -1639,6 +1658,7 @@ const CONFIG_DIR_PROTECTED_DIRS = new Set([
   'skills',
   'commands',
   'agents',
+  'output-styles',
 ])
 
 /**
@@ -1871,10 +1891,10 @@ function classifyConfigDirPath(absolutePath: string): ConfigDirAccess {
  * carve-out exists for — you cannot help someone edit an agent definition or a
  * settings file that you are not allowed to read:
  *
- * - `skills/`, `commands/`, `agents/`, `hooks/`, `plugins/` — definitions the
- *   model routinely reads to explain or edit. Writes still prompt; these are
- *   permission-granting or executed, which is a tampering risk, not a
- *   disclosure one.
+ * - `skills/`, `commands/`, `agents/`, `output-styles/`, `hooks/`, `plugins/` —
+ *   definitions the model routinely reads to explain or edit. Writes still
+ *   prompt; these are permission-granting, executed, or prompt-replacing, which
+ *   is a tampering risk, not a disclosure one.
  * - settings files — an agent that cannot read settings.json cannot reason about
  *   its own configuration.
  *
@@ -1884,6 +1904,7 @@ const CONFIG_DIR_READABLE_DIRS = new Set([
   'skills',
   'commands',
   'agents',
+  'output-styles',
   'hooks',
   'plugins',
 ])
