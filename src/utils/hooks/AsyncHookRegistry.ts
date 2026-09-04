@@ -30,6 +30,20 @@ export type PendingAsyncHook = {
   stopTimers: () => void
 }
 
+/**
+ * Deadline applied to a hook that answered `{"async": true}` without naming an
+ * asyncTimeout. Carried over from the previous `asyncTimeout || 15000`; it is
+ * not documented anywhere outside this file.
+ */
+const DEFAULT_ASYNC_HOOK_TIMEOUT_MS = 15_000
+
+/**
+ * Largest delay setTimeout accepts. Anything above it — Infinity included — is
+ * silently turned into 1ms, so requests beyond this are clamped down to it
+ * rather than allowed through.
+ */
+const MAX_ASYNC_HOOK_TIMEOUT_MS = 2 ** 31 - 1
+
 // Global registry state
 const pendingHooks = new Map<string, PendingAsyncHook>()
 
@@ -55,13 +69,19 @@ export function registerPendingAsyncHook({
   pluginId?: string
 }): void {
   // asyncTimeout is read off the hook's own stdout, so it can be any JSON
-  // value. Narrow it to a usable timer delay rather than trusting it; the
-  // documented default is 15s.
+  // value: isAsyncHookJSONOutput only checks `json.async === true`, and no zod
+  // schema is applied to the parsed line. Narrow it to a usable timer delay
+  // rather than trusting it, keeping the existing default.
+  //
+  // The upper clamp is not cosmetic. setTimeout silently rewrites a delay above
+  // 2**31-1 — or Infinity, which `JSON.parse('{"asyncTimeout":1e999}')` yields —
+  // to 1ms, so an unclamped hook asking for the longest possible deadline would
+  // be killed almost immediately: the exact inverse of what it asked for.
+  const requestedTimeout = asyncResponse.asyncTimeout
   const timeout =
-    typeof asyncResponse.asyncTimeout === 'number' &&
-    asyncResponse.asyncTimeout > 0
-      ? asyncResponse.asyncTimeout
-      : 15000
+    typeof requestedTimeout === 'number' && requestedTimeout > 0
+      ? Math.min(requestedTimeout, MAX_ASYNC_HOOK_TIMEOUT_MS)
+      : DEFAULT_ASYNC_HOOK_TIMEOUT_MS
   logForDebugging(
     `Hooks: Registering async hook ${processId} (${hookName}) with timeout ${timeout}ms`,
   )
