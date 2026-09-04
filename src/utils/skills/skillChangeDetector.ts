@@ -224,12 +224,20 @@ async function getWatchablePaths(): Promise<string[]> {
   // called with `void`, so letting one escape would take down watching of
   // the user directories too, for a fault that only concerns the project
   // ones. Report it and keep the paths already collected.
-  try {
-    const projectRoot = getProjectRoot()
-    paths.push(...getProjectDirsUpToHome('skills', projectRoot))
-    paths.push(...getProjectConfigDirs('commands', projectRoot))
-  } catch (error) {
-    logError(error)
+  //
+  // The two walks are guarded separately: they read different directories, so
+  // a fault in one says nothing about the other, and a shared guard would stop
+  // watching project commands because the skills walk failed, or vice versa.
+  const projectRoot = getProjectRoot()
+  for (const collect of [
+    () => getProjectDirsUpToHome('skills', projectRoot),
+    () => getProjectConfigDirs('commands', projectRoot),
+  ]) {
+    try {
+      paths.push(...collect())
+    } catch (error) {
+      logError(error)
+    }
   }
 
   // Additional directories (--add-dir) skills
