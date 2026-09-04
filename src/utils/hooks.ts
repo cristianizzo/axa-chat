@@ -282,7 +282,7 @@ function executeInBackground({
  * Checks if a hook should be skipped due to lack of workspace trust.
  *
  * ALL hooks require workspace trust because they execute arbitrary commands from
- * .claude/settings.json. This is a defense-in-depth security measure.
+ * .axa/settings.json. This is a defense-in-depth security measure.
  *
  * Context: Hooks are captured via captureHooksConfigSnapshot() before the trust
  * dialog is shown. While most hooks won't execute until after trust is established
@@ -4484,15 +4484,24 @@ export function hasInstructionsLoadedHook(): boolean {
 }
 
 /**
- * Execute InstructionsLoaded hooks when an instruction file (CLAUDE.md or
- * .claude/rules/*.md) is loaded into context. Fire-and-forget — this hook is
- * for observability/audit only and does not support blocking.
+ * Execute InstructionsLoaded hooks when an instruction file — a memory file
+ * (AXA.md) or a file in a rules directory — is loaded into context.
+ * Fire-and-forget: this hook is for observability/audit only and does not
+ * support blocking.
+ *
+ * The rules directory is deliberately not spelled out here, because the scopes
+ * this hook fires for do not share one. Project rules live under the config dir
+ * (.axa/rules, from CONFIG_DIR_NAME in claudemd.ts), while Managed rules stay
+ * under .claude/rules — see getManagedClaudeRulesDir in config.ts, where that
+ * path is an administrator-deployed system location rather than this fork's
+ * config dir. Naming only one of them here would exclude files the hook really
+ * does fire for.
  *
  * Dispatch sites:
  * - Eager load at session start (getMemoryFiles in claudemd.ts)
  * - Eager reload after compaction (getMemoryFiles cache cleared by
  *   runPostCompactCleanup; next call reports load_reason: 'compact')
- * - Lazy load when Claude touches a file that triggers nested CLAUDE.md or
+ * - Lazy load when Claude touches a file that triggers nested AXA.md or
  *   conditional rules with paths: frontmatter (memoryFilesToAttachments in
  *   attachments.ts)
  */
