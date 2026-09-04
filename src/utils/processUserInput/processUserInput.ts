@@ -35,6 +35,7 @@ import {
   createAttachmentMessage,
   getAttachmentMessages,
 } from '../attachments.js'
+import { isClaudeAISubscriber } from '../auth.js'
 import type { PastedContent } from '../config.js'
 import type { EffortValue } from '../effort.js'
 import { toArray } from '../generators.js'
@@ -464,8 +465,12 @@ async function processUserInputBase(
   // Runs before attachment extraction so this path matches the slash-command
   // path below (no await between setUserInputOnProcessing and setAppState —
   // React batches both into one render, no flash).
+  // isClaudeAISubscriber() mirrors the command's `availability: ['claude-ai']`:
+  // for anyone else /ultraplan is filtered out of context.options.commands, so
+  // routing here would yield "Unknown skill" rather than a plan.
   if (
     feature('ULTRAPLAN') &&
+    isClaudeAISubscriber() &&
     mode === 'prompt' &&
     !context.options.isNonInteractiveSession &&
     inputString !== null &&

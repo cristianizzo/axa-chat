@@ -463,6 +463,13 @@ export default {
   name: 'ultraplan',
   description: `~10–30 min · Claude Code on the web drafts an advanced plan you can edit and approve. See ${CCR_TERMS_URL}`,
   argumentHint: '<prompt>',
+  // The plan is drafted by a Claude Code on the web session, which only exists
+  // for claude.ai accounts — checkNeedsClaudeAiLogin() short-circuits for
+  // everyone else, so a Console/Bedrock/Vertex user who runs this gets a
+  // "no remote environment" dead end instead of a plan. The keyword entry
+  // points carry the same check, since they synthesize a /ultraplan
+  // invocation rather than going through this list.
+  availability: ['claude-ai'],
   isEnabled: () => true,
   load: () => Promise.resolve({
     call

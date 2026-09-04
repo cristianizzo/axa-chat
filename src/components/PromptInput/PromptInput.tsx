@@ -54,6 +54,7 @@ import type { PermissionMode } from '../../types/permissions.js';
 import type { BaseTextInputProps, PromptInputMode, VimMode } from '../../types/textInputTypes.js';
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js';
 import { count } from '../../utils/array.js';
+import { isClaudeAISubscriber } from '../../utils/auth.js';
 import type { AutoUpdaterResult } from '../../utils/autoUpdater.js';
 import { Cursor } from '../../utils/Cursor.js';
 import { getGlobalConfig, type PastedContent, saveGlobalConfig } from '../../utils/config.js';
@@ -522,7 +523,11 @@ function PromptInput({
   const thinkTriggers = useMemo(() => findThinkingTriggerPositions(displayedValue), [displayedValue]);
   const ultraplanSessionUrl = useAppState(s => s.ultraplanSessionUrl);
   const ultraplanLaunching = useAppState(s => s.ultraplanLaunching);
-  const ultraplanTriggers = useMemo(() => feature('ULTRAPLAN') && !ultraplanSessionUrl && !ultraplanLaunching ? findUltraplanTriggerPositions(displayedValue) : [], [displayedValue, ultraplanSessionUrl, ultraplanLaunching]);
+  // isClaudeAISubscriber() mirrors the command's `availability: ['claude-ai']`
+  // and the keyword gate in processUserInput.ts — without it, users who cannot
+  // reach Claude Code on the web would still get the rainbow highlight and the
+  // "will launch ultraplan" notification for a launch that never happens.
+  const ultraplanTriggers = useMemo(() => feature('ULTRAPLAN') && isClaudeAISubscriber() && !ultraplanSessionUrl && !ultraplanLaunching ? findUltraplanTriggerPositions(displayedValue) : [], [displayedValue, ultraplanSessionUrl, ultraplanLaunching]);
   const ultrareviewTriggers = useMemo(() => isUltrareviewEnabled() ? findUltrareviewTriggerPositions(displayedValue) : [], [displayedValue]);
   const btwTriggers = useMemo(() => findBtwTriggerPositions(displayedValue), [displayedValue]);
   const buddyTriggers = useMemo(() => findBuddyTriggerPositions(displayedValue), [displayedValue]);
