@@ -1603,8 +1603,44 @@ const CONFIG_DIR_PROTECTED_DIRS = new Set([
   'commands',
   'agents',
 ])
-/** `settings.json`, `settings.local.json`, at any scope. */
-const CONFIG_DIR_SETTINGS_FILE_PATTERN = /^settings(\.[^.]+)?\.json$/
+
+/**
+ * Mode-dependent name prefixes, stripped before the set lookup above.
+ *
+ * `--cowork` / CLAUDE_CODE_USE_COWORK_PLUGINS swap whole config-dir entries for
+ * a twin: `getPluginsDirectoryName()` (plugins/pluginDirectories.ts) returns
+ * `cowork_plugins` instead of `plugins`, under the same config home. Listing
+ * only `plugins` protected the default mode and left the flagged mode writable.
+ * Matching by shape means the next such twin is covered when it is added, not
+ * when someone remembers to list it.
+ */
+const CONFIG_DIR_MODE_PREFIX_PATTERN = /^cowork_/
+
+/**
+ * Settings files anywhere under a config dir.
+ *
+ * Deliberately matched by shape, because the set of names the code can produce
+ * is larger than the set anyone lists from memory. All four of these are real
+ * and all four carry `permissions.deny`, i.e. the rules this engine enforces:
+ *
+ * - `settings.json`        — user and project scope.
+ * - `settings.local.json`  — `getRelativeSettingsFilePathForSource`.
+ * - `cowork_settings.json` — `getUserSettingsFilePath` (settings/settings.ts)
+ *                            returns this *instead of* settings.json in cowork
+ *                            mode, so in that mode it simply is userSettings.
+ * - `remote-settings.json` — the managed-policy sync cache, written into the
+ *                            config home by remoteManagedSettings/syncCacheState.
+ *
+ * A write to any of them is a write to the rules that decide whether the write
+ * was allowed, which is why they never become silently writable.
+ *
+ * The optional leading segment makes this over-inclusive: an unrelated
+ * `foo-settings.json` would also match. That is the intended direction of
+ * error. A false positive costs one permission prompt; a false negative is a
+ * silent write to a deny list.
+ */
+const CONFIG_DIR_SETTINGS_FILE_PATTERN =
+  /^([a-z0-9]+[_-])?settings(\.[^.]+)?\.json$/
 /** `history.jsonl` and its rotations. */
 const CONFIG_DIR_HISTORY_FILE_PATTERN = /^history\.jsonl(\..*)?$/
 
@@ -1655,7 +1691,11 @@ function classifyConfigDirRelativePath(
   // wave through.
   if (segments.length === 0) return 'protected'
 
-  const first = normalizeCaseForComparison(segments[0]!)
+  // Strip the mode prefix so `cowork_plugins` is judged as `plugins`.
+  const first = normalizeCaseForComparison(segments[0]!).replace(
+    CONFIG_DIR_MODE_PREFIX_PATTERN,
+    '',
+  )
   const base = normalizeCaseForComparison(segments[segments.length - 1]!)
 
   if (
@@ -1675,6 +1715,22 @@ function classifyConfigDirRelativePath(
     return 'protected'
   }
 
+  // NOTE: the default is OPEN. Anything under a config dir that nobody listed
+  // above is silently writable. That is the wrong way round for a deny-style
+  // classifier and it is deliberate only because inverting it would break the
+  // legitimate carve-outs that run before this one (agent memory, auto memory,
+  // plans, scratchpad, job dirs) — they live under the config dir and must stay
+  // writable without being enumerated here.
+  //
+  // The practical consequence, for whoever adds the next config-dir feature:
+  // your directory is writable by default, and the four names that were missing
+  // when this was written (`skills`, `commands`, `agents`, `cowork_settings.json`)
+  // were all missed the same way — the lists were built from names someone
+  // recalled, not from the names the code can produce. If you add a directory
+  // whose contents are executed or which grants permission, add it above, and
+  // check it against `isClaudeConfigFilePath` too: that function is consulted at
+  // step 1.7 of checkWritePermissionForTool, while this one runs at step 1.5, so
+  // an `open` here silently overrides an always-ask there.
   return 'open'
 }
 
