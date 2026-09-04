@@ -325,6 +325,19 @@ export function VirtualMessageList({
   // that element did not move. On mismatch we rebuild into a NEW array, which
   // is also what makes useVirtualScroll drop heightCache entries for keys that
   // went away.
+  //
+  // PRECONDITION for the append path, which every collapse stage in the
+  // Messages.tsx pipeline currently satisfies: each stage is a single
+  // order-preserving left-to-right pass whose output for a given input prefix
+  // depends only on that prefix. That is what makes checking one index enough —
+  // adding or removing an entry shifts everything after it, so any restructuring
+  // inside the keyed prefix is visible at its last index. A stage that
+  // substituted an entry IN PLACE, under a different key and without changing
+  // length, would defeat this check and must instead force a rebuild.
+  // (Equal length alone is not a restructuring: an in-progress read/search group
+  // absorbing a newly appended message leaves the output the same length and
+  // keeps its `collapsed-<first uuid>` key, which is exactly the case the append
+  // path is meant to handle.)
   const prevLen = keysRef.current.length;
   const prefixIntact = prevItemKeyRef.current === itemKey && messages.length >= prevLen && (prevLen === 0 || itemKey(messages[prevLen - 1]!) === keysRef.current[prevLen - 1]);
   if (prefixIntact) {
