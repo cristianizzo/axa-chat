@@ -1,3 +1,4 @@
+import { join } from 'path'
 import { CONFIG_DIR_NAME } from '../../constants/product.js'
 import { getSessionMemoryContent } from '../../services/SessionMemory/sessionMemoryUtils.js'
 import type { Message } from '../../types/message.js'
@@ -68,7 +69,7 @@ You will use the AskUserQuestion to understand what the user wants to automate. 
 - If it's not clear, ask if this skill should run inline (in the current conversation) or forked (as a sub-agent with its own context). Forked is better for self-contained tasks that don't need mid-process user input; inline is better when the user wants to steer mid-process.
 - Ask where the skill should be saved. Suggest a default based on context (repo-specific workflows → repo, cross-repo personal workflows → user). Options:
   - **This repo** (\`${CONFIG_DIR_NAME}/skills/<name>/SKILL.md\`) — for workflows specific to this project
-  - **Personal** (\`{{userSkillsDir}}/<name>/SKILL.md\`) — follows you across all repos
+  - **Personal** (\`{{userSkillPath}}\`) — follows you across all repos
 
 **Round 3: Breaking down each step**
 For each major step, if it's not glaringly obvious, ask:
@@ -195,8 +196,13 @@ export function registerSkillifySkill(): void {
         // The user skills directory is not always `~/<config dir>/skills`: the
         // config home is overridable by environment variable. Ask the loader
         // for the directory it reads rather than reconstructing it, so the
-        // prompt cannot name a location nothing is loaded from.
-        .replace('{{userSkillsDir}}', getSkillsPath('userSettings', 'skills'))
+        // prompt cannot name a location nothing is loaded from. Join the
+        // remaining segments too, so the separator stays the platform's own
+        // rather than mixing in the literal slashes of a hardcoded suffix.
+        .replace(
+          '{{userSkillPath}}',
+          join(getSkillsPath('userSettings', 'skills'), '<name>', 'SKILL.md'),
+        )
 
       return [{ type: 'text', text: prompt }]
     },
