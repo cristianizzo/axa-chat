@@ -1897,10 +1897,14 @@ function classifyConfigDirPath(absolutePath: string): ConfigDirAccess {
  *   definitions the model routinely reads to explain or edit. Writes still
  *   prompt; these are permission-granting, executed, or prompt-replacing, which
  *   is a tampering risk, not a disclosure one.
- * - settings files — an agent that cannot read settings.json cannot reason about
- *   its own configuration.
  *
- * Credentials and the cross-project stores are `secret` and never reach here.
+ * Settings files are deliberately NOT here, even though the write-side
+ * classifier treats them as config-authoring surface. A settings file can carry
+ * credentials directly — `apiKeyHelper`, `awsAuthRefresh` and the `env` block
+ * all live in the settings schema — so making it silently readable is a
+ * disclosure widening, not a convenience. Reading one still prompts, exactly as
+ * on main. Only the credential *files* are `secret`; the settings file is not,
+ * so nothing else stops it.
  */
 const CONFIG_DIR_READABLE_DIRS = new Set([
   'skills',
@@ -1920,6 +1924,10 @@ const CONFIG_DIR_READABLE_DIRS = new Set([
  */
 function isReadableConfigDirPath(absolutePath: string): boolean {
   for (const form of getPathsForPermissionCheck(absolutePath)) {
+    // Same `--settings` escape as on the write side: the flag can place the
+    // active settings file inside one of the readable directories, and it can
+    // hold credentials. Keep it on the prompting path.
+    if (isClaudeSettingsPath(form)) return false
     const relative = relativeToConfigDirRoot(normalize(form))
     if (relative === null) return false
     const segments = relative.split(/[\\/]/).filter(s => s.length > 0)
@@ -1928,11 +1936,7 @@ function isReadableConfigDirPath(absolutePath: string): boolean {
       CONFIG_DIR_MODE_PREFIX_PATTERN,
       '',
     )
-    const base = normalizeCaseForComparison(segments[segments.length - 1]!)
-    if (
-      !CONFIG_DIR_READABLE_DIRS.has(first) &&
-      !CONFIG_DIR_SETTINGS_FILE_PATTERN.test(base)
-    ) {
+    if (!CONFIG_DIR_READABLE_DIRS.has(first)) {
       return false
     }
   }
@@ -2093,7 +2097,15 @@ export function checkEditableInternalPath(
   // memdir sits under ~/.axa/projects/, which is 'secret' — and must keep their
   // allow. They return before this point, which is also why the default here can
   // be restrictive without stranding them.
-  if (classifyConfigDirPath(normalizedPath) === 'open') {
+  // `--settings <path>` can point the active settings file anywhere, including
+  // under one of the CONFIG_DIR_OPEN_DIRS. This branch runs before step 1.7's
+  // always-ask on config files, so without this guard that flag turns the live
+  // settings file into a silently writable one — the exact circularity the
+  // paragraph above rules out for the default location.
+  if (
+    classifyConfigDirPath(normalizedPath) === 'open' &&
+    !isClaudeSettingsPath(normalizedPath)
+  ) {
     return {
       behavior: 'allow',
       updatedInput: input,
