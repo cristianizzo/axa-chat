@@ -2440,6 +2440,19 @@ function foldResolvedRootPrefix(form: string): string {
  *   was. Matching the reason is what ties the target back to the specific
  *   carve-out that admitted the link.
  *
+ *   **Comparing reasons is only a sound proxy for comparing decisions because
+ *   every `reason` in the two chains is a static literal**, so it depends on
+ *   *which* carve-out fired and never on the path that reached it. All 19 are —
+ *   7 in the write chain, 12 in the read chain, and all 19 distinct. This is a
+ *   convention, not something the types enforce, and it is the kind that is
+ *   discovered only after it breaks. Interpolate a path into one `reason` — for
+ *   better diagnostics, which is the plausible motive — and two spellings of the
+ *   same file stop yielding the same identity: the loop below reads that as a
+ *   disagreement and a legitimate allow silently becomes `passthrough`. Nothing
+ *   throws, no test names it, and the change that breaks it need not touch this
+ *   function, the fold above, or anything a reviewer of *that* diff would think
+ *   to look at. Keep them static, or change the comparison in the same commit.
+ *
  * The reason rule has a deliberate cost, and it is the one thing here most
  * likely to be reported as a bug. **A symlink at a name one carve-out admits,
  * pointing at a file another carve-out admits, is denied even though both
