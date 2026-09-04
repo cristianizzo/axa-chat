@@ -1509,6 +1509,13 @@ async function prepareIfConditionMatcher(
       // branch, and choosing the opposite here would make the error path
       // stricter than the ordinary one.
       //
+      // Picking the direction per hook is not available here, and the reason is
+      // structural rather than a missing parameter: permissionBehavior is not
+      // hook configuration. No hook schema in schemas/hooks.ts declares it — it
+      // is set on HookResult by parsing the hook's stdout, so a hook's behaviour
+      // is only known once it has run, and whether to run it is exactly what
+      // this filter decides. Do not try to thread the value in.
+      //
       // Note this deliberately diverges from `patternMatcher` being absent
       // below, which returns false and skips the hook. That is "this tool has
       // no matcher to offer", a stable property of the tool. This is "the

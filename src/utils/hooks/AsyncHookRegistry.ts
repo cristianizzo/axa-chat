@@ -47,6 +47,15 @@ const DEFAULT_ASYNC_HOOK_TIMEOUT_MS = 15_000
  * slow, and which ran unbounded before this deadline existed. So this is a
  * backstop against outliving the session, not a latency budget, and it is set
  * far longer than the default a self-declared async hook gets.
+ *
+ * It does not cover every backgrounded hook. `asyncRewake` returns from
+ * executeInBackground before `background()` and before the hook is registered
+ * here, so it never receives this deadline. Because `background()` is skipped,
+ * the timer wrapSpawn armed from the synchronous `timeout` is never cleared and
+ * stays in force instead — such a hook is bounded, but by the synchronous limit
+ * this constant exists to stop being used for asynchronous work. Closing that
+ * would mean registering a hook whose stdout is captured in memory, which
+ * `background()` spills to disk; it is a separate change.
  */
 export const CONFIG_ASYNC_HOOK_TIMEOUT_MS = 10 * 60 * 1000
 
