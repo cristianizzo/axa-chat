@@ -626,9 +626,10 @@ export function userMessageToMessageParam(
       }
     }
   }
-  // Clone array content to prevent in-place mutations (e.g., insertCacheEditsBlock's
-  // splice) from contaminating the original message. Without cloning, multiple calls
-  // to addCacheBreakpoints share the same array and each splices in duplicate cache_edits.
+  // Clone array content to prevent in-place mutations (e.g. the splice in
+  // insertBlockAfterToolResults) from contaminating the original message. Without
+  // cloning, multiple calls to addCacheBreakpoints share the same array and each
+  // splices in duplicate cache_edits.
   return {
     role: 'user',
     content: Array.isArray(message.message.content)

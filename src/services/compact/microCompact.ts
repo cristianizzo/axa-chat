@@ -169,11 +169,22 @@ export function estimateMessageTokens(messages: Message[]): number {
       continue
     }
 
-    if (!Array.isArray(message.message.content)) {
+    const content = message.message.content
+    // String content is valid in the Anthropic message format, and
+    // createUserMessage stores plain typed input as a string rather than
+    // wrapping it in a text block. Skipping it dropped those messages from
+    // the estimate entirely. hasTextBlocks in sessionMemoryCompact already
+    // handles the string case.
+    if (typeof content === 'string') {
+      totalTokens += roughTokenCountEstimation(content)
       continue
     }
 
-    for (const block of message.message.content) {
+    if (!Array.isArray(content)) {
+      continue
+    }
+
+    for (const block of content) {
       if (block.type === 'text') {
         totalTokens += roughTokenCountEstimation(block.text)
       } else if (block.type === 'tool_result') {
@@ -243,11 +254,22 @@ function collectCompactableToolIds(messages: Message[]): string[] {
 // Prefix-match because promptCategory.ts sets the querySource to
 // 'repl_main_thread:outputStyle:<style>' when a non-default output style
 // is active. The bare 'repl_main_thread' is only used for the default style.
-// query.ts:350/1451 use the same startsWith pattern; the pre-existing
-// cached-MC `=== 'repl_main_thread'` check was a latent bug — users with a
-// non-default output style were silently excluded from cached MC.
-function isMainThreadSource(querySource: QuerySource | undefined): boolean {
-  return !querySource || querySource.startsWith('repl_main_thread')
+// query.ts uses the same startsWith pattern; the pre-existing cached-MC
+// `=== 'repl_main_thread'` check was a latent bug — users with a non-default
+// output style were silently excluded from cached MC.
+//
+// An explicit source is required. The turn loop always has one (query()
+// takes querySource as a non-optional parameter), while the analysis-only
+// callers — /context, /compact, analyzeContext — pass none. Treating
+// undefined as main-thread let those callers drive the real compaction
+// machinery.
+// Narrowing predicate rather than a plain boolean so the "explicit source"
+// half of the check is carried into the callers' types: cachedMicrocompactPath
+// then takes a non-optional QuerySource and needs no undefined fallback.
+function isMainThreadSource(
+  querySource: QuerySource | undefined,
+): querySource is QuerySource {
+  return querySource !== undefined && querySource.startsWith('repl_main_thread')
 }
 
 export async function microcompactMessages(
@@ -273,6 +295,12 @@ export async function microcompactMessages(
   // (session_memory, prompt_suggestion, etc.) from registering their
   // tool_results in the global cachedMCState, which would cause the main
   // thread to try deleting tools that don't exist in its own conversation.
+  // isMainThreadSource requires an explicit source, which also keeps the
+  // analysis-only callers out: cachedMicrocompactPath mutates the global
+  // cachedMCState and queues pendingCacheEdits that the API layer sends on
+  // the next real request, so running it from /context would delete tool
+  // results from the server-side cache as a side effect of displaying a
+  // token breakdown.
   if (feature('CACHED_MICROCOMPACT')) {
     const mod = await getCachedMCModule()
     const model = toolUseContext?.options.mainLoopModel ?? getMainLoopModel()
@@ -304,7 +332,7 @@ export async function microcompactMessages(
  */
 async function cachedMicrocompactPath(
   messages: Message[],
-  querySource: QuerySource | undefined,
+  querySource: QuerySource,
 ): Promise<MicrocompactResult> {
   const mod = await getCachedMCModule()
   const state = ensureCachedMCState()
@@ -360,10 +388,10 @@ async function cachedMicrocompactPath(
 
     // Notify cache break detection that cache reads will legitimately drop
     if (feature('PROMPT_CACHE_BREAK_DETECTION')) {
-      // Pass the actual querySource — isMainThreadSource now prefix-matches
-      // so output-style variants enter here, and getTrackingKey keys on the
-      // full source string, not the 'repl_main_thread' prefix.
-      notifyCacheDeletion(querySource ?? 'repl_main_thread')
+      // Pass the actual querySource — isMainThreadSource prefix-matches so
+      // output-style variants enter here, and getTrackingKey keys on the full
+      // source string, not the 'repl_main_thread' prefix.
+      notifyCacheDeletion(querySource)
     }
 
     // Return messages unchanged - cache_reference and cache_edits are added at API layer
@@ -424,11 +452,10 @@ export function evaluateTimeBasedTrigger(
   querySource: QuerySource | undefined,
 ): { gapMinutes: number; config: TimeBasedMCConfig } | null {
   const config = getTimeBasedMCConfig()
-  // Require an explicit main-thread querySource. isMainThreadSource treats
-  // undefined as main-thread (for cached-MC backward-compat), but several
-  // callers (/context, /compact, analyzeContext) invoke microcompactMessages
-  // without a source for analysis-only purposes — they should not trigger.
-  if (!config.enabled || !querySource || !isMainThreadSource(querySource)) {
+  // isMainThreadSource requires an explicit main-thread querySource, which
+  // excludes the analysis-only callers (/context, /compact, analyzeContext)
+  // that invoke microcompactMessages without a source.
+  if (!config.enabled || !isMainThreadSource(querySource)) {
     return null
   }
   const lastAssistant = messages.findLast(m => m.type === 'assistant')
