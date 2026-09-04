@@ -52,11 +52,12 @@ export const DEEPSEEK_PROVIDER = {
     // than the only thing standing between a background job and a 404.
     smallFastModel: DEFAULT_DEEPSEEK_MODEL,
     // Every request reaches DeepSeek through the translating fetch adapter,
-    // which renders a `tool_result` as the text of its blocks — a
-    // `tool_reference` block carries no text and is dropped, so ToolSearchTool's
-    // answer would arrive as a `tool` message with empty content. The endpoint
-    // never sees a tool_reference block whatever it does or does not support.
-    // Same reasoning as Grok's and Kimi's.
+    // which renders a `tool_result` as the text of its blocks. ToolSearchTool
+    // answers a search that matched with `tool_reference` blocks and one that
+    // matched nothing with a plain string, so translation keeps the
+    // empty-handed answer and drops the useful one: the model would read "No
+    // matching deferred tools found" when the search fails and an empty `tool`
+    // message when it succeeds. Grok is false for the same reason.
     supportsToolSearch: false,
   },
 } as const satisfies ProviderDescriptor

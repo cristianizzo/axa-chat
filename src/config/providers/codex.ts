@@ -48,8 +48,11 @@ export const CODEX_PROVIDER = {
     // Every request reaches the Codex backend through the translating fetch
     // adapter, which renders a `tool_result` as a `function_call_output` whose
     // `output` is a plain string built from the text and images of its blocks.
-    // A `tool_reference` block contributes nothing to it, so ToolSearchTool's
-    // answer would arrive as empty output. Same reasoning as Grok's and Kimi's.
+    // ToolSearchTool answers a search that matched with `tool_reference`
+    // blocks, which contribute nothing to that string, and one that matched
+    // nothing with a plain string, which survives: the model would read "No
+    // matching deferred tools found" when the search fails and empty output
+    // when it succeeds. Grok is false for the same reason.
     supportsToolSearch: false,
   },
 } as const satisfies ProviderDescriptor
