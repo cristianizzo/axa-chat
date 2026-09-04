@@ -1916,6 +1916,26 @@ const CONFIG_DIR_READABLE_DIRS = new Set([
 ])
 
 /**
+ * Does any resolved form of `absolutePath` land on an active settings file?
+ *
+ * `--settings <path>` can put the live settings file anywhere, including inside
+ * a config directory this file treats as open or readable — and those branches
+ * run before step 1.7's always-ask, so they would override it. Settings can hold
+ * credentials (`apiKeyHelper`, `awsAuthRefresh`, `env`), and the deny rules
+ * protecting the OAuth tokens live there too, so a silent write is circular.
+ *
+ * Checking every form, not just the literal path, is the point: a symlink at
+ * `~/.axa/agent-memory/alias.json` pointing at a flag settings file elsewhere
+ * under the config dir passes the classifier — every form is still `open` — and
+ * a check on the literal path alone would not see what it resolves to.
+ */
+function resolvesToSettingsFile(absolutePath: string): boolean {
+  return getPathsForPermissionCheck(absolutePath).some(form =>
+    isClaudeSettingsPath(form),
+  )
+}
+
+/**
  * Is every resolved form of `absolutePath` on the read allow-list above?
  *
  * All forms must qualify, so the strictest wins, for the same reason
@@ -1923,11 +1943,8 @@ const CONFIG_DIR_READABLE_DIRS = new Set([
  * `~/.axa/agents/` would launder a read of something else.
  */
 function isReadableConfigDirPath(absolutePath: string): boolean {
+  if (resolvesToSettingsFile(absolutePath)) return false
   for (const form of getPathsForPermissionCheck(absolutePath)) {
-    // Same `--settings` escape as on the write side: the flag can place the
-    // active settings file inside one of the readable directories, and it can
-    // hold credentials. Keep it on the prompting path.
-    if (isClaudeSettingsPath(form)) return false
     const relative = relativeToConfigDirRoot(normalize(form))
     if (relative === null) return false
     const segments = relative.split(/[\\/]/).filter(s => s.length > 0)
@@ -2104,7 +2121,7 @@ export function checkEditableInternalPath(
   // paragraph above rules out for the default location.
   if (
     classifyConfigDirPath(normalizedPath) === 'open' &&
-    !isClaudeSettingsPath(normalizedPath)
+    !resolvesToSettingsFile(normalizedPath)
   ) {
     return {
       behavior: 'allow',
