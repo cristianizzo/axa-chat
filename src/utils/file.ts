@@ -369,6 +369,11 @@ export function writeFileSyncAndFlush_DEPRECATED(
   // Check if the target file is a symlink to preserve it for all users
   // Note: We don't use safeResolvePath here because we need to manually handle
   // symlinks to ensure we write to the target while preserving the symlink itself
+  //
+  // This is a single readlink hop, so it preserves the symlink only at one
+  // level. For a chain `a -> b -> c` it resolves to `b` and the rename below
+  // replaces `b` with a regular file, destroying that link rather than
+  // preserving it. Only the first link in a chain survives.
   let targetPath = filePath
   try {
     // Try to read the symlink - if successful, it's a symlink
@@ -406,7 +411,31 @@ export function writeFileSyncAndFlush_DEPRECATED(
   try {
     logForDebugging(`Writing to temp file: ${tempPath}`)
 
-    // Write to temp file with flush and mode (if specified for new file)
+    // SECURITY: create the temp file at the target's mode rather than
+    // chmod'ing it afterwards. The temp file sits in the target's own
+    // directory, which is not necessarily private — saveConfig routes the
+    // auth-bearing global config through here with mode 0600 — so creating at
+    // the default 0666 & ~umask and narrowing only after the content has been
+    // written and flushed leaves it readable for the length of a write plus an
+    // fsync. That is an exposure window, not a race: nothing has to be timed,
+    // the directory just has to be listable.
+    //
+    // targetMode is the existing file's mode when the target exists and the
+    // caller's requested mode when it does not, so it is correct in both
+    // cases. Masked because it comes from statSync().mode, which carries the
+    // file-type bits.
+    //
+    // 0o7777 rather than 0o777 so setuid/setgid/sticky ride along. Be honest
+    // about what that is worth: on the runtime we ship, it currently buys
+    // nothing. Measured on bun 1.x / macOS, chmodSync(f, 0o4700) stats back as
+    // 0o700 — bun drops all three special bits, while node on the same machine
+    // and filesystem keeps setuid and sticky, and shell `chmod 4700` sets them.
+    // So the bits cannot reach targetMode here in the first place, and 0o777
+    // would behave identically today. The wider mask is kept because it is what
+    // the fs contract actually says, so the day bun stops masking, this line is
+    // already right rather than newly wrong — and being wrong here would mean
+    // creating the temp file below its target's mode and letting the chmod add
+    // the difference, which is precisely the window this block exists to close.
     const writeOptions: {
       encoding: BufferEncoding
       flush: boolean
@@ -415,9 +444,8 @@ export function writeFileSyncAndFlush_DEPRECATED(
       encoding: options.encoding,
       flush: true,
     }
-    // Only set mode in writeFileSync for new files to ensure atomic permission setting
-    if (!targetExists && options.mode !== undefined) {
-      writeOptions.mode = options.mode
+    if (targetMode !== undefined) {
+      writeOptions.mode = targetMode & 0o7777
     }
 
     fsWriteFileSync(tempPath, content, writeOptions)
@@ -425,9 +453,15 @@ export function writeFileSyncAndFlush_DEPRECATED(
       `Temp file written successfully, size: ${content.length} bytes`,
     )
 
-    // For existing files or if mode was not set atomically, apply permissions
+    // Restore the exact mode: the creation mode above was clamped by the umask.
+    // Masked for the same reason as the creation mode, and for one more: POSIX
+    // leaves chmod's behaviour unspecified when bits outside 07777 are set, and
+    // statSync().mode always has S_IFREG set here. Passing the raw value did
+    // work — verified, no throw, correct resulting mode — but it worked because
+    // both kernels we run on choose to ignore those bits, not because anything
+    // guarantees it.
     if (targetExists && targetMode !== undefined) {
-      chmodSync(tempPath, targetMode)
+      chmodSync(tempPath, targetMode & 0o7777)
       logForDebugging(`Applied original permissions to temp file`)
     }
 
@@ -461,7 +495,11 @@ export function writeFileSyncAndFlush_DEPRECATED(
         encoding: options.encoding,
         flush: true,
       }
-      // Only set mode for new files
+      // Only set mode for new files. Unlike the temp write above, this is
+      // correct as-is and the asymmetry is deliberate: this arm writes straight
+      // to targetPath, and `mode` applies only when writeFileSync creates the
+      // file, so on an existing target it is a no-op and the file keeps its own
+      // permissions. There is no window here to narrow.
       if (!targetExists && options.mode !== undefined) {
         fallbackOptions.mode = options.mode
       }
