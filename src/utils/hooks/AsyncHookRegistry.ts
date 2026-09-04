@@ -129,17 +129,29 @@ export function registerPendingAsyncHook({
   // pass, and it survives until shutdown.
   const timeoutTimer = setTimeout(() => {
     // Identity, not presence. processId is `async_hook_${child.pid}` (see the
-    // two call sites in hooks.ts) and the OS reuses pids, so a later hook can
-    // register under this same key and replace the entry below. Nothing clears
-    // the timers of an entry dropped from the map, so this timer stays armed
-    // and would otherwise expire a hook that is not the one it was armed for —
-    // killing it and reporting a deadline it never reached, under the *new*
-    // entry's timeout value. An orphaned timer must produce no outcome, not the
-    // wrong one, because timedOut has a single reader and that reader reports
-    // to the model.
+    // two call sites in hooks.ts), so a later hook can register under this same
+    // key and replace the entry below.
     //
-    // This is the false report only; the replacement itself loses the earlier
-    // hook, which is a separate pre-existing defect of keying the map on a pid.
+    // How that happens is worth stating, because the obvious reading is wrong:
+    // two live children never share a pid, so this is not two concurrent hooks
+    // colliding. The earlier process must already have exited, freeing its pid
+    // for reuse, while its entry outlives it — reaping is not immediate.
+    // checkForAsyncHookResponses runs when attachments are assembled rather
+    // than on a timer, so a finished entry sits in the map until the next turn,
+    // and an idle session holds it for as long as it stays idle.
+    //
+    // Nothing clears the timers of an entry dropped from the map, so this timer
+    // stays armed and would otherwise expire a hook it was never armed for:
+    // killing it and reporting a deadline it never reached, quoting the *new*
+    // entry's timeout. An orphaned timer must produce no outcome rather than
+    // the wrong one, because timedOut has a single reader and that reader
+    // reports to the model.
+    //
+    // This closes the false report only. The replacement still drops the
+    // earlier hook's result, and checkForAsyncHookResponses deletes by the same
+    // key after an await, so it can delete a replacement it never read. Both
+    // are the same pre-existing cause — keying the map on an OS-owned
+    // identifier — and are tracked separately rather than widened into here.
     if (pendingHooks.get(processId) === entry) {
       void expireAsyncHook(processId)
     }
