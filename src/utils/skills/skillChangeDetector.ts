@@ -23,6 +23,7 @@ import { registerCleanup } from '../cleanupRegistry.js'
 import { logForDebugging } from '../debug.js'
 import { getFsImplementation } from '../fsOperations.js'
 import { executeConfigChangeHooks, hasBlockingResult } from '../hooks.js'
+import { logError } from '../log.js'
 import {
   getProjectConfigDirs,
   getProjectDirsUpToHome,
@@ -214,9 +215,18 @@ async function getWatchablePaths(): Promise<string[]> {
   // adds the main repo's copy when a worktree has no checked-out
   // <config dir>/commands, while the skills walk has no such fallback.
   // Both already filter to directories that exist, so neither needs a stat.
-  const projectRoot = getProjectRoot()
-  paths.push(...getProjectDirsUpToHome('skills', projectRoot))
-  paths.push(...getProjectConfigDirs('commands', projectRoot))
+  //
+  // Both re-throw filesystem errors they did not expect. initialize() is
+  // called with `void`, so letting one escape would take down watching of
+  // the user directories too, for a fault that only concerns the project
+  // ones. Report it and keep the paths already collected.
+  try {
+    const projectRoot = getProjectRoot()
+    paths.push(...getProjectDirsUpToHome('skills', projectRoot))
+    paths.push(...getProjectConfigDirs('commands', projectRoot))
+  } catch (error) {
+    logError(error)
+  }
 
   // Additional directories (--add-dir) skills
   for (const dir of getAdditionalDirectoriesForClaudeMd()) {
