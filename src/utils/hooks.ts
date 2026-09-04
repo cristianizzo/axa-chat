@@ -3753,7 +3753,7 @@ export async function executeStopFailureHooks(
   timeoutMs: number = TOOL_HOOK_EXECUTION_TIMEOUT_MS,
 ): Promise<void> {
   const appState = toolUseContext?.getAppState()
-  // executeHooksOutsideREPL hardcodes main sessionId (:2738). Agent frontmatter
+  // executeHooksOutsideREPL hardcodes main sessionId. Agent frontmatter
   // hooks (registerFrontmatterHooks) key by agentId; gating with agentId here
   // would pass the gate but fail execution. Align gate with execution.
   const sessionId = getSessionId()
@@ -3762,9 +3762,10 @@ export async function executeStopFailureHooks(
   const lastAssistantText =
     extractTextContent(lastMessage.message.content, '\n').trim() || undefined
 
-  // Some createAssistantAPIErrorMessage call sites omit `error` (e.g.
-  // image-size at errors.ts:431). Default to 'unknown' so matcher filtering
-  // at getMatchingHooks:1525 always applies.
+  // `error` is optional on createAssistantAPIErrorMessage and some call sites
+  // omit it — the image-too-large path in services/api/errors.ts is one.
+  // Default to 'unknown' so matcher filtering in getMatchingHooks always
+  // applies.
   const error = lastMessage.error ?? 'unknown'
   const hookInput: StopFailureHookInput = {
     ...createBaseHookInput(undefined, undefined, toolUseContext),
