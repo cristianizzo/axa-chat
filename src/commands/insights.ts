@@ -14,7 +14,11 @@ import {
 import { tmpdir } from 'os'
 import { extname, join } from 'path'
 import type { Command } from '../commands.js'
-import { CONFIG_DIR_NAME, MEMORY_FILE_NAME } from '../constants/product.js'
+import {
+  BINARY_NAME,
+  CONFIG_DIR_NAME,
+  MEMORY_FILE_NAME,
+} from '../constants/product.js'
 import { queryWithModel } from '../services/api/claude.js'
 import {
   AGENT_TOOL_NAME,
@@ -1399,7 +1403,7 @@ Include 3 friction categories with 2 examples each.`,
 
 ## CC FEATURES REFERENCE (pick from these for features_to_try):
 1. **MCP Servers**: Connect Claude to external tools, databases, and APIs via Model Context Protocol.
-   - How to use: Run \`claude mcp add <server-name> -- <command>\`
+   - How to use: Run \`${BINARY_NAME} mcp add <server-name> -- <command>\`
    - Good for: database queries, Slack integration, GitHub issue lookup, connecting to internal APIs
 
 2. **Custom Skills**: Reusable prompts you define as markdown files that run with a single /command.

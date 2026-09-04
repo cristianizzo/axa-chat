@@ -5,6 +5,7 @@ import {
   performLogout,
 } from '../../commands/logout/logout.js'
 import { ANTHROPIC_PROVIDER_ID } from '../../config/providers/index.js'
+import { BINARY_NAME } from '../../constants/product.js'
 import { setActiveAuthProvider } from '../../utils/activeAuthProvider.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -313,7 +314,7 @@ export async function authStatus(opts: {
     }
     if (!loggedIn) {
       process.stdout.write(
-        'Not logged in. Run claude auth login to authenticate.\n',
+        `Not logged in. Run ${BINARY_NAME} auth login to authenticate.\n`,
       )
     }
   } else {
