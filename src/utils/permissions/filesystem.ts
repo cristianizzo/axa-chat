@@ -4,7 +4,12 @@ import ignore from 'ignore'
 import memoize from 'lodash-es/memoize.js'
 import { homedir, tmpdir } from 'os'
 import { join, normalize, posix, sep } from 'path'
-import { hasAutoMemPathOverride, isAutoMemPath } from 'src/memdir/paths.js'
+import {
+  getAutoMemPath,
+  getMemoryBaseDir,
+  hasAutoMemPathOverride,
+  isAutoMemPath,
+} from 'src/memdir/paths.js'
 import { isAgentMemoryPath } from 'src/tools/AgentTool/agentMemory.js'
 import {
   FILE_EDIT_TOOL_NAME,
@@ -369,15 +374,28 @@ export function getClaudeTempDirName(): string {
 }
 
 /**
- * Returns the Claude temp directory path with symlinks resolved.
+ * Returns the Claude temp directory path with symlinks resolved **in its base
+ * only**, and with a trailing separator.
+ *
+ * The distinction is load-bearing and this docblock used to elide it. Only
+ * `baseTmpDir` is realpath'd; `claude-{uid}` is then appended with a plain
+ * `join` and never resolved. So if that tail component is itself a symlink,
+ * every path built on this root is lexical from there down, exactly like
+ * `getClaudeConfigHomeDir()` — and a permission check that compares a *resolved*
+ * candidate against this root will not match. That is why this root is folded
+ * in `getFoldableRootsForSession` rather than trusted as canonical, and callers
+ * that need a fully canonical path must resolve it themselves.
+ *
  * Uses TMPDIR env var if set, otherwise:
  * - On Unix: /tmp/claude-{uid}/ (resolved to /private/tmp/claude-{uid}/ on macOS)
  * - On Windows: {tmpdir}/claude/ (e.g., C:\Users\{user}\AppData\Local\Temp\claude\)
  * This is a per-user temporary directory used by Claude Code for all temp files.
  *
- * NOTE: We resolve symlinks to ensure this path matches the resolved paths used
+ * NOTE: the base is resolved so that this path matches the resolved paths used
  * in permission checks. On macOS, /tmp is a symlink to /private/tmp, so without
  * resolution, paths like /tmp/claude-{uid}/... wouldn't match /private/tmp/claude-{uid}/...
+ * That reasoning is correct for `/tmp` and does *not* extend to the
+ * `claude-{uid}` component, which is the whole of the caveat above.
  */
 // Memoized: called per-tool from permission checks (yoloClassifier, sandbox-adapter)
 // and per-turn from BashTool prompt. Inputs (CLAUDE_CODE_TMPDIR env + platform) are
@@ -2045,17 +2063,328 @@ function isReadableConfigDirPath(absolutePath: string): boolean {
 }
 
 /**
+ * The roots a resolved form may be folded back onto, each paired with the
+ * lexical spelling the carve-outs actually compare against.
+ *
+ * The two sides of a carve-out are spelled differently and always have been.
+ * `getClaudeConfigHomeDir` returns `CLAUDE_CONFIG_DIR` (or `~/CONFIG_DIR_NAME`)
+ * NFC-normalised and otherwise verbatim — no realpath — so every carve-out
+ * rooted there compares against the *lexical* spelling. `relativeToConfigDirRoot`,
+ * by contrast, expands its roots through `getResolvedConfigDirRoots`, which is
+ * why only some carve-outs care.
+ *
+ * An earlier draft of this paragraph offered `getClaudeTempDir` as the
+ * resolved-side counter-example. It is not one, and its own docblock ("with
+ * symlinks resolved") is wrong in the same way: it realpaths the *base* —
+ * `CLAUDE_CODE_TMPDIR` or `/tmp` — and then joins `claude-{uid}` without
+ * resolving it. Put a link at that tail component and the root is as lexical as
+ * the config home from there down, which is why it is in the set below. The
+ * general shape: "this one resolves" is a claim about which *component* it
+ * resolves, and a root that resolves its parent is still lexical at its leaf.
+ *
+ * The set is exactly the roots that are (a) spelled lexically by a carve-out and
+ * (b) able to be pointed somewhere non-canonical by the user's own
+ * configuration. It is deliberately not "the working tree": folding on bare
+ * `cwd` would rewrite the prefix of every resolved form under the whole project
+ * for the sake of two subtrees that can be named directly.
+ *
+ *  - the user config dir, which most lexically-spelled roots descend from —
+ *    `getProjectsDir`/`getProjectDir`, `getTeamsDir`, the tasks dir and
+ *    `getPlansDirectory`'s default are all plain `join`s off it, which is why
+ *    one fold root covers so many carve-outs;
+ *  - `getMemoryBaseDir()`, which is *not* one of those joins: with
+ *    `CLAUDE_CODE_REMOTE_MEMORY_DIR` set it returns that env value verbatim, and
+ *    `isAgentMemoryPath` user scope roots at it. Without this entry a remote
+ *    memory dir reached through a link loses both its agent-memory carve-outs;
+ *  - the project config dir at **both** `getOriginalCwd()` and `getCwd()`. They
+ *    are usually equal and dedupe away, but they are different carve-outs'
+ *    roots: `launch.json` matches against `getOriginalCwd()` while
+ *    `isAgentMemoryPath` project scope matches against `getCwd()`. Once the
+ *    session changes directory they diverge, and folding on only one of them
+ *    denies the other's carve-out;
+ *  - `getPlansDirectory()`, because `settings.plansDirectory` is resolved
+ *    against cwd and constrained only to stay inside the project root, so
+ *    `docs/plans` is legal and lands outside both config dirs;
+ *  - `getAutoMemPath()`, because `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE` and
+ *    `settings.autoMemoryDirectory` can put it anywhere on disk — including
+ *    outside the project, which bare `cwd` never covered either. Note the two
+ *    arms differ and only one of them is gated: the write carve-out is
+ *    `!hasAutoMemPathOverride() && isAutoMemPath(…)`, so an *overridden*
+ *    directory is out of scope for writes and falls through to the normal
+ *    permission flow, while the read carve-out calls `isAutoMemPath` ungated
+ *    and so covers the override directory too. The root is needed for the read
+ *    side regardless of the override;
+ *  - `getClaudeTempDir()`, for the reason given above — lexical at its `claude-{uid}`
+ *    component. Four carve-outs root there: the project temp dir, the scratchpad
+ *    pair and the bundled-skills root. Only the first is measured; the scratchpad
+ *    is behind `isScratchpadEnabled()` and bundled skills carries a per-process
+ *    nonce, so the other three are covered by construction rather than by a row.
+ *    This entry needs its trailing separator stripped, which the others do not.
+ *
+ * **NOT memoized, and that is load-bearing rather than an oversight.** It was
+ * memoized on the root list, and the cache was a hole: keying on the *lexical*
+ * roots while caching their *resolved* forms means repointing a root symlink
+ * mid-session leaves a dead directory installed as a config root. A link at a
+ * legitimate name under the live root, pointing into the dead one, then resolves
+ * to a form the stale entry still folds back onto the live lexical root, where
+ * it is re-decided as a config file and agrees — an `allow` minted out of the
+ * cache. The same stale entry denies the *live* root's own files, because their
+ * forms no longer match any cached root. audit-2-2 built the proof
+ * (`/private/tmp/axfold/stale2.mjs`); both halves reproduced, and dropping the
+ * cache closes both.
+ *
+ * Note what that does to the precedent: `resolvesToFlagConfigFile` above carries
+ * the same prohibition in capitals, and commit 5ef0c26 exists solely to record
+ * it. The argument for an exception here was that nothing is caller-supplied —
+ * the roots come from env, settings and session state. That argument is true and
+ * insufficient. What the roots *resolve to* is not session state at all; it is
+ * filesystem state, and the filesystem is exactly the thing an attacker can
+ * change under a running process. `getResolvedConfigDirRoots` caches the same
+ * quantity and has the same staleness — measured failing *open* on `d29a5bc` —
+ * so it is a second instance of the bug, not a precedent that makes it safe.
+ *
+ * The cost is real and is paid per *allowed* decision, never on the rejected
+ * path. See `allowOnlyIfResolvedFormsAgree`, which skips the fold for the
+ * written spelling, so a path with no symlinks in it does not reach here at all.
+ */
+function getFoldableRootsForSession(): {
+  lexical: string
+  resolved: string[]
+}[] {
+  return (
+    // Deduped because the pairs collapse in the common case:
+    // getMemoryBaseDir() === the config home unless CLAUDE_CODE_REMOTE_MEMORY_DIR
+    // is set, and the two project config dirs are equal until the session
+    // changes directory. Deduping keeps the usual cost at five resolutions.
+    [
+      ...new Set([
+        getClaudeConfigHomeDir(),
+        getMemoryBaseDir(),
+        join(getOriginalCwd(), CONFIG_DIR_NAME),
+        join(getCwd(), CONFIG_DIR_NAME),
+        getPlansDirectory(),
+        getAutoMemPath(),
+        // getClaudeTempDir() is the one root here that looks like it does not
+        // belong, because it advertises itself as already resolved. It is not:
+        // it realpaths only its *base* and then joins `claude-{uid}` lexically,
+        // so a link at that tail component leaves the root as lexical as the
+        // config home. It also returns a trailing separator, which must come
+        // off or `root + sep` can never prefix-match anything.
+        getClaudeTempDir().replace(/[\\/]+$/, ''),
+      ]),
+    ].map(root => ({
+      lexical: normalize(root),
+      resolved: getPathsForPermissionCheck(root).map(normalize),
+    }))
+  )
+}
+
+/**
+ * Rewrites a resolved form back into the lexical spelling of whichever root
+ * contains it, longest root first. Returns the form unchanged when no root
+ * does.
+ *
+ * This is the second half of "expand both sides". `getPathsForPermissionCheck`
+ * expands the candidate; without a matching expansion of the roots, a config
+ * dir reached through a symlink (`CLAUDE_CONFIG_DIR=/tmp/link -> /tmp/real`,
+ * or a symlinked `$HOME`) resolves to a spelling no carve-out recognises, and
+ * legitimate writes and reads turn into denials. Folding is what expanding the
+ * root side reduces to once it is pushed onto the candidate, and it fixes the
+ * class in one place rather than one predicate at a time.
+ *
+ * **23 decision cells across 15 paths and 9 carve-outs** were measured to
+ * regress without this, each confirmed by turning the fold off and watching the
+ * cell drop to `passthrough`: `isAgentMemoryPath` (user, project and local
+ * scope), `isSessionPlanFile`, `isSessionMemoryPath`, `isProjectDirPath`, the
+ * tool-results directory, tasks, teams, `launch.json`, and the project temp dir.
+ *
+ * That count carries its fixture, because a count without one is an assertion.
+ * It is from a single harness that varied: config root canonical vs symlinked,
+ * `CLAUDE_CODE_REMOTE_MEMORY_DIR` canonical vs symlinked, `getCwd()` equal to
+ * vs divergent from `getOriginalCwd()`, and the `claude-{uid}` temp component
+ * canonical vs symlinked. An independent fixture (audit-2-2's) reproduced the
+ * 9 carve-outs and 13 of the cells and explicitly declined to restate the rest
+ * as its own; a reader who reproduces 13 has not found an inflated number, they
+ * have found a smaller instrument. Two cells in the count are configuration-
+ * dependent and should be looked for in the right place: the `launch.json` and
+ * project-scope agent-memory pair separates only once the session changes
+ * directory, and the tool-results cell fires only there too — `isProjectDirPath`
+ * tests `getProjectDir(getCwd())` and is checked *earlier* in
+ * `decideReadableInternalPath`, so with the default `cwd === originalCwd` a
+ * tool-results path is answered with the project-dir reason and the tool-results
+ * block never runs at all.
+ *
+ * Treat that as a floor, not a total. The fold keys on the **root**, not on the
+ * carve-out, so it repairs every carve-out rooted at any of the roots
+ * `getFoldableRootsForSession` returns — not `getClaudeConfigHomeDir()` alone —
+ * whether or not a fixture ever exercised it; enumerating the repaired set is
+ * therefore a matter of reading roots, not of counting rows. That is the
+ * argument for folding over expanding roots inside N predicates: the N-predicate
+ * route repairs exactly the predicates someone thought to change.
+ *
+ * A caution about the counting, because it cost three of us a wrong conclusion.
+ * Five of those cells only appear once the fixture builds a path at the exact
+ * shape the predicate demands — `isSessionPlanFile` needs a `<planSlug>*.md`
+ * filename, and the other three carve-outs need
+ * `<cfg>/projects/<sanitized-cwd>/<sessionId>/…`
+ * to exist. With a generic filename the plans row does not fire at all: both
+ * forms fall through to the config-dir arm, both come back with the same reason
+ * string, and the row agrees for a reason that has nothing to do with plans. It
+ * reads as a survivor and is really a dead row. Being under an *open*
+ * config-dir subtree does not rescue a carve-out — `agent-memory` and `plans`
+ * are both in `CONFIG_DIR_OPEN_DIRS` and `agent-memory` regresses — because the
+ * fallback allows with a *different* reason string and the loop below compares
+ * reasons, not behaviours. What varies between rows is only whether the specific
+ * carve-out fires at all.
+ *
+ * It cannot launder an escape, and it is worth being exact about *why*, because
+ * the obvious answer is wrong. The obvious answer — that it only ever
+ * substitutes a prefix and never invents a relative segment — has an unstated
+ * premise: that the substituted prefix still aliases the original. A stale root
+ * breaks that premise, and when this function cached its roots that was a
+ * demonstrated way to mint an allow (see `getFoldableRootsForSession` above).
+ * Prefix-only substitution is a necessary property, not a sufficient one.
+ *
+ * The sufficient one is upstream: `allowOnlyIfResolvedFormsAgree` takes the
+ * decision for the path **as written**, unfolded, and only consults resolved
+ * forms if that decision was already an `allow` of a known identity. So folding
+ * can never *promote* a path — it can only take an already-granted allow away.
+ * Within that gate the rest follows: a form that resolves outside every root
+ * keeps no root prefix and so is decided literally; a form that resolves to a
+ * *different* path under the same root is folded to its true relative path and
+ * gets its true classification, which for `sessions/` or `history.jsonl` is not
+ * an allow.
+ *
+ * The load-bearing part is that the folded string is then *re-decided* by the
+ * whole carve-out chain, not by the carve-out that admitted the path as
+ * written. So a rewritten spelling can match a *different* carve-out than the
+ * one the caller aimed at — `<cfg>/plans/link.md -> <cfg>/agents/a.md` is
+ * decided as an agents-dir path. That is correct rather than merely tolerable,
+ * because the two spellings name the same inode: the only thing that made the
+ * second carve-out applicable is a link the user's own configuration put there,
+ * and the alternative — deciding the target under the *source's* carve-out —
+ * is the laundering this function exists to prevent. Re-deciding can therefore
+ * change which allow is granted, but it cannot grant an allow to a file that
+ * would not have one under its own name.
+ */
+function foldResolvedRootPrefix(form: string): string {
+  const normalizedForm = normalize(form)
+  const formLower = normalizeCaseForComparison(normalizedForm)
+  let folded: string | undefined
+  let foldedRootLength = -1
+  for (const { lexical, resolved } of getFoldableRootsForSession()) {
+    for (const rootForm of resolved) {
+      // Longest matching root wins, and this is load-bearing rather than
+      // defensive — but not for the reason an earlier draft of this comment
+      // gave. That draft justified it with `cwd` ⊃ `cwd/.axa`, a nesting that is
+      // not in the root set at all. The nestings that *are* (plansDir and
+      // getAutoMemPath() inside the config home) cannot observe the rule either:
+      // there the inner root's lexical spelling is the outer's plus a suffix, so
+      // both candidate folds emit the same string.
+      //
+      // The configuration that observes it is two *different* links resolving
+      // into one another: CLAUDE_CONFIG_DIR -> <realcfg> together with
+      // CLAUDE_CODE_REMOTE_MEMORY_DIR -> <realcfg>/mem. A form under
+      // <realcfg>/mem/agent-memory then matches both roots, and only the longer
+      // one folds it to a spelling `isAgentMemoryPath` accepts. Inverting this
+      // line to shortest-wins drops that row from `allow` to `passthrough`,
+      // which is the control that makes the claim a measurement.
+      //
+      // The comparison is across *different* roots and uses the length of the
+      // **resolved** form, which is the side the candidate is matched against.
+      // `<=` sends ties to the earlier root in the list above; a tie means two
+      // roots resolve to the same directory, so the two folds differ only in
+      // which lexical spelling of that one directory comes back.
+      if (rootForm.length <= foldedRootLength) continue
+      const rootLower = normalizeCaseForComparison(rootForm)
+      if (formLower === rootLower) {
+        folded = lexical
+        foldedRootLength = rootForm.length
+        continue
+      }
+      for (const s of new Set([sep, '/'])) {
+        if (formLower.startsWith(rootLower + s)) {
+          folded =
+            lexical + sep + normalizedForm.slice(rootForm.length + s.length)
+          foldedRootLength = rootForm.length
+          break
+        }
+      }
+    }
+  }
+  return folded ?? normalizedForm
+}
+
+/**
  * Runs a carve-out chain against every resolved form of `absolutePath` and only
  * keeps an `allow` that survives all of them.
  *
- * Every carve-out below matches on the path *as written* — a prefix, a filename
- * suffix, an exact string. None of them looks at what the path resolves to, so
+ * Most carve-outs below match on the path *as written* — a prefix, a filename
+ * suffix, an exact string — and do not look at what the path resolves to, so
  * a symlink placed at an accepted name launders a write or read to its target:
  * `agent-memory/x.md -> ~/.ssh/authorized_keys` is allowed as an agent-memory
- * file. Fourteen of the carve-outs in these two functions were exploitable that
- * way, which is why this is one screen ahead of all of them rather than a
- * resolution check added to each. A per-carve-out fix is N places that must
- * each stay correct, and carve-out N+1 would be written without one.
+ * file.
+ *
+ * Counted by reading rather than by fixture: the write and read carve-out
+ * chains hold **19 allow-returning decision sites** (7 write, 12 read), which
+ * dedupe to **14 distinct carve-outs** — five (plans, scratchpad, agent memory,
+ * auto memory and the config dir) appear in both chains. **Twelve of the 14
+ * were laundering-exploitable; 16 of the 19 sites were.**
+ *
+ * "Chains" rather than "these two functions" on purpose: the numbers are
+ * measured on `d29a5bc`, where `decideEditableInternalPath` and
+ * `decideReadableInternalPath` do not yet exist — `dd51aad` extracted them out
+ * of the `check*InternalPath` pair. All 19 `reason` strings are present at
+ * `d29a5bc` unchanged, verified independently from both sides, so the
+ * population transfers across the extraction 1:1 with nothing added or merged.
+ *
+ * Count in **sites**, not in observed arms. A site is a lexical `allow` return
+ * and each of the 19 carries a distinct `reason`, so sites and identities
+ * correspond one-to-one and the count is configuration-independent. Which site
+ * a given path actually *reaches* is not: with `tengu_scratch` off a
+ * scratchpad path falls past its own site to the project-temp-dir site below
+ * it and is allowed under that reason instead, and with
+ * `getCwd() === getOriginalCwd()` the tool-results path is taken by
+ * `isProjectDirPath` earlier in the read chain. An independent fixture
+ * measured 16 exploitable arms in the maximal configuration, where the two
+ * counts coincide, and 13 arms over 15 sites at the defaults. Quoting an arm
+ * count without both of those conditions is what made an earlier version of
+ * this docblock say "fourteen" with no configuration attached.
+ *
+ * Two carve-outs already resolved both sides, and they are the argument for
+ * putting this one screen ahead of all of them rather than bolting a check onto
+ * each:
+ *
+ * - `classifyConfigDirPath` (the read and write config-dir sites) loops
+ *   `getPathsForPermissionCheck` and returns `'outside'` if any form escapes —
+ *   this function's rule, applied to one carve-out. Its own docblock already
+ *   names the job-dir block as its model ("Same guard as the template job
+ *   directory above"), and both predate this branch. **Measured**: the
+ *   legitimate row allows, so the site is reachable rather than silent, and
+ *   both symlink attacks are denied.
+ * - the TEMPLATES job-dir block. **By reading only** — `feature('TEMPLATES')`
+ *   is a `bun:bundle` import and is false under bare `bun`, so that site never
+ *   fires in a fixture. A site that never fires is silence, not a negative
+ *   control, and it is the one figure here that no measurement backs.
+ *
+ * **Do not enumerate this by grepping these two functions.** `grep` for
+ * `getPathsForPermissionCheck`/`realpathSync` inside the two spans matches the
+ * job-dir block and nothing else, because the config-dir guard lives one call
+ * away in the callee. It returns a hit, so it reads as having worked, and it
+ * hides the very carve-out that is the existence proof for this design. Two
+ * successive versions of the count above were wrong through exactly that.
+ *
+ * All 16 close *here*, measured per commit in the maximal configuration: 16 on
+ * `d29a5bc`, 0 once this function exists, 0 at every commit after. The fold
+ * below closes none of its own — it exists to stop this function false-denying
+ * on a root that is not spelled canonically. Anything crediting the fold with
+ * the closure has the attribution backwards.
+ *
+ * A per-carve-out fix is N places that must each stay correct, and carve-out
+ * N+1 would be written without one. The config-dir guard is the proof in both
+ * directions: it is simultaneously the carve-out that got this right and, by
+ * sitting one frame below the obvious instrument, the reason a hand-maintained
+ * count of the others drifted twice.
  *
  * Two properties are load-bearing:
  *
@@ -2070,9 +2399,47 @@ function isReadableConfigDirPath(absolutePath: string): boolean {
  *   was. Matching the reason is what ties the target back to the specific
  *   carve-out that admitted the link.
  *
+ * The reason rule has a deliberate cost, and it is the one thing here most
+ * likely to be reported as a bug. **A symlink at a name one carve-out admits,
+ * pointing at a file another carve-out admits, is denied even though both
+ * endpoints are individually allowed.** Enumerating every ordered pair of
+ * distinct carve-outs puts that at order-of-tens of pairs, not two or three, so
+ * it is a category rather than a corner. It is accepted because matching on
+ * `behavior` alone — the only alternative that admits them — is exactly the
+ * unsound rule above. In practice nothing links `tasks/` at `teams/`; the single
+ * plausible pair is agent-memory against the config dir, and the realistic
+ * dotfiles case links *outward*, which this denies as a security fix regardless.
+ *
  * The decision for the path as written is taken first and returned unchanged
- * unless a resolved form disagrees, so this can only ever narrow: a path that
- * is not a symlink resolves to itself and reaches the identical result.
+ * unless a resolved form disagrees. On a canonical config root that makes this
+ * purely narrowing — a path that is not a symlink resolves to itself and
+ * reaches the identical result. It is *not* narrowing-by-construction, and the
+ * earlier claim here that it was is what `foldResolvedRootPrefix` above exists
+ * to repair: when the config root is itself reached through a link, resolution
+ * hands the chain a spelling the carve-outs never see, and the disagreement is
+ * between two spellings of the same file rather than between a link and its
+ * target. Measured, that denied 23 decision cells across 9 carve-outs. Every
+ * resolved form is therefore folded back onto the lexical root before it is
+ * decided, so the comparison is like-for-like on both sides.
+ *
+ * Cost, measured rather than estimated, and attributed to the right change —
+ * an earlier draft of this comment charged the fold with the *chokepoint's*
+ * cost, because the figure was taken against `d29a5bc` rather than against the
+ * commit below. Per allowed decision, µs/call:
+ *
+ *                              canonical root   root via a symlink
+ *   d29a5bc (no chokepoint)          71               84 (wrong answer)
+ *   chokepoint alone                148              277 (false denial)
+ *   + this fold                     152              331
+ *
+ * So the chokepoint costs ~+77µs and this fold ~+4µs in the default layout,
+ * where `~/.axa` is a real directory: the identity-form skip below means a path
+ * with no symlinks never resolves a root at all. The ~+54µs is paid only when
+ * the config root is itself a link, only on decisions that were already going
+ * to be allowed, and it buys back the 277µs `passthrough` in the row above it,
+ * which is a *denial of a legitimate write*. The rejected path is unchanged at
+ * ~112µs and is the common one: the early return means nothing here is resolved
+ * unless the path as written was already going to be allowed.
  *
  * This settles the decision, not the race. Resolution is a filesystem read and
  * the write happens later in FileWriteTool with no O_NOFOLLOW, so a link
@@ -2105,7 +2472,17 @@ function allowOnlyIfResolvedFormsAgree(
     return denied
   }
   for (const form of getPathsForPermissionCheck(absolutePath)) {
-    const formDecision = decide(form, input)
+    // The written spelling is never folded. `decide(absolutePath)` above already
+    // returned `identity` for that exact string, so re-deciding it is a no-op
+    // that cannot fail — and folding it first could only rewrite it into some
+    // *other* carve-out's namespace and manufacture a disagreement with the
+    // decision this loop is checking. Skipping it is therefore free of
+    // behaviour, and it is also where the cost goes: a path with no symlinks in
+    // it has exactly one form, so the common case resolves no roots at all.
+    const formDecision = decide(
+      form === absolutePath ? form : foldResolvedRootPrefix(form),
+      input,
+    )
     if (
       formDecision.behavior !== 'allow' ||
       identify(formDecision) !== identity
