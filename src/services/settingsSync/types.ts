@@ -56,7 +56,20 @@ export type SettingsSyncUploadResult = {
 }
 
 /**
- * Keys used for sync entries
+ * Keys used for sync entries.
+ *
+ * These are wire identifiers, not paths, and the `.claude` spelling is frozen
+ * deliberately — do not "fix" it to CONFIG_DIR_NAME. They are only ever used to
+ * index `entries` (see UserSyncContentSchema above: "keys are opaque strings");
+ * no filesystem call ever receives one. Both directions resolve the real local
+ * path separately, through getSettingsFilePathForSource() and getMemoryPath().
+ *
+ * They name slots in a server-side record keyed by userId, shared with upstream
+ * Claude Code for the same account, so they mirror upstream's layout rather than
+ * this fork's. Renaming them would orphan every entry already stored under the
+ * old key and desynchronise a user who runs both clients. That is also why
+ * `projectMemory` is `CLAUDE.local.md` with no `.claude` segment: the set is not
+ * a path scheme and was never internally uniform.
  */
 export const SYNC_KEYS = {
   USER_SETTINGS: '~/.claude/settings.json',
