@@ -2,13 +2,17 @@
  * What this tool calls itself in the terminal.
  *
  * Only for text the user reads. Everything with a contract attached keeps its
- * upstream name: the `CLAUDE_CODE_*` environment variables, `CLAUDE.md`, model
- * ids, and the prompts sent to the model — renaming those breaks compatibility
- * or changes model behaviour. Statements about Anthropic ("Claude Max",
- * claude.ai, the Claude desktop app) also stay as they are, since they are true
- * and this fork does not replace them.
+ * upstream name: the `CLAUDE_CODE_*` environment variables, model ids, and the
+ * prompts sent to the model — renaming those breaks compatibility or changes
+ * model behaviour. Statements about Anthropic ("Claude Max", claude.ai, the
+ * Claude desktop app) also stay as they are, since they are true and this fork
+ * does not replace them.
  *
- * The home config directory is the one exception: see CONFIG_DIR_NAME.
+ * The exceptions are axa's own storage — the config directory at both scopes
+ * (CONFIG_DIR_NAME) and the project instruction files (MEMORY_FILE_NAME,
+ * LOCAL_MEMORY_FILE_NAME). Those are files axa itself reads and writes, so
+ * there is no upstream contract to keep: `CLAUDE.md` is *not* one of the names
+ * this fork preserves.
  */
 export const PRODUCT_NAME = 'AXA Chat'
 
