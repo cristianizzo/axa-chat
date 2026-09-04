@@ -173,7 +173,7 @@ async function getWatchablePaths(): Promise<string[]> {
   const fs = getFsImplementation()
   const paths: string[] = []
 
-  // User skills directory (~/.claude/skills)
+  // User skills directory (~/<config dir>/skills)
   const userSkillsPath = getSkillsPath('userSettings', 'skills')
   if (userSkillsPath) {
     try {
@@ -184,7 +184,7 @@ async function getWatchablePaths(): Promise<string[]> {
     }
   }
 
-  // User commands directory (~/.claude/commands)
+  // User commands directory (~/<config dir>/commands)
   const userCommandsPath = getSkillsPath('userSettings', 'commands')
   if (userCommandsPath) {
     try {
@@ -195,7 +195,7 @@ async function getWatchablePaths(): Promise<string[]> {
     }
   }
 
-  // Project skills directory (.claude/skills)
+  // Project skills directory (<config dir>/skills)
   const projectSkillsPath = getSkillsPath('projectSettings', 'skills')
   if (projectSkillsPath) {
     try {
@@ -208,7 +208,7 @@ async function getWatchablePaths(): Promise<string[]> {
     }
   }
 
-  // Project commands directory (.claude/commands)
+  // Project commands directory (<config dir>/commands)
   const projectCommandsPath = getSkillsPath('projectSettings', 'commands')
   if (projectCommandsPath) {
     try {

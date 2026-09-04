@@ -74,7 +74,13 @@ export type LoadedFrom =
   | 'mcp'
 
 /**
- * Returns a claude config directory path for a given source.
+ * Returns the config directory path a given source loads skills or commands
+ * from.
+ *
+ * Must stay in step with what `getSkillDirCommands` actually reads: the
+ * skill-change watcher watches these paths, and the /skills menu shows them,
+ * so a path here that the loader does not use means a directory watched but
+ * never loaded and a location shown to the user that holds nothing.
  */
 export function getSkillsPath(
   source: SettingSource | 'plugin',
@@ -86,7 +92,7 @@ export function getSkillsPath(
     case 'userSettings':
       return join(getClaudeConfigHomeDir(), dir)
     case 'projectSettings':
-      return `.claude/${dir}`
+      return join(CONFIG_DIR_NAME, dir)
     case 'plugin':
       return 'plugin'
     default:
