@@ -2,29 +2,40 @@ import { homedir } from 'os';
 import { basename, join, sep } from 'path';
 import React, { type ReactNode } from 'react';
 import { getOriginalCwd } from '../../../bootstrap/state.js';
-import { ASSISTANT_NAME, CONFIG_DIR_NAME } from '../../../constants/product.js';
+import { ASSISTANT_NAME, CONFIG_DIR_NAME, LEGACY_CONFIG_DIR_NAME } from '../../../constants/product.js';
 import { Text } from '../../../ink.js';
 import { getShortcutDisplay } from '../../../keybindings/shortcutFormat.js';
 import type { ToolPermissionContext } from '../../../Tool.js';
 import { expandPath, getDirectoryForPath } from '../../../utils/path.js';
 import { normalizeCaseForComparison, pathInAllowedWorkingPath } from '../../../utils/permissions/filesystem.js';
 import type { OptionWithDescription } from '../../CustomSelect/select.js';
-/**
- * Check if a path is within the project's .claude/ folder.
- * This is used to determine whether to show the special ".claude folder" permission option.
- */
-export function isInClaudeFolder(filePath: string): boolean {
-  const absolutePath = expandPath(filePath);
-  const claudeFolderPath = expandPath(`${getOriginalCwd()}/.claude`);
+function isInFolder(filePath: string, folderPath: string): boolean {
+  const normalizedAbsolutePath = normalizeCaseForComparison(expandPath(filePath));
+  const normalizedFolderPath = normalizeCaseForComparison(folderPath);
 
-  // Check if the path is within the project's .claude folder
-  const normalizedAbsolutePath = normalizeCaseForComparison(absolutePath);
-  const normalizedClaudeFolderPath = normalizeCaseForComparison(claudeFolderPath);
-
-  // Path must start with the .claude folder path (and be inside it, not just the folder itself)
-  return normalizedAbsolutePath.startsWith(normalizedClaudeFolderPath + sep.toLowerCase()) ||
+  // Path must start with the folder path (and be inside it, not just the folder itself)
+  return normalizedAbsolutePath.startsWith(normalizedFolderPath + sep.toLowerCase()) ||
   // Also match case where sep is / on posix systems
-  normalizedAbsolutePath.startsWith(normalizedClaudeFolderPath + '/');
+  normalizedAbsolutePath.startsWith(normalizedFolderPath + '/');
+}
+
+/**
+ * Which project-scope config folder a path sits in, if any.
+ *
+ * Two spellings, because this fork's project config dir is CONFIG_DIR_NAME
+ * ('.axa') but LEGACY_CONFIG_DIR_NAME ('.claude') is still protected for
+ * projects that predate the rename. The returned scope decides which pattern
+ * usePermissionHandler writes, and a rule for the wrong spelling would match
+ * nothing — an option that appears to grant access and does not.
+ */
+export function getProjectConfigFolderScope(filePath: string): 'project-config-folder' | 'legacy-project-config-folder' | null {
+  if (isInFolder(filePath, expandPath(join(getOriginalCwd(), CONFIG_DIR_NAME)))) {
+    return 'project-config-folder';
+  }
+  if (isInFolder(filePath, expandPath(join(getOriginalCwd(), LEGACY_CONFIG_DIR_NAME)))) {
+    return 'legacy-project-config-folder';
+  }
+  return null;
 }
 
 /**
@@ -37,17 +48,14 @@ export function isInClaudeFolder(filePath: string): boolean {
  * mismatch would offer an option that grants nothing.
  */
 export function isInGlobalClaudeFolder(filePath: string): boolean {
-  const absolutePath = expandPath(filePath);
-  const globalClaudeFolderPath = join(homedir(), CONFIG_DIR_NAME);
-  const normalizedAbsolutePath = normalizeCaseForComparison(absolutePath);
-  const normalizedGlobalClaudeFolderPath = normalizeCaseForComparison(globalClaudeFolderPath);
-  return normalizedAbsolutePath.startsWith(normalizedGlobalClaudeFolderPath + sep.toLowerCase()) || normalizedAbsolutePath.startsWith(normalizedGlobalClaudeFolderPath + '/');
+  return isInFolder(filePath, join(homedir(), CONFIG_DIR_NAME));
 }
+export type ConfigFolderScope = 'project-config-folder' | 'legacy-project-config-folder' | 'global-config-folder';
 export type PermissionOption = {
   type: 'accept-once';
 } | {
   type: 'accept-session';
-  scope?: 'claude-folder' | 'global-claude-folder';
+  scope?: ConfigFolderScope;
 } | {
   type: 'reject';
 };
@@ -99,21 +107,21 @@ export function getFilePermissionOptions({
   }
   const inAllowedPath = pathInAllowedWorkingPath(filePath, toolPermissionContext);
 
-  // Check if this is a .claude/ folder path (project or global)
-  const inClaudeFolder = isInClaudeFolder(filePath);
+  // Check if this is a config folder path (project, legacy project, or global)
+  const projectConfigFolderScope = getProjectConfigFolderScope(filePath);
   const inGlobalClaudeFolder = isInGlobalClaudeFolder(filePath);
 
   // Option 2: For .claude/ folder, show special option instead of generic session option
   // Note: Session-level options are always shown since they only affect in-memory state,
   // not persisted settings. The allowManagedPermissionRulesOnly setting only restricts
   // persisted permission rules.
-  if ((inClaudeFolder || inGlobalClaudeFolder) && operationType !== 'read') {
+  if ((projectConfigFolderScope !== null || inGlobalClaudeFolder) && operationType !== 'read') {
     options.push({
       label: `Yes, and allow ${ASSISTANT_NAME} to edit its own settings for this session`,
       value: 'yes-claude-folder',
       option: {
         type: 'accept-session',
-        scope: inGlobalClaudeFolder ? 'global-claude-folder' : 'claude-folder'
+        scope: inGlobalClaudeFolder ? 'global-config-folder' : projectConfigFolderScope!
       }
     });
   } else {
