@@ -2119,7 +2119,10 @@ function isReadableConfigDirPath(absolutePath: string): boolean {
  *    pair and the bundled-skills root. Only the first is measured; the scratchpad
  *    is behind `isScratchpadEnabled()` and bundled skills carries a per-process
  *    nonce, so the other three are covered by construction rather than by a row.
- *    This entry needs its trailing separator stripped, which the others do not.
+ *    It returns a trailing separator — but so can other roots in this list, and
+ *    an earlier version of this comment claimed the strip was needed for this
+ *    entry alone. That was false: see `stripTrailingSeparators`, which is now
+ *    applied uniformly to every root on both sides.
  *
  * **NOT memoized, and that is load-bearing rather than an oversight.** It was
  * memoized on the root list, and the cache was a hole: keying on the *lexical*
@@ -2147,6 +2150,41 @@ function isReadableConfigDirPath(absolutePath: string): boolean {
  * path. See `allowOnlyIfResolvedFormsAgree`, which skips the fold for the
  * written spelling, so a path with no symlinks in it does not reach here at all.
  */
+/**
+ * Removes trailing separators from a fold root. Applied to **both** sides.
+ *
+ * Neither side gets this for free, and the two miss it for different reasons.
+ * `normalize` only collapses *duplicate* separators — it **preserves** a single
+ * trailing one — and `getPathsForPermissionCheck` adds the path as written
+ * alongside its realpath, so a root that arrives with a trailing separator keeps
+ * it on the `lexical` side and on at least one `resolved` form. (`realpath`
+ * strips it, which is why the `rootLower + sep` prefix test is not the thing
+ * that breaks first.)
+ *
+ * The consequence in `foldResolvedRootPrefix` is a doubled separator: the arm
+ * that emits `lexical + sep + rest` produces `…/cfg//agent-memory`, which
+ * matches no carve-out. Worse than not helping — because that root's resolved
+ * form is *longer*, it wins longest-match and displaces a fold that would
+ * otherwise have been clean.
+ *
+ * More than one root can arrive that way, so do not read this as special-casing
+ * one entry. `getAutoMemPath()` ends in `sep` **by contract** — `validateMemoryPath`
+ * strips any trailing separators and re-adds exactly one, and `isAutoMemPath`
+ * prefix-matches against it — which is precisely why the separator is normalised
+ * here, on the way in, rather than at the producer. `getClaudeConfigHomeDir()`
+ * and `getMemoryBaseDir()` return their environment variable verbatim, so a user
+ * trailing slash in `CLAUDE_CONFIG_DIR` reaches this function unaltered; note
+ * those two are the same string unless `CLAUDE_CODE_REMOTE_MEMORY_DIR` is set,
+ * so they are two sources but one value at the defaults.
+ *
+ * Never strips to the empty string. An empty root prefix-matches every absolute
+ * path, which would fold the whole filesystem onto one lexical spelling.
+ */
+function stripTrailingSeparators(root: string): string {
+  const stripped = root.replace(/[\\/]+$/, '')
+  return stripped === '' ? root : stripped
+}
+
 function getFoldableRootsForSession(): {
   lexical: string
   resolved: string[]
@@ -2168,13 +2206,16 @@ function getFoldableRootsForSession(): {
         // belong, because it advertises itself as already resolved. It is not:
         // it realpaths only its *base* and then joins `claude-{uid}` lexically,
         // so a link at that tail component leaves the root as lexical as the
-        // config home. It also returns a trailing separator, which must come
-        // off or `root + sep` can never prefix-match anything.
-        getClaudeTempDir().replace(/[\\/]+$/, ''),
+        // config home. It also returns a trailing separator — as can the two
+        // env-backed roots above, which is why the strip below is uniform
+        // rather than attached to this entry.
+        getClaudeTempDir(),
       ]),
     ].map(root => ({
-      lexical: normalize(root),
-      resolved: getPathsForPermissionCheck(root).map(normalize),
+      lexical: stripTrailingSeparators(normalize(root)),
+      resolved: getPathsForPermissionCheck(root).map(form =>
+        stripTrailingSeparators(normalize(form)),
+      ),
     }))
   )
 }
