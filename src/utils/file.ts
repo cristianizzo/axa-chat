@@ -424,6 +424,18 @@ export function writeFileSyncAndFlush_DEPRECATED(
     // caller's requested mode when it does not, so it is correct in both
     // cases. Masked because it comes from statSync().mode, which carries the
     // file-type bits.
+    //
+    // 0o7777 rather than 0o777 so setuid/setgid/sticky ride along. Be honest
+    // about what that is worth: on the runtime we ship, it currently buys
+    // nothing. Measured on bun 1.x / macOS, chmodSync(f, 0o4700) stats back as
+    // 0o700 — bun drops all three special bits, while node on the same machine
+    // and filesystem keeps setuid and sticky, and shell `chmod 4700` sets them.
+    // So the bits cannot reach targetMode here in the first place, and 0o777
+    // would behave identically today. The wider mask is kept because it is what
+    // the fs contract actually says, so the day bun stops masking, this line is
+    // already right rather than newly wrong — and being wrong here would mean
+    // creating the temp file below its target's mode and letting the chmod add
+    // the difference, which is precisely the window this block exists to close.
     const writeOptions: {
       encoding: BufferEncoding
       flush: boolean
@@ -433,7 +445,7 @@ export function writeFileSyncAndFlush_DEPRECATED(
       flush: true,
     }
     if (targetMode !== undefined) {
-      writeOptions.mode = targetMode & 0o777
+      writeOptions.mode = targetMode & 0o7777
     }
 
     fsWriteFileSync(tempPath, content, writeOptions)
@@ -442,8 +454,14 @@ export function writeFileSyncAndFlush_DEPRECATED(
     )
 
     // Restore the exact mode: the creation mode above was clamped by the umask.
+    // Masked for the same reason as the creation mode, and for one more: POSIX
+    // leaves chmod's behaviour unspecified when bits outside 07777 are set, and
+    // statSync().mode always has S_IFREG set here. Passing the raw value did
+    // work — verified, no throw, correct resulting mode — but it worked because
+    // both kernels we run on choose to ignore those bits, not because anything
+    // guarantees it.
     if (targetExists && targetMode !== undefined) {
-      chmodSync(tempPath, targetMode)
+      chmodSync(tempPath, targetMode & 0o7777)
       logForDebugging(`Applied original permissions to temp file`)
     }
 
