@@ -1174,6 +1174,41 @@ export async function markMessagesAsReadByPredicate(
 }
 
 /**
+ * Identity key for a mailbox message.
+ *
+ * `timestamp` is an ISO string with milliseconds, stamped by the sender, so
+ * two messages collide only if the same agent sent byte-identical text within
+ * the same millisecond — in which case they are indistinguishable to the
+ * recipient anyway and treating them as one is the intended outcome.
+ */
+function messageKey(m: TeammateMessage): string {
+  return `${m.from}\u0000${m.timestamp}\u0000${m.text}`
+}
+
+/**
+ * Marks exactly the given messages as read, leaving anything that arrived
+ * afterwards unread.
+ *
+ * Callers that snapshot the inbox and then do async work must use this rather
+ * than markMessagesAsRead. A teammate can write to the inbox at any point
+ * during that work, and markMessagesAsRead marks whatever is on disk when it
+ * runs — so a message that arrived after the snapshot is marked read without
+ * ever having been delivered, and no later poll will pick it up.
+ */
+export async function markMessagesAsReadBySnapshot(
+  agentName: string,
+  snapshot: TeammateMessage[],
+  teamName?: string,
+): Promise<void> {
+  const keys = new Set(snapshot.map(messageKey))
+  await markMessagesAsReadByPredicate(
+    agentName,
+    m => keys.has(messageKey(m)),
+    teamName,
+  )
+}
+
+/**
  * Extracts a "[to {name}] {summary}" string from the last assistant message
  * if it ended with a SendMessage tool_use targeting a peer (not the team lead).
  * Returns undefined when the turn didn't end with a peer DM.
