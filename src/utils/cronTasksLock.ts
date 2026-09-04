@@ -1,4 +1,4 @@
-// Scheduler lease lock for .claude/scheduled_tasks.json.
+// Scheduler lease lock for .axa/scheduled_tasks.json.
 //
 // When multiple Claude sessions run in the same project directory, only one
 // should drive the cron scheduler. The first session to acquire this lock
@@ -75,7 +75,7 @@ async function tryCreateExclusive(
     const code = getErrnoCode(e)
     if (code === 'EEXIST') return false
     if (code === 'ENOENT') {
-      // .claude/ doesn't exist yet — create it and retry once. In steady
+      // .axa/ doesn't exist yet — create it and retry once. In steady
       // state the dir already exists (scheduled_tasks.json lives there),
       // so this path is hit at most once.
       await mkdir(dirname(path), { recursive: true })
