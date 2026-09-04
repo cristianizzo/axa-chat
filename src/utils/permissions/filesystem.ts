@@ -1931,7 +1931,11 @@ const CONFIG_DIR_READABLE_DIRS = new Set([
  *   rules first.
  * - `--mcp-config <path>` — MCP server entries carry `env` blocks and a spawned
  *   `command`, so a silent write there is code execution on the next launch.
- *   (The inline-JSON form of the flag has no path and cannot be written to.)
+ *   Its inline-JSON form is parsed straight from the argument and has no path,
+ *   so there is nothing to protect. Do not generalise that to `--settings`:
+ *   CLI-inline `--settings '{...}'` *does* get a path, because loadSettingsFromFlag
+ *   writes it to a temp file. It is safe for a different reason — the temp dir
+ *   is outside every config dir, so the carve-out never classifies it 'open'.
  *
  * Either can be aimed inside a config directory that this file otherwise treats
  * as freely readable or writable, and those branches run before step 1.7's
@@ -1941,18 +1945,26 @@ const CONFIG_DIR_READABLE_DIRS = new Set([
  * symlink at `~/.axa/agent-memory/alias.json` pointing at such a file elsewhere
  * under the config dir passes the classifier — every form is still `open` — and
  * a check on the literal path alone would not see what it resolves to.
+ *
+ * Both sides are expanded, not just the candidate. `--settings` stores a
+ * realpath-canonical path but `--mcp-config` stores a lexically resolved one, so
+ * comparing expanded-candidate against stored-string catches a symlink aimed at
+ * the flag path while missing the case where the flag path is *itself* a symlink
+ * and the tool targets its target. Laundering has two directions and covering
+ * one of them is the recurring defect in this area; comparing form-set against
+ * form-set is what makes the direction stop mattering.
  */
 function resolvesToFlagConfigFile(absolutePath: string): boolean {
-  const flagMcpConfigPaths = getFlagMcpConfigPaths().map(path =>
-    normalizeCaseForComparison(normalize(path)),
+  const normalizeForm = (path: string): string =>
+    normalizeCaseForComparison(normalize(path))
+  const flagConfigForms = new Set(
+    getFlagMcpConfigPaths().flatMap(path =>
+      getPathsForPermissionCheck(path).map(normalizeForm),
+    ),
   )
-  return getPathsForPermissionCheck(absolutePath).some(form => {
-    if (isClaudeSettingsPath(form)) {
-      return true
-    }
-    const normalizedForm = normalizeCaseForComparison(normalize(form))
-    return flagMcpConfigPaths.includes(normalizedForm)
-  })
+  return getPathsForPermissionCheck(absolutePath).some(
+    form => isClaudeSettingsPath(form) || flagConfigForms.has(normalizeForm(form)),
+  )
 }
 
 /**
