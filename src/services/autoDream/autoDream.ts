@@ -232,6 +232,16 @@ ${sessionIds.map(id => `- ${id}`).join('\n')}`
         onMessage: makeDreamProgressWatcher(taskId, setAppState),
       })
 
+      // An abort does not reject: query() returns { reason: 'aborted_tools' }
+      // and runForkedAgent has no abort check, so a killed dream lands here
+      // rather than in the catch below. DreamTask.kill has already set
+      // status=killed and rolled the lock back — reporting success now would
+      // both relabel the task and claim memories were improved.
+      if (abortController.signal.aborted) {
+        logForDebugging('[autoDream] aborted by user')
+        return
+      }
+
       completeDreamTask(taskId, setAppState)
       // Inline completion summary in the main transcript (same surface as
       // extractMemories's "Saved N memories" message).

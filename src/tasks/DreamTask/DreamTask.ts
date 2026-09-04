@@ -110,23 +110,37 @@ export function completeDreamTask(
   // notified: true immediately — dream has no model-facing notification path
   // (it's UI-only), and eviction requires terminal + notified. The inline
   // appendSystemMessage completion note IS the user surface.
-  updateTaskState<DreamTaskState>(taskId, setAppState, task => ({
-    ...task,
-    status: 'completed',
-    endTime: Date.now(),
-    notified: true,
-    abortController: undefined,
-  }))
+  //
+  // The status !== 'running' guard makes terminal states terminal. It matters
+  // because query() does not throw when the abort signal fires — it returns
+  // { reason: 'aborted_tools' } — so runForkedAgent resolves normally after a
+  // kill and autoDream reaches this call rather than its catch block. Without
+  // the guard, a killed dream is relabelled 'completed'.
+  updateTaskState<DreamTaskState>(taskId, setAppState, task =>
+    task.status !== 'running'
+      ? task
+      : {
+          ...task,
+          status: 'completed',
+          endTime: Date.now(),
+          notified: true,
+          abortController: undefined,
+        },
+  )
 }
 
 export function failDreamTask(taskId: string, setAppState: SetAppState): void {
-  updateTaskState<DreamTaskState>(taskId, setAppState, task => ({
-    ...task,
-    status: 'failed',
-    endTime: Date.now(),
-    notified: true,
-    abortController: undefined,
-  }))
+  updateTaskState<DreamTaskState>(taskId, setAppState, task =>
+    task.status !== 'running'
+      ? task
+      : {
+          ...task,
+          status: 'failed',
+          endTime: Date.now(),
+          notified: true,
+          abortController: undefined,
+        },
+  )
 }
 
 export const DreamTask: Task = {
