@@ -21,6 +21,11 @@ export type PendingAsyncHook = {
   command: string
   responseAttachmentSent: boolean
   shellCommand?: ShellCommand
+  /**
+   * Set when the hook was killed for exceeding its timeout. Checked before the
+   * plain 'killed' handling so the timeout is reported rather than discarded.
+   */
+  timedOut: boolean
   /** Stops both the progress interval and the timeout timer for this hook. */
   stopTimers: () => void
 }
@@ -97,6 +102,7 @@ export function registerPendingAsyncHook({
     timeout,
     responseAttachmentSent: false,
     shellCommand,
+    timedOut: false,
     stopTimers: () => {
       stopProgressInterval()
       clearTimeout(timeoutTimer)
@@ -105,28 +111,33 @@ export function registerPendingAsyncHook({
 }
 
 /**
- * Kills an async hook that outlived its timeout and reports it as a failure.
+ * Kills an async hook that outlived its timeout, and flags it so the next
+ * checkForAsyncHookResponses pass reports it instead of dropping it.
  *
- * Skips hooks whose process already exited: those have output worth delivering,
- * and checkForAsyncHookResponses owns that path.
+ * The report is deliberately left to that pass rather than emitted here: this
+ * module is imported by attachments.ts, so reaching the notification helpers
+ * directly would close an import cycle through messages.ts.
+ *
+ * Hooks whose process already exited are left alone — they have real output to
+ * deliver, and the normal path owns them.
  */
-async function expireAsyncHook(processId: string): Promise<void> {
+function expireAsyncHook(processId: string): void {
   const hook = pendingHooks.get(processId)
-  if (!hook || hook.responseAttachmentSent) {
+  if (!hook || hook.responseAttachmentSent || hook.timedOut) {
     return
   }
   if (hook.shellCommand?.status === 'completed') {
     return
   }
   logForDebugging(
-    `Hooks: Async hook ${processId} (${hook.hookName}) exceeded its ${hook.timeout}ms timeout, killing it`,
+    `Hooks: Async hook ${processId} (${hook.hookName}) exceeded its ${hook.timeout}ms asyncTimeout, killing it`,
     { level: 'warn' },
   )
-  pendingHooks.delete(processId)
+  hook.timedOut = true
+  hook.stopTimers()
   if (hook.shellCommand && hook.shellCommand.status !== 'killed') {
     hook.shellCommand.kill()
   }
-  await finalizeHook(hook, 1, 'error')
 }
 
 export function getPendingAsyncHooks(): PendingAsyncHook[] {
@@ -205,6 +216,35 @@ export async function checkForAsyncHookResponses(): Promise<
       }
 
       logForDebugging(`Hooks: Hook shell status ${hook.shellCommand.status}`)
+
+      // Must precede the 'killed' branch: expireAsyncHook kills the process, so
+      // a timed-out hook would otherwise be silently discarded there.
+      if (hook.timedOut) {
+        const exitCode = (await hook.shellCommand.result).code
+        hook.responseAttachmentSent = true
+        await finalizeHook(hook, exitCode, 'error')
+        return {
+          type: 'response' as const,
+          processId: hook.processId,
+          isSessionStart: hook.hookEvent === 'SessionStart',
+          payload: {
+            processId: hook.processId,
+            response: {
+              systemMessage:
+                `Async hook "${hook.hookName}" (${hook.hookEvent}) was killed after ` +
+                `exceeding its asyncTimeout of ${hook.timeout}ms. Raise "asyncTimeout" ` +
+                `in the hook's async response if it needs longer.`,
+            },
+            hookName: hook.hookName,
+            hookEvent: hook.hookEvent,
+            toolName: hook.toolName,
+            pluginId: hook.pluginId,
+            stdout,
+            stderr,
+            exitCode,
+          },
+        }
+      }
 
       if (hook.shellCommand.status === 'killed') {
         logForDebugging(
