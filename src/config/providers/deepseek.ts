@@ -51,6 +51,13 @@ export const DEEPSEEK_PROVIDER = {
     // `*haiku*` ID; naming it here makes the adapter's rewrite a no-op rather
     // than the only thing standing between a background job and a 404.
     smallFastModel: DEFAULT_DEEPSEEK_MODEL,
-    supportsToolSearch: true,
+    // Every request reaches DeepSeek through the translating fetch adapter,
+    // which renders a `tool_result` as the text of its blocks. ToolSearchTool
+    // answers a search that matched with `tool_reference` blocks and one that
+    // matched nothing with a plain string, so translation keeps the
+    // empty-handed answer and drops the useful one: the model would read "No
+    // matching deferred tools found" when the search fails and an empty `tool`
+    // message when it succeeds. Grok is false for the same reason.
+    supportsToolSearch: false,
   },
 } as const satisfies ProviderDescriptor

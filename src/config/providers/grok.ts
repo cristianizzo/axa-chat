@@ -51,9 +51,14 @@ export const GROK_PROVIDER = {
     // family ID; naming it here makes the adapter's rewrite a no-op rather than
     // the only thing standing between a background job and a 404.
     smallFastModel: DEFAULT_GROK_MODEL,
-    // Grok's endpoint is OpenAI-shaped behind the translating fetch adapter and
-    // has no handler for `tool_reference` blocks — the beta surface around the
-    // Messages API that tool search is built on. Same reasoning as Kimi's.
+    // Grok's endpoint is OpenAI-shaped behind the translating fetch adapter,
+    // which renders a `tool_result` as the text of its blocks. ToolSearchTool
+    // answers a search that matched with `tool_reference` blocks and one that
+    // matched nothing with a plain string, so translation keeps the
+    // empty-handed answer and drops the useful one: the model would read "No
+    // matching deferred tools found" when the search fails and an empty `tool`
+    // message when it succeeds. Not the same reason as Kimi's — Kimi has no
+    // adapter, so there the blocks do reach the endpoint.
     supportsToolSearch: false,
     // No maxConcurrentRequests: x.ai does not publish a concurrency allowance
     // tight enough to matter, so the CLI need not space requests out.
