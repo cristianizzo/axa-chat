@@ -263,7 +263,12 @@ function collectCompactableToolIds(messages: Message[]): string[] {
 // callers — /context, /compact, analyzeContext — pass none. Treating
 // undefined as main-thread let those callers drive the real compaction
 // machinery.
-function isMainThreadSource(querySource: QuerySource | undefined): boolean {
+// Narrowing predicate rather than a plain boolean so the "explicit source"
+// half of the check is carried into the callers' types: cachedMicrocompactPath
+// then takes a non-optional QuerySource and needs no undefined fallback.
+function isMainThreadSource(
+  querySource: QuerySource | undefined,
+): querySource is QuerySource {
   return querySource !== undefined && querySource.startsWith('repl_main_thread')
 }
 
@@ -327,7 +332,7 @@ export async function microcompactMessages(
  */
 async function cachedMicrocompactPath(
   messages: Message[],
-  querySource: QuerySource | undefined,
+  querySource: QuerySource,
 ): Promise<MicrocompactResult> {
   const mod = await getCachedMCModule()
   const state = ensureCachedMCState()
@@ -383,10 +388,10 @@ async function cachedMicrocompactPath(
 
     // Notify cache break detection that cache reads will legitimately drop
     if (feature('PROMPT_CACHE_BREAK_DETECTION')) {
-      // Pass the actual querySource — isMainThreadSource now prefix-matches
-      // so output-style variants enter here, and getTrackingKey keys on the
-      // full source string, not the 'repl_main_thread' prefix.
-      notifyCacheDeletion(querySource ?? 'repl_main_thread')
+      // Pass the actual querySource — isMainThreadSource prefix-matches so
+      // output-style variants enter here, and getTrackingKey keys on the full
+      // source string, not the 'repl_main_thread' prefix.
+      notifyCacheDeletion(querySource)
     }
 
     // Return messages unchanged - cache_reference and cache_edits are added at API layer
