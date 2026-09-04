@@ -1962,8 +1962,11 @@ const CONFIG_DIR_READABLE_DIRS = new Set([
  * to the target stops matching — reopening the exact laundering direction the
  * paragraph above closes, through the cache instead of through the comparison.
  *
- * That sequence is reachable. The reflex answer is "surely Bash blocks that",
- * and it does not: `ln` is absent from `PathCommand` / `PATH_EXTRACTORS` in
+ * That sequence is reachable by an agent that can already run Bash commands —
+ * it needs a session where Bash is auto-approved or broadly allowed, so it is a
+ * privilege-amplification step rather than an unprivileged one. Given that, the
+ * reflex answer is "surely Bash blocks the `ln` itself", and it does not: `ln`
+ * is absent from `PathCommand` / `PATH_EXTRACTORS` in
  * tools/BashTool/pathValidation.ts, so `ln -sf` is `passthrough` there as a
  * non-path-restricted command and is never mapped to a write on the link
  * location. `mv` and `cp` are in that table; `ln` is the gap. (bashSecurity.ts
@@ -1971,10 +1974,15 @@ const CONFIG_DIR_READABLE_DIRS = new Set([
  * though the binary were checked. It is not.)
  *
  * The cost is real and was measured: ~52us of the ~104us per permission check,
- * on a path this now runs for *every* file check. Most of it is the branch at
- * fsOperations.ts:324-337 for a `getSettingsPaths()` entry that does not exist
- * on most machines (`/Library/.../managed-settings.json`), where the walk
- * resolves ancestor directory symlinks. That is also why the obvious cheap
+ * on a path this now runs for *every* file check. It is spread across the four
+ * `getSettingsPaths()` entries rather than concentrated in one — per-entry
+ * timings land within about 1.5x of each other. The priciest single entry is
+ * the one that does not exist on most machines
+ * (`/Library/.../managed-settings.json`), which takes the `!existsSync` branch
+ * of `getPathsForPermissionCheck` and so resolves ancestor directory symlinks
+ * through `resolveDeepestExistingAncestorSync`; but that premium over an
+ * existing entry is only ~5us, so shipping the file to avoid the branch would
+ * buy about 5% of a check. That spread is also why the obvious cheap
  * revalidation fails: correctness depends on every entry the walk consulted,
  * ancestors included, so a sound revalidation costs about what the walk costs.
  * A basename prefilter is unsound for the same reason the old comparison was —
