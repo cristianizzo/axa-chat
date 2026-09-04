@@ -59,7 +59,7 @@ import {
   isShutdownApproved,
   isShutdownRequest,
   isTeamPermissionUpdate,
-  markMessagesAsRead,
+  markMessagesAsReadBySnapshot,
   readUnreadMessages,
   type TeammateMessage,
   writeToMailbox,
@@ -197,8 +197,16 @@ export function useInboxPoller({
 
     // Helper to mark messages as read in the inbox file.
     // Called after messages are successfully delivered or reliably queued.
+    //
+    // Scoped to `unread`, the snapshot this poll actually handled. Marking the
+    // whole inbox would also consume anything a teammate wrote during the
+    // routing work below, which no later poll would then deliver.
     const markRead = () => {
-      void markMessagesAsRead(agentName, currentAppState.teamContext?.teamName)
+      void markMessagesAsReadBySnapshot(
+        agentName,
+        unread,
+        currentAppState.teamContext?.teamName,
+      )
     }
 
     // Separate permission messages from regular teammate messages
@@ -335,7 +343,7 @@ export function useInboxPoller({
             },
           }
 
-          // Deduplicate: if markMessagesAsRead failed on a prior poll,
+          // Deduplicate: if marking as read failed on a prior poll,
           // the same message will be re-read — skip if already queued.
           setToolUseConfirmQueue(queue => {
             if (queue.some(q => q.toolUseID === parsed.tool_use_id)) {
