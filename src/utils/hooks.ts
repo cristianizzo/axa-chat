@@ -1479,10 +1479,31 @@ async function prepareIfConditionMatcher(
   const toolName = normalizeLegacyToolName(hookInput.tool_name)
   const tool = tools && findToolByName(tools, hookInput.tool_name)
   const input = tool?.inputSchema.safeParse(hookInput.tool_input)
-  const patternMatcher =
-    input?.success && tool?.preparePermissionMatcher
-      ? await tool.preparePermissionMatcher(input.data)
-      : undefined
+  let patternMatcher: ((pattern: string) => boolean) | undefined
+  if (input?.success && tool?.preparePermissionMatcher) {
+    try {
+      patternMatcher = await tool.preparePermissionMatcher(input.data)
+    } catch (error) {
+      // preparePermissionMatcher is tool-supplied and does real work — BashTool
+      // awaits a tree-sitter parse in there — so it can reject. Left unhandled
+      // the rejection escapes getMatchingHooks entirely and drops every hook
+      // for this event, including hooks that have no `if` condition and never
+      // needed this matcher. Contain it to the `if` evaluation it belongs to.
+      //
+      // Matching everything is the fail-safe direction: `if` filtering is
+      // "no match -> skip hook", so a matcher that can't be built must run the
+      // hook rather than silence it. BashTool takes the same branch itself when
+      // its parse is unavailable.
+      logError(
+        Error(
+          `Could not prepare the hook "if" matcher for ${toolName}; ` +
+            `"if" conditions on this tool call will match rather than be skipped`,
+          { cause: error },
+        ),
+      )
+      patternMatcher = () => true
+    }
+  }
 
   return ifCondition => {
     const parsed = permissionRuleValueFromString(ifCondition)
