@@ -639,11 +639,43 @@ export async function* runPreToolUseHooks(
             }),
           },
         }
+        // Same reason as the outer catch: without this the stop handler records
+        // "Error: undefined", or worse reuses a stopReason set by an earlier
+        // result in this same loop.
+        yield {
+          type: 'stopReason',
+          stopReason: `PreToolUse:${tool.name} hook error: ${formatError(error)}`,
+        }
         yield { type: 'stop' }
       }
     }
   } catch (error) {
+    // A throw from here (rather than from the per-result body above) means the
+    // hook pipeline itself failed, so no hook ran and the tool must not proceed.
+    // Say why before stopping: the 'stop' handler builds a tool_result whose
+    // content is CANCEL_MESSAGE, which tells the model the *user* declined. On
+    // an internal fault that is a false attribution, and without this attachment
+    // the model has no way to tell the two apart. The per-result catch above
+    // already emits the same attachment for the same reason.
     logError(error)
+    yield {
+      type: 'message',
+      message: {
+        message: createAttachmentMessage({
+          type: 'hook_error_during_execution',
+          content: formatError(error),
+          hookName: `PreToolUse:${tool.name}`,
+          toolUseID,
+          hookEvent: 'PreToolUse',
+        }),
+      },
+    }
+    // Feeds the stop handler's `toolUseResult`, which is otherwise the string
+    // "Error: undefined" in the transcript for this path.
+    yield {
+      type: 'stopReason',
+      stopReason: `PreToolUse:${tool.name} hooks failed to run: ${formatError(error)}`,
+    }
     yield { type: 'stop' }
     return
   }
