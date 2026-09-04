@@ -14,6 +14,7 @@ import {
 } from 'src/tools/FileEditTool/constants.js'
 import type { z } from 'zod/v4'
 import { getOriginalCwd, getSessionId } from '../../bootstrap/state.js'
+import { isGlobalConfigFileName } from '../../constants/oauth.js'
 import { CONFIG_DIR_NAME, MEMORY_FILE_NAME } from '../../constants/product.js'
 import { checkStatsigFeatureGate_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import type { AnyObject, Tool, ToolPermissionContext } from '../../Tool.js'
@@ -1558,33 +1559,18 @@ const CONFIG_DIR_SECRET_DIRS = new Set([
   'ide',
 ])
 const CONFIG_DIR_SECRET_FILES = new Set(['.credentials.json'])
-
 /**
- * The global config file and its backups — the OAuth account material.
- *
- * Matched by shape, because the name is *computed*: `getGlobalClaudeFile()`
- * (utils/env.ts) builds `config${fileSuffixForOauthConfig()}.json`, and
- * `fileSuffixForOauthConfig()` (constants/oauth.ts) yields '', '-local-oauth',
- * '-staging-oauth' or '-custom-oauth'. The literal `config.json` covered
- * exactly one of the four. `-custom-oauth` is the one that matters in a shipped
- * binary: the other two sit behind `USER_TYPE === 'ant'`, which scripts/build.ts
- * `--define`s to `"external"`, but `CLAUDE_CODE_CUSTOM_OAUTH_URL` is tested
- * *before* that switch and is not gated on it.
- *
- * Calling `fileSuffixForOauthConfig()` from here would not fix this: it returns
- * the suffix for the *current* environment, so the other three spellings would
- * still classify open. The filename is env-dependent, so the classifier has to
- * match the family rather than the instance.
- *
- * The trailing group covers the backups: `config.json.backup.1788489164599`
- * (utils/config.ts), and the legacy `${file}.backup` sibling, which for a
- * suffixed name is `config-custom-oauth.json.backup`.
- *
- * The leading `\.?` covers `.config.json`, the CLAUDE_CONFIG override spelling
- * in the same function.
+ * The global config file is matched through `isGlobalConfigFileName`
+ * (constants/oauth.ts) rather than by a literal here. Its name is *computed* —
+ * `config${fileSuffixForOauthConfig()}.json` — and has four spellings, of which
+ * `config-custom-oauth.json` is live in a shipped binary: the other two suffixes
+ * are behind `USER_TYPE === 'ant'`, which scripts/build.ts `--define`s away, but
+ * `CLAUDE_CODE_CUSTOM_OAUTH_URL` is tested before that switch and is not gated
+ * on it. Holding the literal `config.json` here covered one spelling of four.
+ * The predicate lives beside the function that computes the name so the two
+ * cannot drift.
  */
-const CONFIG_DIR_SECRET_FILE_PATTERN =
-  /^\.?config(-[a-z0-9-]+)?\.json(\..*)?$/
+
 /**
  * `grok-api-key` and any future `<provider>-api-key`. Matched by shape rather
  * than by name so adding a provider does not silently open a hole — the user
@@ -1691,6 +1677,13 @@ const CONFIG_DIR_PROTECTED_DIRS = new Set([
  */
 const CONFIG_DIR_OPEN_DIRS = new Set([
   'agent-memory',
+  // The 'local' scope of the same feature: getAgentMemoryDir writes
+  // <cwd>/.axa/agent-memory-local/<agentType>/ (AgentTool/agentMemory.ts).
+  // isAgentMemoryPath already allows it earlier, so this changes no behaviour —
+  // it is here because the point of listing the earlier carve-outs again is that
+  // this classifier be independently correct rather than correct-by-unreachable,
+  // and a second spelling of a listed feature is exactly what that misses.
+  'agent-memory-local',
   'plans',
   'magic-docs',
   'rules',
@@ -1738,7 +1731,17 @@ const CONFIG_DIR_MODE_PREFIX_PATTERN = /^cowork_/
  */
 const CONFIG_DIR_SETTINGS_FILE_PATTERN =
   /^([a-z0-9]+[_-])?settings(\.[^.]+)?\.json$/
-/** `history.jsonl` and its rotations. */
+/**
+ * `history.jsonl` and its rotations — classified `secret`, i.e. withheld from
+ * reads, not merely from writes.
+ *
+ * makeLogEntryReader (src/history.ts) calls it "global history file (shared
+ * across all projects)", and each entry carries `display`, the raw prompt text,
+ * plus `pastedContents`. That is the same cross-project disclosure that puts
+ * `projects/` and `sessions/` on the secret list, in a single file. Classifying
+ * it on tampering risk alone would have left every prompt the user has typed in
+ * any repo silently readable from this one.
+ */
 const CONFIG_DIR_HISTORY_FILE_PATTERN = /^history\.jsonl(\..*)?$/
 
 /**
@@ -1798,7 +1801,8 @@ function classifyConfigDirRelativePath(
   if (
     CONFIG_DIR_SECRET_DIRS.has(first) ||
     CONFIG_DIR_SECRET_FILES.has(base) ||
-    CONFIG_DIR_SECRET_FILE_PATTERN.test(base) ||
+    isGlobalConfigFileName(base) ||
+    CONFIG_DIR_HISTORY_FILE_PATTERN.test(base) ||
     CONFIG_DIR_API_KEY_FILE_PATTERN.test(base)
   ) {
     return 'secret'
@@ -1806,8 +1810,7 @@ function classifyConfigDirRelativePath(
 
   if (
     CONFIG_DIR_PROTECTED_DIRS.has(first) ||
-    CONFIG_DIR_SETTINGS_FILE_PATTERN.test(base) ||
-    CONFIG_DIR_HISTORY_FILE_PATTERN.test(base)
+    CONFIG_DIR_SETTINGS_FILE_PATTERN.test(base)
   ) {
     return 'protected'
   }
@@ -1845,6 +1848,72 @@ function classifyConfigDirPath(absolutePath: string): ConfigDirAccess {
     if (formAccess === 'protected') access = 'protected'
   }
   return access
+}
+
+/**
+ * Config-dir paths that are silently *readable* despite prompting on write.
+ *
+ * The read side needs its own allow-list rather than "everything that is not
+ * `secret`". Deriving reads from the write classes made the read path a
+ * deny-list — the shape this change removed from the write path — so an
+ * unlisted directory was silently readable, and the enumeration had to be
+ * complete for that to be safe. It was not: `debug/`, `telemetry/`, `traces/`,
+ * `uploads/` and `usage-data/` are all real, none was classified, and nobody had
+ * looked at what they hold.
+ *
+ * Rather than inspect those five and inherit the sixth, reads now fall closed
+ * too. Note this is cheap to get wrong in the safe direction: on main, *every*
+ * one of these paths already reached step 12 of checkReadPermissionForTool and
+ * asked, so a narrow list here is not a regression against main — it just
+ * declines to widen. Anything omitted keeps main's behaviour exactly.
+ *
+ * What is listed is the config-authoring surface, which is the use case this
+ * carve-out exists for — you cannot help someone edit an agent definition or a
+ * settings file that you are not allowed to read:
+ *
+ * - `skills/`, `commands/`, `agents/`, `hooks/`, `plugins/` — definitions the
+ *   model routinely reads to explain or edit. Writes still prompt; these are
+ *   permission-granting or executed, which is a tampering risk, not a
+ *   disclosure one.
+ * - settings files — an agent that cannot read settings.json cannot reason about
+ *   its own configuration.
+ *
+ * Credentials and the cross-project stores are `secret` and never reach here.
+ */
+const CONFIG_DIR_READABLE_DIRS = new Set([
+  'skills',
+  'commands',
+  'agents',
+  'hooks',
+  'plugins',
+])
+
+/**
+ * Is every resolved form of `absolutePath` on the read allow-list above?
+ *
+ * All forms must qualify, so the strictest wins, for the same reason
+ * classifyConfigDirPath checks every form: otherwise a symlink under
+ * `~/.axa/agents/` would launder a read of something else.
+ */
+function isReadableConfigDirPath(absolutePath: string): boolean {
+  for (const form of getPathsForPermissionCheck(absolutePath)) {
+    const relative = relativeToConfigDirRoot(normalize(form))
+    if (relative === null) return false
+    const segments = relative.split(/[\\/]/).filter(s => s.length > 0)
+    if (segments.length === 0) return false
+    const first = normalizeCaseForComparison(segments[0]!).replace(
+      CONFIG_DIR_MODE_PREFIX_PATTERN,
+      '',
+    )
+    const base = normalizeCaseForComparison(segments[segments.length - 1]!)
+    if (
+      !CONFIG_DIR_READABLE_DIRS.has(first) &&
+      !CONFIG_DIR_SETTINGS_FILE_PATTERN.test(base)
+    ) {
+      return false
+    }
+  }
+  return true
 }
 
 /**
@@ -2185,26 +2254,27 @@ export function checkReadableInternalPath(
   }
 
   // The config dir itself, at both scopes. Broader than the write carve-out by
-  // one class: 'protected' paths (settings.json, hooks/, agent definitions) are
-  // readable, since the risk there is tampering rather than disclosure, and an
-  // agent that cannot read settings.json cannot reason about its own config.
-  // 'secret' stays behind a prompt for reads too — the tokens and API keys, and
-  // also `projects/`/`sessions/`, where the risk is disclosure: those hold the
-  // transcripts of *every* project on the machine. The current project's own
-  // transcripts are unaffected, because isProjectDirPath allows them above.
+  // one class — some paths that prompt on write are readable, because there the
+  // risk is tampering rather than disclosure — but only by an explicitly listed
+  // class, not by "everything that is not secret".
   //
-  // Note this is where the default falling to 'protected' has its widest
-  // effect: an unlisted config-dir path is silently *readable* here, where on
-  // main it reached step 12 of checkReadPermissionForTool and asked. That is
-  // deliberate — the disclosure-sensitive subtrees are enumerated as 'secret'
-  // above — but it is the reason to classify by disclosure risk and not only by
-  // write risk when adding to those sets.
+  // That distinction is the whole point. Allowing `open || protected` here would
+  // make the read path a deny-list even though the write path is an allow-list,
+  // and it is the read path where the harm is irreversible: a prompt refused
+  // after a write is a file you can restore, a prompt refused after a read is a
+  // token the model has already seen. Anything not on CONFIG_DIR_READABLE_DIRS
+  // falls through to step 12 of checkReadPermissionForTool and asks, which is
+  // what main did for all of these.
   //
-  // Mostly redundant for 'open' paths, which checkReadPermissionForTool
-  // already reaches via step 5 ("edit access implies read access"); this is
-  // what covers the 'protected' ones.
+  // Redundant for 'open' paths, which checkReadPermissionForTool already reaches
+  // via step 5 ("edit access implies read access"); this is what covers the
+  // readable subset of 'protected'.
   const configDirAccess = classifyConfigDirPath(normalizedPath)
-  if (configDirAccess === 'open' || configDirAccess === 'protected') {
+  if (
+    configDirAccess === 'open' ||
+    (configDirAccess === 'protected' &&
+      isReadableConfigDirPath(normalizedPath))
+  ) {
     return {
       behavior: 'allow',
       updatedInput: input,

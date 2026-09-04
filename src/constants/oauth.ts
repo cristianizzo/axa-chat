@@ -15,6 +15,23 @@ function getOauthConfigType(): OauthConfigType {
   return 'prod'
 }
 
+/**
+ * Every suffix fileSuffixForOauthConfig() can return, i.e. every spelling the
+ * global config filename can have on disk.
+ *
+ * The permission engine needs the whole family, not the one the current
+ * environment selects: `~/.axa/config-custom-oauth.json` holds the same OAuth
+ * account material whether or not CLAUDE_CODE_CUSTOM_OAUTH_URL happens to be set
+ * in the process doing the reading. Keeping the list here, beside the function
+ * that chooses between them, is what stops the two drifting apart.
+ */
+export const OAUTH_CONFIG_FILE_SUFFIXES = [
+  '',
+  '-local-oauth',
+  '-staging-oauth',
+  '-custom-oauth',
+] as const
+
 export function fileSuffixForOauthConfig(): string {
   if (process.env.CLAUDE_CODE_CUSTOM_OAUTH_URL) {
     return '-custom-oauth'
@@ -28,6 +45,33 @@ export function fileSuffixForOauthConfig(): string {
       // No suffix for production config
       return ''
   }
+}
+
+/**
+ * Does `fileName` name the global config file, under any of its spellings?
+ *
+ * Accepts an optional leading dot — `.config.json`, the CLAUDE_CONFIG override
+ * spelling in getGlobalClaudeFile() — and an optional trailing extension, which
+ * covers the backups: `config.json.backup.<ts>` from utils/config.ts, and the
+ * legacy `${file}.backup` sibling, which for a suffixed name is
+ * `config-custom-oauth.json.backup`.
+ *
+ * Deliberately *not* `name === \`config${fileSuffixForOauthConfig()}.json\``.
+ * That tests the instance the current environment selects, so the other three
+ * spellings go unrecognised in exactly the process deciding whether to hand one
+ * of them to the model. Match the family, never the instance.
+ */
+export function isGlobalConfigFileName(fileName: string): boolean {
+  const lower = fileName.toLowerCase()
+  return OAUTH_CONFIG_FILE_SUFFIXES.some(suffix => {
+    const base = `config${suffix}.json`
+    return (
+      lower === base ||
+      lower === `.${base}` ||
+      lower.startsWith(`${base}.`) ||
+      lower.startsWith(`.${base}.`)
+    )
+  })
 }
 
 export const CLAUDE_AI_INFERENCE_SCOPE = 'user:inference' as const
