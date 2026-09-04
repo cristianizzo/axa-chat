@@ -12,13 +12,19 @@ AXA.local.md
 .idea/
 conversation-backup.jsonl
 .claude/
-# The config dir itself is tracked: it holds AXA.md, the agent definitions,
-# the skills and the shared agent-memory, and AXA.md requires those to be
-# corrected in the same change that invalidates them. Ignoring the directory
-# would also hide them from every recursive content search, so an agent
-# following that rule gets a clean negative and concludes there is nothing to
-# update. Only the per-machine settings overlay stays out.
-.axa/settings.local.json
+# The config dir is deliberately NOT published. It holds AXA.md, the agent
+# definitions, the skills and the shared agent-memory, and none of that goes to
+# the remote. This reverses the choice made in bfa1f32 and it is not an
+# oversight -- do not "fix" it by tracking the directory again.
+#
+# Known cost, stated so nobody has to rediscover it: an ignored AND untracked
+# path is invisible to BOTH search instruments. rg and the Grep tool obey
+# .gitignore, and git grep reads the index, so neither can see anything under
+# .axa/. A "no matches" result from either says nothing about this directory.
+# To search it, use the filesystem directly (find / ls -R / Read), which is
+# derived from neither view. A claim about .axa/ that rests on a clean grep is
+# not evidence.
+.axa/
 .axa-install.json
 .axa-update.json
 .axa-update.json.lock
