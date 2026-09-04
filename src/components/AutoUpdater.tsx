@@ -3,12 +3,14 @@ import { useEffect, useRef, useState } from 'react';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from 'src/services/analytics/index.js';
 import { useInterval } from 'usehooks-ts';
 import { useUpdateNotification } from '../hooks/useUpdateNotification.js';
+import { BINARY_NAME } from '../constants/product.js';
 import { Box, Text } from '../ink.js';
 import { type AutoUpdaterResult, getLatestVersion, getMaxVersion, type InstallStatus, installGlobalPackage, shouldSkipVersion } from '../utils/autoUpdater.js';
 import { getGlobalConfig, isAutoUpdaterDisabled } from '../utils/config.js';
 import { logForDebugging } from '../utils/debug.js';
 import { getCurrentInstallationType } from '../utils/doctorDiagnostic.js';
-import { installOrUpdateClaudePackage, localInstallationExists } from '../utils/localInstaller.js';
+import { getLocalInstallDir, installOrUpdateClaudePackage, localInstallationExists } from '../utils/localInstaller.js';
+import { logError } from '../utils/log.js';
 import { removeInstalledSymlink } from '../utils/nativeInstaller/index.js';
 import { gt, gte } from '../utils/semver.js';
 import { getInitialSettings } from '../utils/settings/settings.js';
@@ -82,76 +84,95 @@ export function AutoUpdater({
       const startTime = Date.now();
       onChangeIsUpdating(true);
 
-      // Remove native installer symlink since we're using JS-based updates
-      // But only if user hasn't migrated to native installation
-      const config = getGlobalConfig();
-      if (config.installMethod !== 'native') {
-        await removeInstalledSymlink();
-      }
-
-      // Detect actual running installation type
-      const installationType = await getCurrentInstallationType();
-      logForDebugging(`AutoUpdater: Detected installation type: ${installationType}`);
-
-      // Skip update for development builds
-      if (installationType === 'development') {
-        logForDebugging('AutoUpdater: Cannot auto-update development build');
-        onChangeIsUpdating(false);
-        return;
-      }
-
-      // Choose the appropriate update method based on what's actually running
-      let installStatus: InstallStatus;
-      let updateMethod: 'local' | 'global';
-      if (installationType === 'npm-local') {
-        // Use local update for local installations
-        logForDebugging('AutoUpdater: Using local update method');
-        updateMethod = 'local';
-        installStatus = await installOrUpdateClaudePackage(channel);
-      } else if (installationType === 'npm-global') {
-        // Use global update for global installations
-        logForDebugging('AutoUpdater: Using global update method');
-        updateMethod = 'global';
-        installStatus = await installGlobalPackage();
-      } else if (installationType === 'native') {
-        // This shouldn't happen - native should use NativeAutoUpdater
-        logForDebugging('AutoUpdater: Unexpected native installation in non-native updater');
-        onChangeIsUpdating(false);
-        return;
-      } else {
-        // Fallback to config-based detection for unknown types
-        logForDebugging(`AutoUpdater: Unknown installation type, falling back to config`);
-        const isMigrated = config.installMethod === 'local';
-        updateMethod = isMigrated ? 'local' : 'global';
-        if (isMigrated) {
-          installStatus = await installOrUpdateClaudePackage(channel);
-        } else {
-          installStatus = await installGlobalPackage();
+      // The reset lives in `finally`: isUpdatingRef gates both the initial
+      // check and the useInterval below, so a throw that left isUpdating at
+      // true would suppress every further update attempt for the rest of the
+      // session. Neither caller awaits it — the mount effect uses `void` and
+      // useInterval discards the promise — so the throw would also surface as
+      // an unhandled rejection. Mirrors NativeAutoUpdater.
+      try {
+        // Remove native installer symlink since we're using JS-based updates
+        // But only if user hasn't migrated to native installation
+        const config = getGlobalConfig();
+        if (config.installMethod !== 'native') {
+          await removeInstalledSymlink();
         }
-      }
-      onChangeIsUpdating(false);
-      if (installStatus === 'success') {
-        logEvent('tengu_auto_updater_success', {
-          fromVersion: currentVersion as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-          toVersion: latestVersion as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-          durationMs: Date.now() - startTime,
-          wasMigrated: updateMethod === 'local',
-          installationType: installationType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
+
+        // Detect actual running installation type
+        const installationType = await getCurrentInstallationType();
+        logForDebugging(`AutoUpdater: Detected installation type: ${installationType}`);
+
+        // Skip update for development builds
+        if (installationType === 'development') {
+          logForDebugging('AutoUpdater: Cannot auto-update development build');
+          return;
+        }
+
+        // Choose the appropriate update method based on what's actually running
+        let installStatus: InstallStatus;
+        let updateMethod: 'local' | 'global';
+        if (installationType === 'npm-local') {
+          // Use local update for local installations
+          logForDebugging('AutoUpdater: Using local update method');
+          updateMethod = 'local';
+          installStatus = await installOrUpdateClaudePackage(channel);
+        } else if (installationType === 'npm-global') {
+          // Use global update for global installations
+          logForDebugging('AutoUpdater: Using global update method');
+          updateMethod = 'global';
+          installStatus = await installGlobalPackage();
+        } else if (installationType === 'native') {
+          // This shouldn't happen - native should use NativeAutoUpdater
+          logForDebugging('AutoUpdater: Unexpected native installation in non-native updater');
+          return;
+        } else {
+          // Fallback to config-based detection for unknown types
+          logForDebugging(`AutoUpdater: Unknown installation type, falling back to config`);
+          const isMigrated = config.installMethod === 'local';
+          updateMethod = isMigrated ? 'local' : 'global';
+          if (isMigrated) {
+            installStatus = await installOrUpdateClaudePackage(channel);
+          } else {
+            installStatus = await installGlobalPackage();
+          }
+        }
+        if (installStatus === 'success') {
+          logEvent('tengu_auto_updater_success', {
+            fromVersion: currentVersion as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+            toVersion: latestVersion as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+            durationMs: Date.now() - startTime,
+            wasMigrated: updateMethod === 'local',
+            installationType: installationType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
+          });
+        } else {
+          logEvent('tengu_auto_updater_fail', {
+            fromVersion: currentVersion as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+            attemptedVersion: latestVersion as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+            status: installStatus as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+            durationMs: Date.now() - startTime,
+            wasMigrated: updateMethod === 'local',
+            installationType: installationType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
+          });
+        }
+        onAutoUpdaterResult({
+          version: latestVersion,
+          status: installStatus
         });
-      } else {
+      } catch (error) {
+        logError(error);
         logEvent('tengu_auto_updater_fail', {
           fromVersion: currentVersion as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
           attemptedVersion: latestVersion as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-          status: installStatus as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-          durationMs: Date.now() - startTime,
-          wasMigrated: updateMethod === 'local',
-          installationType: installationType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
+          status: 'install_failed' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          durationMs: Date.now() - startTime
         });
+        onAutoUpdaterResult({
+          version: latestVersion,
+          status: 'install_failed'
+        });
+      } finally {
+        onChangeIsUpdating(false);
       }
-      onAutoUpdaterResult({
-        version: latestVersion,
-        status: installStatus
-      });
     }
     // isUpdating intentionally omitted from deps; we read isUpdatingRef
     // instead so the guard is always current without changing callback
@@ -188,9 +209,17 @@ export function AutoUpdater({
             ✓ Update installed · Restart to apply
           </Text>}
       {(autoUpdaterResult?.status === 'install_failed' || autoUpdaterResult?.status === 'no_permissions') && <Text color="error" wrap="truncate">
-          ✗ Auto-update failed &middot; Try <Text bold>claude doctor</Text> or{' '}
+          ✗ Auto-update failed &middot; Try <Text bold>{BINARY_NAME} doctor</Text>{' '}
+          or{' '}
           <Text bold>
-            {hasLocalInstall ? `cd ~/.claude/local && npm update ${MACRO.PACKAGE_URL}` : `npm i -g ${MACRO.PACKAGE_URL}`}
+            {/* getLocalInstallDir() rather than a literal path: the install dir
+                is `local` under getClaudeConfigHomeDir(), which CLAUDE_CONFIG_DIR
+                relocates, so a hardcoded path would hand the user a `cd` into a
+                directory they do not have. nativeInstaller/installer.ts derives
+                the same path from the same premise. Quoted because a relocated
+                config home may contain spaces, which the previous literal could
+                not. */}
+            {hasLocalInstall ? `cd "${getLocalInstallDir()}" && npm update ${MACRO.PACKAGE_URL}` : `npm i -g ${MACRO.PACKAGE_URL}`}
           </Text>
         </Text>}
     </Box>;

@@ -54,6 +54,7 @@ import type { PermissionMode } from '../../types/permissions.js';
 import type { BaseTextInputProps, PromptInputMode, VimMode } from '../../types/textInputTypes.js';
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js';
 import { count } from '../../utils/array.js';
+import { isClaudeAISubscriber } from '../../utils/auth.js';
 import type { AutoUpdaterResult } from '../../utils/autoUpdater.js';
 import { Cursor } from '../../utils/Cursor.js';
 import { getGlobalConfig, type PastedContent, saveGlobalConfig } from '../../utils/config.js';
@@ -522,7 +523,16 @@ function PromptInput({
   const thinkTriggers = useMemo(() => findThinkingTriggerPositions(displayedValue), [displayedValue]);
   const ultraplanSessionUrl = useAppState(s => s.ultraplanSessionUrl);
   const ultraplanLaunching = useAppState(s => s.ultraplanLaunching);
-  const ultraplanTriggers = useMemo(() => feature('ULTRAPLAN') && !ultraplanSessionUrl && !ultraplanLaunching ? findUltraplanTriggerPositions(displayedValue) : [], [displayedValue, ultraplanSessionUrl, ultraplanLaunching]);
+  // Mirrors the command's `availability: ['claude-ai']` and the keyword gate in
+  // processUserInput.ts — without it, users who cannot reach Claude Code on the
+  // web would still get the rainbow highlight and the "will launch ultraplan"
+  // notification for a launch that never happens.
+  // Read per render rather than inside the memo: isClaudeAISubscriber() is a
+  // synchronous config read and does not subscribe to anything, so a login or
+  // logout that does not also change displayedValue would otherwise leave the
+  // memo holding the previous account's answer.
+  const isUltraplanAvailable = feature('ULTRAPLAN') ? isClaudeAISubscriber() : false;
+  const ultraplanTriggers = useMemo(() => isUltraplanAvailable && !ultraplanSessionUrl && !ultraplanLaunching ? findUltraplanTriggerPositions(displayedValue) : [], [displayedValue, isUltraplanAvailable, ultraplanSessionUrl, ultraplanLaunching]);
   const ultrareviewTriggers = useMemo(() => isUltrareviewEnabled() ? findUltrareviewTriggerPositions(displayedValue) : [], [displayedValue]);
   const btwTriggers = useMemo(() => findBtwTriggerPositions(displayedValue), [displayedValue]);
   const buddyTriggers = useMemo(() => findBuddyTriggerPositions(displayedValue), [displayedValue]);
