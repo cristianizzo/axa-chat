@@ -249,12 +249,23 @@ export function isClaudeSettingsPath(filePath: string): boolean {
   // with paths like .cLauDe/Settings.locaL.json
   const normalizedPath = normalizeCaseForComparison(expandedPath)
 
+  // Match a settings file in *any* project's config dir, not just this
+  // session's. getSettingsPaths() below covers only the current session, so
+  // without this arm a foreign project's settings.json is unprotected — and
+  // that is the case this arm exists for.
+  //
+  // `.axa` is built from CONFIG_DIR_NAME so the canonical spelling has one
+  // definition. The legacy spelling stays a literal on purpose: it is not the
+  // config dir this product writes, it is a foreign directory this predicate
+  // still refuses to auto-edit, and LEGACY_CONFIG_DIR_NAME documents itself as
+  // read in exactly one place (the startup import check). Reaching for it here
+  // would make that constant's docblock false to save one string.
+  //
   // Use platform separator so endsWith checks work on both Unix (/) and Windows (\)
-  if (
-    normalizedPath.endsWith(`${sep}.claude${sep}settings.json`) ||
-    normalizedPath.endsWith(`${sep}.claude${sep}settings.local.json`)
-  ) {
-    // Include .claude/settings.json even for other projects
+  const isSettingsFileUnder = (configDirName: string): boolean =>
+    normalizedPath.endsWith(`${sep}${configDirName}${sep}settings.json`) ||
+    normalizedPath.endsWith(`${sep}${configDirName}${sep}settings.local.json`)
+  if (isSettingsFileUnder(CONFIG_DIR_NAME) || isSettingsFileUnder('.claude')) {
     return true
   }
   // Check for current project's settings files (including managed settings and CLI args)
