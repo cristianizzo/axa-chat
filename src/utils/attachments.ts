@@ -235,7 +235,7 @@ import { getAutoMemPath, isAutoMemoryEnabled } from '../memdir/paths.js'
 import { getAgentMemoryDir } from '../tools/AgentTool/agentMemory.js'
 import {
   readUnreadMessages,
-  markMessagesAsReadByPredicate,
+  markMessagesAsReadBySnapshot,
   isShutdownApproved,
   isStructuredProtocolMessage,
   isIdleNotification,
@@ -3682,14 +3682,16 @@ async function getTeammateMailboxAttachments(
     },
   ]
 
-  // Mark only non-structured mailbox messages as read after attachment is built.
-  // Structured protocol messages stay unread for useInboxPoller to handle.
+  // Mark as read exactly the messages that went into the attachment above —
+  // the non-structured half of the snapshot. Structured protocol messages are
+  // not in that snapshot, so they stay unread for useInboxPoller to handle.
+  //
+  // Scoped to the snapshot rather than matched by content: a teammate can write
+  // between the read above and this call, and a content predicate would mark
+  // that new message read even though it is not in the attachment, so nothing
+  // would ever deliver it.
   if (unreadMessages.length > 0) {
-    await markMessagesAsReadByPredicate(
-      agentName,
-      m => !isStructuredProtocolMessage(m.text),
-      teamName,
-    )
+    await markMessagesAsReadBySnapshot(agentName, unreadMessages, teamName)
     logForDebugging(
       `[MailboxBridge] marked ${unreadMessages.length} non-structured message(s) as read for agent="${agentName}" team="${teamName || 'default'}"`,
     )
