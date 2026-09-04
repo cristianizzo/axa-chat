@@ -787,18 +787,20 @@ async function initialize(
       // Clear the promise on error so initialization can be retried
       initializationPromise = undefined
 
-      logForDebugging(`Failed to initialize sandbox: ${errorMessage(error)}`)
-
       // Anything reaching here is a fault, not a platform limitation: the
       // unsupported-platform, missing-dependency and enabledPlatforms cases
       // all return at the isSandboxingEnabled() guard above, before this
-      // promise is ever created. So the failure is always worth surfacing —
-      // swallowing it silently told the user their sandbox was up when it
-      // was not.
-      process.stderr.write(
-        `\n⚠ Sandbox failed to initialize: ${errorMessage(error)}\n` +
-          `  Commands that require the sandbox will fail.\n\n`,
-      )
+      // promise is ever created. Hence 'warn' rather than 'debug'.
+      //
+      // Reporting stops at the log on purpose. This adapter is shared by the
+      // REPL, the print/SDK path and the MCP server, so it cannot know how to
+      // present anything: a write to stderr here lands inside a live Ink
+      // frame, since the REPL calls initialize() from its component body.
+      // Presentation belongs to each entrypoint, as it already does for
+      // getSandboxUnavailableReason().
+      logForDebugging(`Failed to initialize sandbox: ${errorMessage(error)}`, {
+        level: 'warn',
+      })
 
       // Rethrow only when the user asked for a mandatory sandbox. Every
       // caller — REPL, the print/SDK path and the MCP server — treats a
