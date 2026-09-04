@@ -1395,6 +1395,9 @@ async function execCommandHook(
   }
 }
 
+/** Matcher patterns already reported as invalid, to keep the hot path quiet. */
+const reportedInvalidHookMatchers = new Set<string>()
+
 /**
  * Check if a match query matches a hook matcher pattern
  * @param matchQuery The query to match (e.g., 'Write', 'Edit', 'Bash')
@@ -1434,9 +1437,21 @@ function matchesPattern(matchQuery: string, matcher: string): boolean {
       }
     }
     return false
-  } catch {
-    // If the regex is invalid, log error and return false
-    logForDebugging(`Invalid regex pattern in hook matcher: ${matcher}`)
+  } catch (error) {
+    // An invalid matcher means the hook never fires. For a PreToolUse or
+    // PermissionRequest hook that is a security check the user believes is
+    // active, so this must not be a debug-level line nobody reads. Reported
+    // once per pattern — matching runs on the path of every tool call.
+    if (!reportedInvalidHookMatchers.has(matcher)) {
+      reportedInvalidHookMatchers.add(matcher)
+      logError(
+        Error(
+          `Invalid regex in hook matcher "${matcher}"; hooks using this ` +
+            `matcher will never run until it is fixed`,
+          { cause: error },
+        ),
+      )
+    }
     return false
   }
 }
