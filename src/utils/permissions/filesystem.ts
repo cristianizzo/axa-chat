@@ -2026,10 +2026,93 @@ function isReadableConfigDirPath(absolutePath: string): boolean {
 }
 
 /**
+ * Runs a carve-out chain against every resolved form of `absolutePath` and only
+ * keeps an `allow` that survives all of them.
+ *
+ * Every carve-out below matches on the path *as written* — a prefix, a filename
+ * suffix, an exact string. None of them looks at what the path resolves to, so
+ * a symlink placed at an accepted name launders a write or read to its target:
+ * `agent-memory/x.md -> ~/.ssh/authorized_keys` is allowed as an agent-memory
+ * file. Fourteen of the carve-outs in these two functions were exploitable that
+ * way, which is why this is one screen ahead of all of them rather than a
+ * resolution check added to each. A per-carve-out fix is N places that must
+ * each stay correct, and carve-out N+1 would be written without one.
+ *
+ * Two properties are load-bearing:
+ *
+ * - The whole chain re-runs per form, not one predicate. Carve-outs that
+ *   combine a root with a filename test (plan files) or match a single exact
+ *   path (`launch.json`) cannot be expressed as "is the target under this
+ *   root", so a containment helper parameterised by a root — the shape the
+ *   TEMPLATES job-dir block below uses — cannot cover them.
+ * - Agreement is on `decisionReason.reason`, not on `behavior === 'allow'`.
+ *   These trees nest, so requiring only `allow` would wave a link through
+ *   whenever its *target* is cleared by a different carve-out than its own name
+ *   was. Matching the reason is what ties the target back to the specific
+ *   carve-out that admitted the link.
+ *
+ * The decision for the path as written is taken first and returned unchanged
+ * unless a resolved form disagrees, so this can only ever narrow: a path that
+ * is not a symlink resolves to itself and reaches the identical result.
+ *
+ * This settles the decision, not the race. Resolution is a filesystem read and
+ * the write happens later in FileWriteTool with no O_NOFOLLOW, so a link
+ * swapped in after this point is still a TOCTOU that has to be closed there.
+ */
+function allowOnlyIfResolvedFormsAgree(
+  decide: (
+    path: string,
+    input: { [key: string]: unknown },
+  ) => PermissionResult,
+  absolutePath: string,
+  input: { [key: string]: unknown },
+): PermissionResult {
+  const decision = decide(absolutePath, input)
+  if (decision.behavior !== 'allow') {
+    return decision
+  }
+  const denied: PermissionResult = { behavior: 'passthrough', message: '' }
+  // Every carve-out in these two functions reports `type: 'other'`, so its
+  // `reason` is the carve-out's identity. Anything else is unrecognised rather
+  // than matching: fail closed instead of treating two absent identities as
+  // agreement, which would hand a blanket allow to a future carve-out that
+  // reports a different reason shape.
+  const identify = (result: PermissionResult): string | undefined =>
+    result.decisionReason?.type === 'other'
+      ? result.decisionReason.reason
+      : undefined
+  const identity = identify(decision)
+  if (identity === undefined) {
+    return denied
+  }
+  for (const form of getPathsForPermissionCheck(absolutePath)) {
+    const formDecision = decide(form, input)
+    if (
+      formDecision.behavior !== 'allow' ||
+      identify(formDecision) !== identity
+    ) {
+      return denied
+    }
+  }
+  return decision
+}
+
+/**
  * Check if a path is an internal path that can be edited without permission.
  * Returns a PermissionResult - either 'allow' if matched, or 'passthrough' to continue checking.
  */
 export function checkEditableInternalPath(
+  absolutePath: string,
+  input: { [key: string]: unknown },
+): PermissionResult {
+  return allowOnlyIfResolvedFormsAgree(
+    decideEditableInternalPath,
+    absolutePath,
+    input,
+  )
+}
+
+function decideEditableInternalPath(
   absolutePath: string,
   input: { [key: string]: unknown },
 ): PermissionResult {
@@ -2215,6 +2298,17 @@ export function checkEditableInternalPath(
  * Returns a PermissionResult - either 'allow' if matched, or 'passthrough' to continue checking.
  */
 export function checkReadableInternalPath(
+  absolutePath: string,
+  input: { [key: string]: unknown },
+): PermissionResult {
+  return allowOnlyIfResolvedFormsAgree(
+    decideReadableInternalPath,
+    absolutePath,
+    input,
+  )
+}
+
+function decideReadableInternalPath(
   absolutePath: string,
   input: { [key: string]: unknown },
 ): PermissionResult {
