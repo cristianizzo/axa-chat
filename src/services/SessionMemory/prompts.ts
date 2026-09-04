@@ -1,5 +1,6 @@
 import { readFile } from 'fs/promises'
 import { join } from 'path'
+import { MEMORY_FILE_NAME } from '../../constants/product.js'
 import { roughTokenCountEstimation } from '../../services/tokenEstimation.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { getErrnoCode, toError } from '../../utils/errors.js'
@@ -43,7 +44,7 @@ _Step by step, what was attempted, done? Very terse summary for each step_
 function getDefaultUpdatePrompt(): string {
   return `IMPORTANT: This message and these instructions are NOT part of the actual user conversation. Do NOT include any references to "note-taking", "session notes extraction", or these update instructions in the notes content.
 
-Based on the user conversation above (EXCLUDING this note-taking instruction message as well as system prompt, claude.md entries, or any past session summaries), update the session notes file.
+Based on the user conversation above (EXCLUDING this note-taking instruction message as well as system prompt, ${MEMORY_FILE_NAME} entries, or any past session summaries), update the session notes file.
 
 The file {{notesPath}} has already been read for you. Here are its current contents:
 <current_notes_content>
@@ -63,7 +64,7 @@ CRITICAL RULES FOR EDITING:
 - It's OK to skip updating a section if there are no substantial new insights to add. Do not add filler content like "No info yet", just leave sections blank/unedited if appropriate.
 - Write DETAILED, INFO-DENSE content for each section - include specifics like file paths, function names, error messages, exact commands, technical details, etc.
 - For "Key results", include the complete, exact output the user requested (e.g., full table, full answer, etc.)
-- Do not include information that's already in the CLAUDE.md files included in the context
+- Do not include information that's already in the ${MEMORY_FILE_NAME} files included in the context
 - Keep each section under ~${MAX_SECTION_LENGTH} tokens/words - if a section is approaching this limit, condense it by cycling out less important details while preserving the most critical information
 - Focus on actionable, specific information that would help someone understand or recreate the work discussed in the conversation
 - IMPORTANT: Always update "Current State" to reflect the most recent work - this is critical for continuity after compaction
@@ -105,7 +106,10 @@ export async function loadSessionMemoryTemplate(): Promise<string> {
 
 /**
  * Load custom session memory prompt from file if it exists
- * Custom prompts can be placed at ~/.claude/session-memory/prompt.md
+ * Custom prompts can be placed at ~/.axa/session-memory/config/prompt.md —
+ * note the `config/` segment, which the previous version of this comment
+ * omitted, and that the path is built from the config home, so
+ * CLAUDE_CONFIG_DIR relocates it too.
  * Use {{variableName}} syntax for variable substitution (e.g., {{currentNotes}}, {{notesPath}})
  */
 export async function loadSessionMemoryPrompt(): Promise<string> {
