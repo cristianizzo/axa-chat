@@ -1953,6 +1953,34 @@ const CONFIG_DIR_READABLE_DIRS = new Set([
  * and the tool targets its target. Laundering has two directions and covering
  * one of them is the recurring defect in this area; comparing form-set against
  * form-set is what makes the direction stop mattering.
+ *
+ * DO NOT memoize `configForms`. It looks like a session-stable set derived from
+ * flag state, and it is not: `getPathsForPermissionCheck` is a *live filesystem
+ * resolution*, so the answer changes when the filesystem changes under a fixed
+ * path. Replace an active `--settings <p>` with a symlink to elsewhere and a
+ * cached expansion of `<p>` no longer contains the target, so a write addressed
+ * to the target stops matching — reopening the exact laundering direction the
+ * paragraph above closes, through the cache instead of through the comparison.
+ *
+ * That sequence is reachable. The reflex answer is "surely Bash blocks that",
+ * and it does not: `ln` is absent from `PathCommand` / `PATH_EXTRACTORS` in
+ * tools/BashTool/pathValidation.ts, so `ln -sf` is `passthrough` there as a
+ * non-path-restricted command and is never mapped to a write on the link
+ * location. `mv` and `cp` are in that table; `ln` is the gap. (bashSecurity.ts
+ * blocks the zsh builtin `zf_ln` as a binary-check bypass, which reads as
+ * though the binary were checked. It is not.)
+ *
+ * The cost is real and was measured: ~52us of the ~104us per permission check,
+ * on a path this now runs for *every* file check. Most of it is the branch at
+ * fsOperations.ts:324-337 for a `getSettingsPaths()` entry that does not exist
+ * on most machines (`/Library/.../managed-settings.json`), where the walk
+ * resolves ancestor directory symlinks. That is also why the obvious cheap
+ * revalidation fails: correctness depends on every entry the walk consulted,
+ * ancestors included, so a sound revalidation costs about what the walk costs.
+ * A basename prefilter is unsound for the same reason the old comparison was —
+ * resolution changes the basename. And "only run this where a carve-out would
+ * return allow" is the guard-beside-one-consumer bug that produced five
+ * findings on this file; it is not an optimization, it is the defect.
  */
 function resolvesToFlagConfigFile(absolutePath: string): boolean {
   const normalizeForm = (path: string): string =>
