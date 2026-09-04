@@ -51,6 +51,12 @@ export const DEEPSEEK_PROVIDER = {
     // `*haiku*` ID; naming it here makes the adapter's rewrite a no-op rather
     // than the only thing standing between a background job and a 404.
     smallFastModel: DEFAULT_DEEPSEEK_MODEL,
-    supportsToolSearch: true,
+    // Every request reaches DeepSeek through the translating fetch adapter,
+    // which renders a `tool_result` as the text of its blocks — a
+    // `tool_reference` block carries no text and is dropped, so ToolSearchTool's
+    // answer would arrive as a `tool` message with empty content. The endpoint
+    // never sees a tool_reference block whatever it does or does not support.
+    // Same reasoning as Grok's and Kimi's.
+    supportsToolSearch: false,
   },
 } as const satisfies ProviderDescriptor

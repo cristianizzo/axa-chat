@@ -45,6 +45,11 @@ export const CODEX_PROVIDER = {
     // rather than a lookup in CODEX_MODELS.
     acceptsModel: isCodexModelId,
     smallFastModel: CLAUDE_FAMILY_TO_CODEX_MODEL.haiku,
-    supportsToolSearch: true,
+    // Every request reaches the Codex backend through the translating fetch
+    // adapter, which renders a `tool_result` as a `function_call_output` whose
+    // `output` is a plain string built from the text and images of its blocks.
+    // A `tool_reference` block contributes nothing to it, so ToolSearchTool's
+    // answer would arrive as empty output. Same reasoning as Grok's and Kimi's.
+    supportsToolSearch: false,
   },
 } as const satisfies ProviderDescriptor
