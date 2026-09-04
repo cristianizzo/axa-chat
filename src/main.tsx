@@ -4401,14 +4401,24 @@ async function run(): Promise<CommanderCommand> {
     });
   }
 
-  // claude install
-  program.command('install [target]').description(`Install ${PRODUCT_NAME} native build. Use [target] to specify version (stable, latest, or specific version)`).option('--force', 'Force installation even if already installed').action(async (target: string | undefined, options: {
-    force?: boolean;
-  }) => {
-    const {
-      installHandler
-    } = await import('./cli/handlers/util.js');
-    await installHandler(target, options);
+  // `install` is retired, not implemented. The installer this fork inherited
+  // resolved versions from Anthropic's Claude Code release bucket and installed
+  // that binary as `axa`; the checksum passed because the artefact was genuine
+  // upstream Claude Code, so integrity checking could not catch it. This fork
+  // publishes no release bucket of its own, so there is nothing to repoint it at.
+  //
+  // Registered but hidden rather than simply deleted: the root command takes a
+  // positional `[prompt]`, so an unregistered `install` would be read as the
+  // prompt "install" and silently open a session, which tells a user with muscle
+  // memory nothing. Hidden keeps it out of --help without that surprise.
+  program.command('install [target]', {
+    hidden: true
+  }).description(`Retired: ${PRODUCT_NAME} publishes no native build`).option('--force', 'Ignored').action(async () => {
+    process.stderr.write('\n');
+    process.stderr.write(chalk.yellow(`\`${BINARY_NAME} install\` has been removed.`) + '\n');
+    process.stderr.write(`${PRODUCT_NAME} publishes no native build, so there is nothing to download.\n`);
+    process.stderr.write(`Build from source instead: \`bun run build\` in your checkout.\n`);
+    process.exit(1);
   });
 
   // ant-only commands
