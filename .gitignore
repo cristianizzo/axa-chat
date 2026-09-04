@@ -5,16 +5,20 @@ dist/
 /cli-dev.next
 /cli-dev.next.tmp
 openclaw/
-docs/
 CLAUDE.md
-AXA.md
 AXA.local.md
 *.bun-build
 .bun-build-active/
 .idea/
 conversation-backup.jsonl
 .claude/
-.axa/
+# The config dir itself is tracked: it holds AXA.md, the agent definitions,
+# the skills and the shared agent-memory, and AXA.md requires those to be
+# corrected in the same change that invalidates them. Ignoring the directory
+# would also hide them from every recursive content search, so an agent
+# following that rule gets a clean negative and concludes there is nothing to
+# update. Only the per-machine settings overlay stays out.
+.axa/settings.local.json
 .axa-install.json
 .axa-update.json
 .axa-update.json.lock
