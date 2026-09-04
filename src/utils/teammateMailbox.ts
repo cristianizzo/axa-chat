@@ -1058,8 +1058,14 @@ export function isStructuredProtocolMessage(messageText: string): boolean {
  * Marks only messages matching a predicate as read, leaving others unread.
  * Takes the inbox lock and replaces the file atomically, like every other
  * mutation path here.
+ *
+ * Deliberately not exported. A predicate evaluated against whatever is on disk
+ * at mark time is only safe if it is scoped to a snapshot the caller has already
+ * delivered, and a caller in another file has no way to express that constraint
+ * beyond remembering it. Callers outside this module use
+ * markMessagesAsReadBySnapshot, which builds that predicate for them.
  */
-export async function markMessagesAsReadByPredicate(
+async function markMessagesAsReadByPredicate(
   agentName: string,
   predicate: (msg: TeammateMessage) => boolean,
   teamName?: string,
