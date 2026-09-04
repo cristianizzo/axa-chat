@@ -47,7 +47,7 @@ export function getProjectConfigFolderScope(filePath: string): 'project-config-f
  * whether the option is offered, that constant is the rule it writes, so a
  * mismatch would offer an option that grants nothing.
  */
-export function isInGlobalClaudeFolder(filePath: string): boolean {
+export function isInGlobalConfigFolder(filePath: string): boolean {
   return isInFolder(filePath, join(homedir(), CONFIG_DIR_NAME));
 }
 export type ConfigFolderScope = 'project-config-folder' | 'legacy-project-config-folder' | 'global-config-folder';
@@ -109,19 +109,21 @@ export function getFilePermissionOptions({
 
   // Check if this is a config folder path (project, legacy project, or global)
   const projectConfigFolderScope = getProjectConfigFolderScope(filePath);
-  const inGlobalClaudeFolder = isInGlobalClaudeFolder(filePath);
+  const inGlobalConfigFolder = isInGlobalConfigFolder(filePath);
 
-  // Option 2: For .claude/ folder, show special option instead of generic session option
+  // Option 2: for a config folder — project `.axa`, legacy project `.claude`, or
+  // the global `~/.axa` — offer the config-folder option instead of the generic
+  // session one. The legacy spelling is one of the three cases, not the subject.
   // Note: Session-level options are always shown since they only affect in-memory state,
   // not persisted settings. The allowManagedPermissionRulesOnly setting only restricts
   // persisted permission rules.
-  if ((projectConfigFolderScope !== null || inGlobalClaudeFolder) && operationType !== 'read') {
+  if ((projectConfigFolderScope !== null || inGlobalConfigFolder) && operationType !== 'read') {
     options.push({
       label: `Yes, and allow ${ASSISTANT_NAME} to edit its own settings for this session`,
       value: 'yes-claude-folder',
       option: {
         type: 'accept-session',
-        scope: inGlobalClaudeFolder ? 'global-config-folder' : projectConfigFolderScope!
+        scope: inGlobalConfigFolder ? 'global-config-folder' : projectConfigFolderScope!
       }
     });
   } else {
