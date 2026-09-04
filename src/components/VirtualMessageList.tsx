@@ -308,18 +308,29 @@ export function VirtualMessageList({
   // Incremental key array. Streaming appends one message at a time; rebuilding
   // the full string array on every commit allocates O(n) per message (~1MB
   // churn at 27k messages). Append-only delta push when the prefix matches;
-  // fall back to full rebuild on compaction, /clear, or itemKey change.
+  // fall back to full rebuild on compaction, /clear, itemKey change, or any
+  // restructuring of the already-keyed prefix.
   const keysRef = useRef<string[]>([]);
-  const prevMessagesRef = useRef<typeof messages>(messages);
   const prevItemKeyRef = useRef(itemKey);
-  if (prevItemKeyRef.current !== itemKey || messages.length < keysRef.current.length || messages[0] !== prevMessagesRef.current[0]) {
-    keysRef.current = messages.map(m => itemKey(m));
-  } else {
-    for (let i = keysRef.current.length; i < messages.length; i++) {
+  // Appending is only valid while the already-keyed prefix is untouched, and
+  // length alone doesn't prove that. Messages.tsx builds this array through
+  // collapse passes that rewrite the MIDDLE: toggling verbose (ctrl+O) expands
+  // a collapsed background-bash notification back into its N originals, which
+  // grows the array while leaving index 0 the same object. Re-deriving the key
+  // of whatever now sits at the last previously-keyed index costs one itemKey
+  // call and catches those shifts — keys are uuid-based and unique within the
+  // array, so a match means that element did not move. On mismatch we rebuild
+  // into a NEW array, which is also what makes useVirtualScroll drop the
+  // heightCache entries for the keys that went away.
+  const prevLen = keysRef.current.length;
+  const prefixIntact = prevItemKeyRef.current === itemKey && messages.length >= prevLen && (prevLen === 0 || itemKey(messages[prevLen - 1]!) === keysRef.current[prevLen - 1]);
+  if (prefixIntact) {
+    for (let i = prevLen; i < messages.length; i++) {
       keysRef.current.push(itemKey(messages[i]!));
     }
+  } else {
+    keysRef.current = messages.map(m => itemKey(m));
   }
-  prevMessagesRef.current = messages;
   prevItemKeyRef.current = itemKey;
   const keys = keysRef.current;
   const {

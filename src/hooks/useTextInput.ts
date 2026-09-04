@@ -22,7 +22,7 @@ import { env } from '../utils/env.js'
 import { isFullscreenEnvEnabled } from '../utils/fullscreen.js'
 import type { ImageDimensions } from '../utils/imageResizer.js'
 import { isModifierPressed, prewarmModifiers } from '../utils/modifiers.js'
-import { useDoublePress } from './useDoublePress.js'
+import { DOUBLE_PRESS_TIMEOUT_MS, useDoublePress } from './useDoublePress.js'
 
 type MaybeCursor = void | Cursor
 type InputHandler = (input: string) => MaybeCursor
@@ -132,7 +132,11 @@ export function useTextInput({
         key: 'escape-again-to-clear',
         text: 'Esc again to clear',
         priority: 'immediate',
-        timeoutMs: 1000,
+        // Must match the double-press window, not exceed it: the hint is the
+        // only signal that the second Esc is armed, and useDoublePress disarms
+        // at DOUBLE_PRESS_TIMEOUT_MS. A longer hint leaves a stretch where the
+        // prompt says "Esc again to clear" but Esc starts a fresh first press.
+        timeoutMs: DOUBLE_PRESS_TIMEOUT_MS,
       })
     },
     () => {
