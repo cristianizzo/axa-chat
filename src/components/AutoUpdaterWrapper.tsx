@@ -6,7 +6,6 @@ import { isAutoUpdaterDisabled } from '../utils/config.js';
 import { logForDebugging } from '../utils/debug.js';
 import { getCurrentInstallationType } from '../utils/doctorDiagnostic.js';
 import { AutoUpdater } from './AutoUpdater.js';
-import { NativeAutoUpdater } from './NativeAutoUpdater.js';
 import { PackageManagerAutoUpdater } from './PackageManagerAutoUpdater.js';
 type Props = {
   isUpdating: boolean;
@@ -17,7 +16,7 @@ type Props = {
   verbose: boolean;
 };
 export function AutoUpdaterWrapper(t0) {
-  const $ = _c(17);
+  const $ = _c(16);
   const {
     isUpdating,
     onChangeIsUpdating,
@@ -71,20 +70,25 @@ export function AutoUpdaterWrapper(t0) {
     }
     return t3;
   }
-  const Updater = useNativeInstaller ? NativeAutoUpdater : AutoUpdater;
+  // A native installation has no auto-updater here. The one this fork inherited
+  // fetched releases from Anthropic's bucket, and there is no build of our own to
+  // put in their place, so there is nothing honest to check for. `axa update`
+  // says so explicitly rather than reporting "up to date".
+  if (useNativeInstaller) {
+    return null;
+  }
   let t3;
-  if ($[9] !== Updater || $[10] !== autoUpdaterResult || $[11] !== isUpdating || $[12] !== onAutoUpdaterResult || $[13] !== onChangeIsUpdating || $[14] !== showSuccessMessage || $[15] !== verbose) {
-    t3 = <Updater verbose={verbose} onAutoUpdaterResult={onAutoUpdaterResult} autoUpdaterResult={autoUpdaterResult} isUpdating={isUpdating} onChangeIsUpdating={onChangeIsUpdating} showSuccessMessage={showSuccessMessage} />;
-    $[9] = Updater;
-    $[10] = autoUpdaterResult;
-    $[11] = isUpdating;
-    $[12] = onAutoUpdaterResult;
-    $[13] = onChangeIsUpdating;
-    $[14] = showSuccessMessage;
-    $[15] = verbose;
-    $[16] = t3;
+  if ($[9] !== autoUpdaterResult || $[10] !== isUpdating || $[11] !== onAutoUpdaterResult || $[12] !== onChangeIsUpdating || $[13] !== showSuccessMessage || $[14] !== verbose) {
+    t3 = <AutoUpdater verbose={verbose} onAutoUpdaterResult={onAutoUpdaterResult} autoUpdaterResult={autoUpdaterResult} isUpdating={isUpdating} onChangeIsUpdating={onChangeIsUpdating} showSuccessMessage={showSuccessMessage} />;
+    $[9] = autoUpdaterResult;
+    $[10] = isUpdating;
+    $[11] = onAutoUpdaterResult;
+    $[12] = onChangeIsUpdating;
+    $[13] = showSuccessMessage;
+    $[14] = verbose;
+    $[15] = t3;
   } else {
-    t3 = $[16];
+    t3 = $[15];
   }
   return t3;
 }

@@ -1,5 +1,5 @@
 import chalk from 'chalk'
-import { BINARY_NAME } from 'src/constants/product.js'
+import { BINARY_NAME, PRODUCT_NAME } from 'src/constants/product.js'
 import { logEvent } from 'src/services/analytics/index.js'
 import { getLocalInstallDir } from 'src/utils/localInstaller.js'
 import {
@@ -20,10 +20,7 @@ import {
   installOrUpdateClaudePackage,
   localInstallationExists,
 } from 'src/utils/localInstaller.js'
-import {
-  installLatest as installLatestNative,
-  removeInstalledSymlink,
-} from 'src/utils/nativeInstaller/index.js'
+import { removeInstalledSymlink } from 'src/utils/nativeInstaller/index.js'
 import { getPackageManager } from 'src/utils/nativeInstaller/packageManagers.js'
 import { writeToStdout } from 'src/utils/process.js'
 import { gte } from 'src/utils/semver.js'
@@ -212,51 +209,37 @@ export async function update() {
     }
   }
 
-  // Handle native installation updates first
+  // A native installation cannot be updated from here, and we say so rather than
+  // pretending. The native updater this fork inherited resolved its versions from
+  // Anthropic's Claude Code release bucket and installed that binary under our
+  // name; it was removed rather than repointed, because this fork publishes no
+  // release bucket of its own.
+  //
+  // Point at `/update`, not at a checkout: this fork ships as a source tree, so
+  // its updates are commits rather than published versions (the same distinction
+  // drawn on `autoUpdate` in utils/config.ts), and `/update` handles both the git
+  // and tarball cases. Anyone reaching this message installed via the flow that
+  // was just removed, which never gave them a checkout to return to.
+  //
+  // Exit non-zero: the update the user asked for did not happen.
   if (diagnostic.installationType === 'native') {
-    logForDebugging(
-      'update: Detected native installation, using native updater',
+    logForDebugging('update: Native installation, no update channel available')
+    process.stderr.write('\n')
+    process.stderr.write(
+      chalk.yellow(
+        `Cannot update a native installation of ${PRODUCT_NAME}.`,
+      ) + '\n',
     )
-    try {
-      const result = await installLatestNative(channel, true)
-
-      // Handle lock contention gracefully
-      if (result.lockFailed) {
-        const pidInfo = result.lockHolderPid
-          ? ` (PID ${result.lockHolderPid})`
-          : ''
-        writeToStdout(
-          chalk.yellow(
-            `Another Claude process${pidInfo} is currently running. Please try again in a moment.`,
-          ) + '\n',
-        )
-        await gracefulShutdown(0)
-      }
-
-      if (!result.latestVersion) {
-        process.stderr.write('Failed to check for updates\n')
-        await gracefulShutdown(1)
-      }
-
-      if (result.latestVersion === MACRO.VERSION) {
-        writeToStdout(
-          chalk.green(`Claude Code is up to date (${MACRO.VERSION})`) + '\n',
-        )
-      } else {
-        writeToStdout(
-          chalk.green(
-            `Successfully updated from ${MACRO.VERSION} to version ${result.latestVersion}`,
-          ) + '\n',
-        )
-        await regenerateCompletionCache()
-      }
-      await gracefulShutdown(0)
-    } catch (error) {
-      process.stderr.write('Error: Failed to install native update\n')
-      process.stderr.write(String(error) + '\n')
-      process.stderr.write(`Try running "${BINARY_NAME} doctor" for diagnostics\n`)
-      await gracefulShutdown(1)
-    }
+    process.stderr.write(
+      `${PRODUCT_NAME} ships as a source tree, so there is no build to download.\n`,
+    )
+    process.stderr.write(
+      `Start ${BINARY_NAME} and run /update to pull the latest commits and rebuild.\n`,
+    )
+    await gracefulShutdown(1)
+    // gracefulShutdown returns normally when a shutdown is already in progress,
+    // and falling through would run the npm update path against a native install.
+    return
   }
 
   // Fallback to existing JS/npm-based update logic
@@ -392,9 +375,6 @@ export async function update() {
         )
       } else {
         process.stderr.write('Try running with sudo or fix npm permissions\n')
-        process.stderr.write(
-          `Or consider using native installation with: ${BINARY_NAME} install\n`,
-        )
       }
       await gracefulShutdown(1)
       break
@@ -404,10 +384,6 @@ export async function update() {
         process.stderr.write('Try manually updating with:\n')
         process.stderr.write(
           `  cd "${getLocalInstallDir()}" && npm update ${MACRO.PACKAGE_URL}\n`,
-        )
-      } else {
-        process.stderr.write(
-          `Or consider using native installation with: ${BINARY_NAME} install\n`,
         )
       }
       await gracefulShutdown(1)

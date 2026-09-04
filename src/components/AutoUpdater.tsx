@@ -89,7 +89,7 @@ export function AutoUpdater({
       // true would suppress every further update attempt for the rest of the
       // session. Neither caller awaits it — the mount effect uses `void` and
       // useInterval discards the promise — so the throw would also surface as
-      // an unhandled rejection. Mirrors NativeAutoUpdater.
+      // an unhandled rejection.
       try {
         // Remove native installer symlink since we're using JS-based updates
         // But only if user hasn't migrated to native installation
@@ -122,7 +122,10 @@ export function AutoUpdater({
           updateMethod = 'global';
           installStatus = await installGlobalPackage();
         } else if (installationType === 'native') {
-          // This shouldn't happen - native should use NativeAutoUpdater
+          // Unreachable through AutoUpdaterWrapper, which returns null for native
+          // installations. There is no native updater to defer to: this fork
+          // publishes no native build, so there is nothing to download. Kept as a
+          // guard in case this component is ever rendered directly.
           logForDebugging('AutoUpdater: Unexpected native installation in non-native updater');
           return;
         } else {
