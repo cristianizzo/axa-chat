@@ -1,7 +1,10 @@
 import chokidar, { type FSWatcher } from 'chokidar'
 import { CONFIG_DIR_NAME } from '../../constants/product.js'
 import * as platformPath from 'path'
-import { getAdditionalDirectoriesForClaudeMd } from '../../bootstrap/state.js'
+import {
+  getAdditionalDirectoriesForClaudeMd,
+  getProjectRoot,
+} from '../../bootstrap/state.js'
 import {
   clearCommandMemoizationCaches,
   clearCommandsCache,
@@ -20,6 +23,7 @@ import { registerCleanup } from '../cleanupRegistry.js'
 import { logForDebugging } from '../debug.js'
 import { getFsImplementation } from '../fsOperations.js'
 import { executeConfigChangeHooks, hasBlockingResult } from '../hooks.js'
+import { getProjectDirsUpToHome } from '../markdownConfigLoader.js'
 import { createSignal } from '../signal.js'
 
 /**
@@ -195,31 +199,16 @@ async function getWatchablePaths(): Promise<string[]> {
     }
   }
 
-  // Project skills directory (<config dir>/skills)
-  const projectSkillsPath = getSkillsPath('projectSettings', 'skills')
-  if (projectSkillsPath) {
-    try {
-      // For project settings, resolve to absolute path
-      const absolutePath = platformPath.resolve(projectSkillsPath)
-      await fs.stat(absolutePath)
-      paths.push(absolutePath)
-    } catch {
-      // Path doesn't exist, skip it
-    }
-  }
-
-  // Project commands directory (<config dir>/commands)
-  const projectCommandsPath = getSkillsPath('projectSettings', 'commands')
-  if (projectCommandsPath) {
-    try {
-      // For project settings, resolve to absolute path
-      const absolutePath = platformPath.resolve(projectCommandsPath)
-      await fs.stat(absolutePath)
-      paths.push(absolutePath)
-    } catch {
-      // Path doesn't exist, skip it
-    }
-  }
+  // Project skills and commands directories. The loader does not read a
+  // single project directory: getSkillDirCommands walks from the cwd up to
+  // the git root and loads <config dir>/skills at every level, and the
+  // legacy commands-as-skills path does the same for <config dir>/commands.
+  // Watching only the innermost level would load a skill from an
+  // intermediate directory but never hot-reload it, so call the same walk
+  // the loader calls rather than rebuilding one path here. That walk already
+  // filters to directories that exist, so these need no stat.
+  paths.push(...getProjectDirsUpToHome('skills', getProjectRoot()))
+  paths.push(...getProjectDirsUpToHome('commands', getProjectRoot()))
 
   // Additional directories (--add-dir) skills
   for (const dir of getAdditionalDirectoriesForClaudeMd()) {

@@ -80,10 +80,17 @@ export type LoadedFrom =
  * Returns the config directory path a given source loads skills or commands
  * from.
  *
- * Must stay in step with what `getSkillDirCommands` actually reads: the
- * skill-change watcher watches these paths, and the /skills menu shows them,
- * so a path here that the loader does not use means a directory watched but
- * never loaded and a location shown to the user that holds nothing.
+ * Must stay in step with the config directory `getSkillDirCommands` actually
+ * reads from, because the /skills menu shows these paths to the user: a
+ * directory named here that the loader does not read is a location the user
+ * is told about and that holds nothing.
+ *
+ * `projectSettings` returns the relative `<config dir>/<dir>` form on
+ * purpose. There is no single project directory — the loader walks from the
+ * cwd up to the git root and reads every level that exists — so this is the
+ * shape shared by all of them, suitable for display but not a complete list.
+ * Callers that need the actual set (the skill-change watcher) call
+ * `getProjectDirsUpToHome`, the same walk the loader uses.
  */
 export function getSkillsPath(
   source: SettingSource | 'plugin',
