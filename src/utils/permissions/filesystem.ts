@@ -1994,6 +1994,16 @@ export function checkEditableInternalPath(
   // This is defense-in-depth; individual helper functions also normalize
   const normalizedPath = normalize(absolutePath)
 
+  // First, ahead of every carve-out below. A flag can aim the active settings
+  // or MCP config file at any path, including inside one of these carve-outs —
+  // `--settings <cwd>/.axa/agent-memory/x.json` is allowed by isAgentMemoryPath,
+  // which matches that whole tree under any filename. Every carve-out here
+  // grants a silent write, and none of them inspects what the file *is*, so the
+  // screen has to run before all of them rather than beside any one of them.
+  if (resolvesToFlagConfigFile(normalizedPath)) {
+    return { behavior: 'passthrough', message: '' }
+  }
+
   // Plan files for current session
   if (isSessionPlanFile(normalizedPath)) {
     return {
@@ -2131,20 +2141,19 @@ export function checkEditableInternalPath(
   // Same reasoning for hooks/ and the other executed paths — a write there is
   // code execution on the next tool call.
   //
-  // Deliberately last in this function: the earlier carve-outs (agent memory,
-  // auto memory, plans) live under paths this classifier does not call 'open' —
-  // memdir sits under ~/.axa/projects/, which is 'secret' — and must keep their
-  // allow. They return before this point, which is also why the default here can
+  // Deliberately last in this function: the earlier carve-outs must keep their
+  // allow, and they return before this point, which is why the default here can
   // be restrictive without stranding them.
-  // `--settings <path>` can point the active settings file anywhere, including
-  // under one of the CONFIG_DIR_OPEN_DIRS. This branch runs before step 1.7's
-  // always-ask on config files, so without this guard that flag turns the live
-  // settings file into a silently writable one — the exact circularity the
-  // paragraph above rules out for the default location.
-  if (
-    classifyConfigDirPath(normalizedPath) === 'open' &&
-    !resolvesToFlagConfigFile(normalizedPath)
-  ) {
+  //
+  // Do NOT read that as "the earlier carve-outs are not classified 'open'" — an
+  // earlier revision of this comment said so and it is false: `agent-memory`,
+  // `agent-memory-local` and `plans` are all in CONFIG_DIR_OPEN_DIRS, and
+  // relativeToConfigDirRoot resolves against the project `.axa` as well as the
+  // config home. Only memdir is genuinely elsewhere (`~/.axa/projects/`, which
+  // is 'secret'). The ordering is what protects them, not the classification —
+  // and a guard that has to run for those paths too therefore cannot live here.
+  // That is why the flag-config screen is at the top of this function.
+  if (classifyConfigDirPath(normalizedPath) === 'open') {
     return {
       behavior: 'allow',
       updatedInput: input,
