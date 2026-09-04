@@ -1550,14 +1550,41 @@ const CONFIG_DIR_SECRET_DIRS = new Set([
   // prompt. `sessions/` is the same data by another name.
   'projects',
   'sessions',
+  // `ide/` holds the IDE lockfiles, and each one carries an `authToken`
+  // (utils/ide.ts, parsed at readLockfile and presented at connectToIde to
+  // authenticate the websocket). Reading one discloses that token, which is why
+  // it is here and not merely `protected` — `protected` is readable. Writing one
+  // points the IDE channel at a chosen port with a token axa will then present.
+  'ide',
 ])
-const CONFIG_DIR_SECRET_FILES = new Set([
-  'config.json',
-  '.config.json',
-  '.credentials.json',
-])
-/** `config.json.bak-panels`, `config.json.backup.1788489164599`, … */
-const CONFIG_DIR_SECRET_FILE_PREFIX = 'config.json.'
+const CONFIG_DIR_SECRET_FILES = new Set(['.credentials.json'])
+
+/**
+ * The global config file and its backups — the OAuth account material.
+ *
+ * Matched by shape, because the name is *computed*: `getGlobalClaudeFile()`
+ * (utils/env.ts) builds `config${fileSuffixForOauthConfig()}.json`, and
+ * `fileSuffixForOauthConfig()` (constants/oauth.ts) yields '', '-local-oauth',
+ * '-staging-oauth' or '-custom-oauth'. The literal `config.json` covered
+ * exactly one of the four. `-custom-oauth` is the one that matters in a shipped
+ * binary: the other two sit behind `USER_TYPE === 'ant'`, which scripts/build.ts
+ * `--define`s to `"external"`, but `CLAUDE_CODE_CUSTOM_OAUTH_URL` is tested
+ * *before* that switch and is not gated on it.
+ *
+ * Calling `fileSuffixForOauthConfig()` from here would not fix this: it returns
+ * the suffix for the *current* environment, so the other three spellings would
+ * still classify open. The filename is env-dependent, so the classifier has to
+ * match the family rather than the instance.
+ *
+ * The trailing group covers the backups: `config.json.backup.1788489164599`
+ * (utils/config.ts), and the legacy `${file}.backup` sibling, which for a
+ * suffixed name is `config-custom-oauth.json.backup`.
+ *
+ * The leading `\.?` covers `.config.json`, the CLAUDE_CONFIG override spelling
+ * in the same function.
+ */
+const CONFIG_DIR_SECRET_FILE_PATTERN =
+  /^\.?config(-[a-z0-9-]+)?\.json(\..*)?$/
 /**
  * `grok-api-key` and any future `<provider>-api-key`. Matched by shape rather
  * than by name so adding a provider does not silently open a hole — the user
@@ -1577,6 +1604,13 @@ const CONFIG_DIR_API_KEY_FILE_PATTERN = /api[-_]?key$/
  * - `session-env/`     — hook env scripts, concatenated into every Bash
  *                        invocation (sessionEnvironment.ts).
  * - `local/`           — the installed binary and its node_modules.
+ * - `chrome/`          — `chrome-native-host`, a `#!/bin/sh` wrapper written and
+ *                        chmod 0755'd by createWrapperScript
+ *                        (claudeInChrome/setup.ts). It exists because Chrome's
+ *                        native-host manifest `path` cannot carry arguments, so
+ *                        the manifest points at this script and Chrome executes
+ *                        it. Same property as `hooks/`, executed by a different
+ *                        process. (`chrome-native-host.bat` on Windows.)
  *
  * And three that are worse than merely executed, because the same file that
  * carries the code also states the permission it runs under:
@@ -1615,6 +1649,7 @@ const CONFIG_DIR_PROTECTED_DIRS = new Set([
   'shell-snapshots',
   'session-env',
   'local',
+  'chrome',
   'skills',
   'commands',
   'agents',
@@ -1763,7 +1798,7 @@ function classifyConfigDirRelativePath(
   if (
     CONFIG_DIR_SECRET_DIRS.has(first) ||
     CONFIG_DIR_SECRET_FILES.has(base) ||
-    base.startsWith(CONFIG_DIR_SECRET_FILE_PREFIX) ||
+    CONFIG_DIR_SECRET_FILE_PATTERN.test(base) ||
     CONFIG_DIR_API_KEY_FILE_PATTERN.test(base)
   ) {
     return 'secret'
