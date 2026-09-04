@@ -81,6 +81,7 @@ type State = {
   sessionSource: string | undefined
   questionPreviewFormat: 'markdown' | 'html' | undefined
   flagSettingsPath: string | undefined
+  flagMcpConfigPaths: string[]
   flagSettingsInline: Record<string, unknown> | null
   allowedSettingSources: SettingSource[]
   sessionIngressToken: string | null | undefined
@@ -309,6 +310,7 @@ function getInitialState(): State {
     oauthTokenFromFd: undefined,
     apiKeyFromFd: undefined,
     flagSettingsPath: undefined,
+    flagMcpConfigPaths: [],
     flagSettingsInline: null,
     allowedSettingSources: [
       'userSettings',
@@ -1135,6 +1137,24 @@ export function getFlagSettingsPath(): string | undefined {
 
 export function setFlagSettingsPath(path: string | undefined): void {
   STATE.flagSettingsPath = path
+}
+
+/**
+ * Absolute paths passed to `--mcp-config` as files, recorded for the permission
+ * engine. `--mcp-config` also accepts inline JSON, which has no path and so
+ * contributes nothing here.
+ *
+ * Kept alongside flagSettingsPath because the two are the same hazard: a flag
+ * that points an active, credential-bearing, execution-defining config file at
+ * an arbitrary location, including inside a config directory the permission
+ * engine otherwise treats as freely readable and writable.
+ */
+export function getFlagMcpConfigPaths(): string[] {
+  return STATE.flagMcpConfigPaths
+}
+
+export function setFlagMcpConfigPaths(paths: string[]): void {
+  STATE.flagMcpConfigPaths = paths
 }
 
 export function getFlagSettingsInline(): Record<string, unknown> | null {

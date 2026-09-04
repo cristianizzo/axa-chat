@@ -13,7 +13,11 @@ import {
   PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
 } from 'src/tools/FileEditTool/constants.js'
 import type { z } from 'zod/v4'
-import { getOriginalCwd, getSessionId } from '../../bootstrap/state.js'
+import {
+  getFlagMcpConfigPaths,
+  getOriginalCwd,
+  getSessionId,
+} from '../../bootstrap/state.js'
 import { isGlobalConfigFileName } from '../../constants/oauth.js'
 import { CONFIG_DIR_NAME, MEMORY_FILE_NAME } from '../../constants/product.js'
 import { checkStatsigFeatureGate_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
@@ -1916,23 +1920,39 @@ const CONFIG_DIR_READABLE_DIRS = new Set([
 ])
 
 /**
- * Does any resolved form of `absolutePath` land on an active settings file?
+ * Does any resolved form of `absolutePath` land on an active config file that a
+ * command-line flag pointed somewhere arbitrary?
  *
- * `--settings <path>` can put the live settings file anywhere, including inside
- * a config directory this file treats as open or readable — and those branches
- * run before step 1.7's always-ask, so they would override it. Settings can hold
- * credentials (`apiKeyHelper`, `awsAuthRefresh`, `env`), and the deny rules
- * protecting the OAuth tokens live there too, so a silent write is circular.
+ * Two flags do this, and they are one hazard, not two:
  *
- * Checking every form, not just the literal path, is the point: a symlink at
- * `~/.axa/agent-memory/alias.json` pointing at a flag settings file elsewhere
+ * - `--settings <path>` — settings hold credentials (`apiKeyHelper`,
+ *   `awsAuthRefresh`, `env`), and the deny rules protecting the OAuth tokens
+ *   live there too, so a silent write is circular: an agent could delete the
+ *   rules first.
+ * - `--mcp-config <path>` — MCP server entries carry `env` blocks and a spawned
+ *   `command`, so a silent write there is code execution on the next launch.
+ *   (The inline-JSON form of the flag has no path and cannot be written to.)
+ *
+ * Either can be aimed inside a config directory that this file otherwise treats
+ * as freely readable or writable, and those branches run before step 1.7's
+ * always-ask, so without this they override it.
+ *
+ * Checking every resolved form, not just the literal path, is the point: a
+ * symlink at `~/.axa/agent-memory/alias.json` pointing at such a file elsewhere
  * under the config dir passes the classifier — every form is still `open` — and
  * a check on the literal path alone would not see what it resolves to.
  */
-function resolvesToSettingsFile(absolutePath: string): boolean {
-  return getPathsForPermissionCheck(absolutePath).some(form =>
-    isClaudeSettingsPath(form),
+function resolvesToFlagConfigFile(absolutePath: string): boolean {
+  const flagMcpConfigPaths = getFlagMcpConfigPaths().map(path =>
+    normalizeCaseForComparison(normalize(path)),
   )
+  return getPathsForPermissionCheck(absolutePath).some(form => {
+    if (isClaudeSettingsPath(form)) {
+      return true
+    }
+    const normalizedForm = normalizeCaseForComparison(normalize(form))
+    return flagMcpConfigPaths.includes(normalizedForm)
+  })
 }
 
 /**
@@ -1941,9 +1961,11 @@ function resolvesToSettingsFile(absolutePath: string): boolean {
  * All forms must qualify, so the strictest wins, for the same reason
  * classifyConfigDirPath checks every form: otherwise a symlink under
  * `~/.axa/agents/` would launder a read of something else.
+ *
+ * Flag-supplied config files are screened by the caller, which covers the
+ * 'open' arm this function is never reached on.
  */
 function isReadableConfigDirPath(absolutePath: string): boolean {
-  if (resolvesToSettingsFile(absolutePath)) return false
   for (const form of getPathsForPermissionCheck(absolutePath)) {
     const relative = relativeToConfigDirRoot(normalize(form))
     if (relative === null) return false
@@ -2121,7 +2143,7 @@ export function checkEditableInternalPath(
   // paragraph above rules out for the default location.
   if (
     classifyConfigDirPath(normalizedPath) === 'open' &&
-    !resolvesToSettingsFile(normalizedPath)
+    !resolvesToFlagConfigFile(normalizedPath)
   ) {
     return {
       behavior: 'allow',
@@ -2318,14 +2340,21 @@ export function checkReadableInternalPath(
   // falls through to step 12 of checkReadPermissionForTool and asks, which is
   // what main did for all of these.
   //
-  // Redundant for 'open' paths, which checkReadPermissionForTool already reaches
-  // via step 5 ("edit access implies read access"); this is what covers the
-  // readable subset of 'protected'.
+  // The 'open' arm is NOT redundant with step 5 of checkReadPermissionForTool
+  // ("edit access implies read access"). It reads that way, and an earlier
+  // revision of this comment said so, but step 5 defers to
+  // checkWritePermissionForTool, which now declines for an active flag-supplied
+  // config file — so for exactly the paths the guard below exists to protect,
+  // this arm is the only thing standing between them and a silent read.
+  //
+  // Hence the guard wraps the whole branch rather than sitting inside
+  // isReadableConfigDirPath, which only the 'protected' arm consults.
   const configDirAccess = classifyConfigDirPath(normalizedPath)
   if (
-    configDirAccess === 'open' ||
-    (configDirAccess === 'protected' &&
-      isReadableConfigDirPath(normalizedPath))
+    !resolvesToFlagConfigFile(normalizedPath) &&
+    (configDirAccess === 'open' ||
+      (configDirAccess === 'protected' &&
+        isReadableConfigDirPath(normalizedPath)))
   ) {
     return {
       behavior: 'allow',
