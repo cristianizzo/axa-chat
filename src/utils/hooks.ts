@@ -130,7 +130,10 @@ import {
 import { logError } from './log.js'
 import { createCombinedAbortSignal } from './combinedAbortSignal.js'
 import type { PermissionResult } from './permissions/PermissionResult.js'
-import { registerPendingAsyncHook } from './hooks/AsyncHookRegistry.js'
+import {
+  CONFIG_ASYNC_HOOK_TIMEOUT_MS,
+  registerPendingAsyncHook,
+} from './hooks/AsyncHookRegistry.js'
 import { enqueuePendingNotification } from './messageQueueManager.js'
 import {
   extractTextContent,
@@ -1022,7 +1025,10 @@ async function execCommandHook(
       processId,
       hookId,
       shellCommand,
-      asyncResponse: { async: true, asyncTimeout: hookTimeoutMs },
+      // Not hookTimeoutMs: that is the synchronous execution limit from
+      // `timeout` in settings, and this hook is not being executed
+      // synchronously. See CONFIG_ASYNC_HOOK_TIMEOUT_MS.
+      asyncResponse: { async: true, asyncTimeout: CONFIG_ASYNC_HOOK_TIMEOUT_MS },
       hookEvent,
       hookName,
       command: hook.command,

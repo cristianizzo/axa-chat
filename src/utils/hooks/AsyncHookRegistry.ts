@@ -38,6 +38,19 @@ export type PendingAsyncHook = {
 const DEFAULT_ASYNC_HOOK_TIMEOUT_MS = 15_000
 
 /**
+ * Deadline for a hook backgrounded because settings marked it `async`, rather
+ * than because it answered `{"async": true}` on stdout.
+ *
+ * Such a hook never named a deadline: `timeout` in settings bounds *synchronous*
+ * execution, and reusing it here would kill a `{"timeout": 30, "async": true}`
+ * hook after 30s — the combination someone writes precisely because the hook is
+ * slow, and which ran unbounded before this deadline existed. So this is a
+ * backstop against outliving the session, not a latency budget, and it is set
+ * far longer than the default a self-declared async hook gets.
+ */
+export const CONFIG_ASYNC_HOOK_TIMEOUT_MS = 10 * 60 * 1000
+
+/**
  * Largest delay setTimeout accepts. Anything above it — Infinity included — is
  * silently turned into 1ms, so requests beyond this are clamped down to it
  * rather than allowed through.
@@ -250,10 +263,13 @@ export async function checkForAsyncHookResponses(): Promise<
           payload: {
             processId: hook.processId,
             response: {
+              // No advice to raise "asyncTimeout" here: a hook backgrounded by
+              // the `async` setting never emits an async response to raise it
+              // in, so that instruction would be impossible to follow for one
+              // of the two ways a hook reaches this registry.
               systemMessage:
-                `Async hook "${hook.hookName}" (${hook.hookEvent}) was killed after ` +
-                `exceeding its asyncTimeout of ${hook.timeout}ms. Raise "asyncTimeout" ` +
-                `in the hook's async response if it needs longer.`,
+                `Async hook "${hook.hookName}" (${hook.hookEvent}) exceeded its ` +
+                `${hook.timeout}ms asyncTimeout and was killed.`,
             },
             hookName: hook.hookName,
             hookEvent: hook.hookEvent,
