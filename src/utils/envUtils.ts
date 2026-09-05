@@ -3,15 +3,65 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { CONFIG_DIR_NAME } from '../constants/product.js'
 
-// Memoized: 150+ callers, many on hot paths. Keyed off CLAUDE_CONFIG_DIR so
+// The one place that decides whether CLAUDE_CONFIG_DIR counts as *set*.
+//
+// `||`, deliberately, not `??`: `??` falls back on undefined only, so
+// `export CLAUDE_CONFIG_DIR=` (an empty *string*) used to propagate and
+// getClaudeConfigHomeDir returned ''. Empty is treated as unset because that is
+// what the user meant — `export X=` and `unset X` are the same intent in a
+// shell, and only Node distinguishes them. Falling back beats throwing here:
+// this runs before any error UI exists, for 150+ callers, and the fallback
+// lands the process in exactly the state `unset` would have.
+//
+// It is a named function rather than the expression inlined twice because the
+// memoize body and the memoize *cache key* both need the answer, and the two
+// spellings had already drifted once: the body said `||` while the key said
+// bare `process.env.CLAUDE_CONFIG_DIR`, so `''` and `undefined` were two keys
+// for one value. Harmless in itself, and the wrong shape — a key that
+// discriminates inputs the function does not. Reported by Copilot, as a
+// *suppressed* comment on a round whose inline count was 0.
+function configDirOverride(): string | undefined {
+  return process.env.CLAUDE_CONFIG_DIR || undefined
+}
+
+// Memoized: 150+ callers, many on hot paths. Keyed off configDirOverride() so
 // tests that change the env var get a fresh value without explicit cache.clear.
+// `??` is correct at the return below *because* the override is already folded
+// to undefined above; it is not a second copy of that decision.
+//
+// What that guards, since the value is a root of the permission engine: an
+// empty root is inert downstream today for one incidental reason —
+// `path.normalize('')` (the path module's, not the String.prototype
+// `.normalize('NFC')` on the return statement below) returns `'.'` on posix
+// and win32 alike, so an empty
+// root enters the root sets as a *relative* entry and never matches an
+// absolute candidate.
+//
+// Underneath that normalization, the raw predicates in
+// src/utils/permissions/filesystem.ts are `form === root` and
+// `form.startsWith(root + separator)` over both separator spellings, and an
+// empty root satisfies the second for any candidate whose normalized form
+// *begins with a separator*. State it that way rather than as "every absolute
+// path", which is what this comment said first and is false on win32:
+// measured, root '' matches 8/8 posix candidates, and on win32 it matches
+// `\\server\share\x`, `\\?\C:\y`, `\foo` and `/foo` but NOT `C:\foo`, `C:\`
+// or `D:\a\b` — drive-letter paths are absolute and do not begin with a
+// separator. Control both ways: root '/cfg' gives equal on `/cfg`, prefix on
+// `/cfg/x`, and no-match on `/cfgx` and `/other`, so the battery discriminates
+// rather than merely returning false.
+//
+// Two independently built root sets there — foldResolvedRootPrefix's and
+// relativeToConfigDirRoot's — are each held safe only by normalizing before
+// they compare. So the safety is real but unowned: a refactor that compares
+// first re-opens it silently, with nothing failing at the site that broke it.
+// This guard is the owner.
 export const getClaudeConfigHomeDir = memoize(
   (): string => {
-    return (
-      process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), CONFIG_DIR_NAME)
-    ).normalize('NFC')
+    return (configDirOverride() ?? join(homedir(), CONFIG_DIR_NAME)).normalize(
+      'NFC',
+    )
   },
-  () => process.env.CLAUDE_CONFIG_DIR,
+  configDirOverride,
 )
 
 export function getTeamsDir(): string {
