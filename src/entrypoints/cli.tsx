@@ -219,6 +219,32 @@ async function main(): Promise<void> {
   }
 
   // Fast-path for template job commands.
+  //
+  // `../cli/handlers/templateJobs.js` DOES NOT EXIST, and that is load-bearing.
+  // Do not "clean up" this dangling import. It is the second of two independent
+  // barriers keeping this block unreachable, and the only one that cannot be
+  // lifted by a one-line change:
+  //   1. `TEMPLATES` is in neither `defaultFeatures` nor `fullExperimentalFeatures`
+  //      in scripts/build.ts — but that list is not a gate. Passing an undeclared
+  //      `--feature=TEMPLATES` by hand compiles the flag in; build.ts only warns.
+  //   2. The module is absent, so any build with the flag on fails to resolve and
+  //      writes no artifact. Measured — this command exits non-zero with
+  //      `Could not resolve: "../cli/handlers/templateJobs.js"`:
+  //
+  //          bun run ./scripts/build.ts --dev --feature-set=dev-full --feature=TEMPLATES
+  //
+  //      With the flag off it is eliminated rather than merely unreached:
+  //      `templateJobs`, `templatesMain` and `cli_templates_path` are all absent
+  //      from the artifact, against a control of `cli_entry` and `cli_bridge_path`
+  //      confirming checkpoint literals do survive into it.
+  //
+  // Barrier 2 is an accident, not a decision — outside this comment `templateJobs`
+  // is named nowhere in src/ but the import below, and src/cli/handlers/ holds six
+  // unrelated files. Deleting the import to silence a dead-code or module sweep
+  // would not remove dead code; it would promote this path from unbuildable to
+  // one-list-entry-away, silently, and nothing in build.ts would flag it. The
+  // present failure is loud and happens at build time, which is the property
+  // worth keeping until the module actually lands.
   if (feature('TEMPLATES') && (args[0] === 'new' || args[0] === 'list' || args[0] === 'reply')) {
     profileCheckpoint('cli_templates_path');
     const {
