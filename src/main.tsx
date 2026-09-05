@@ -700,8 +700,10 @@ export async function main() {
   }
 
   // `axa ssh <host> [dir]` — strip from argv so the main command handler
-  // runs (full interactive TUI), stash the host/dir for the REPL branch at
-  // ~line 3720 to pick up. Headless (-p) mode not supported in v1: SSH
+  // runs (full interactive TUI), stash the host/dir for the REPL branch
+  // guarded by `feature('SSH_REMOTE') && _pendingSSH?.host` to pick up —
+  // that condition is unique in this file, unlike a line number, which was
+  // wrong by ~500 here. Headless (-p) mode not supported in v1: SSH
   // sessions need the local REPL to drive them (interrupt, permissions).
   if (feature('SSH_REMOTE') && _pendingSSH) {
     const rawCliArgs = process.argv.slice(2);
@@ -734,7 +736,8 @@ export async function main() {
       }
       // Forward session-resume + model flags to the remote CLI's initial spawn.
       // --continue/-c and --resume <uuid> operate on the REMOTE session history
-      // (which persists under the remote's ~/.claude/projects/<cwd>/).
+      // (which persists under projects/<cwd>/ in the remote's config home —
+      // CLAUDE_CONFIG_DIR there when set, else ~/.axa).
       // --model controls which model the remote uses.
       const extractFlag = (flag: string, opts: {
         hasValue?: boolean;
