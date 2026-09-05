@@ -3,16 +3,31 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { CONFIG_DIR_NAME } from '../constants/product.js'
 
-// Memoized: 150+ callers, many on hot paths. Keyed off CLAUDE_CONFIG_DIR so
-// tests that change the env var get a fresh value without explicit cache.clear.
+// The one place that decides whether CLAUDE_CONFIG_DIR counts as *set*.
 //
 // `||`, deliberately, not `??`: `??` falls back on undefined only, so
-// `export CLAUDE_CONFIG_DIR=` (an empty *string*) used to propagate and this
-// function returned ''. Empty is treated as unset because that is what the user
-// meant — `export X=` and `unset X` are the same intent in a shell, and only
-// Node distinguishes them. Falling back beats throwing here: this runs before
-// any error UI exists, for 150+ callers, and the fallback lands the process in
-// exactly the state `unset` would have.
+// `export CLAUDE_CONFIG_DIR=` (an empty *string*) used to propagate and
+// getClaudeConfigHomeDir returned ''. Empty is treated as unset because that is
+// what the user meant — `export X=` and `unset X` are the same intent in a
+// shell, and only Node distinguishes them. Falling back beats throwing here:
+// this runs before any error UI exists, for 150+ callers, and the fallback
+// lands the process in exactly the state `unset` would have.
+//
+// It is a named function rather than the expression inlined twice because the
+// memoize body and the memoize *cache key* both need the answer, and the two
+// spellings had already drifted once: the body said `||` while the key said
+// bare `process.env.CLAUDE_CONFIG_DIR`, so `''` and `undefined` were two keys
+// for one value. Harmless in itself, and the wrong shape — a key that
+// discriminates inputs the function does not. Reported by Copilot, as a
+// *suppressed* comment on a round whose inline count was 0.
+function configDirOverride(): string | undefined {
+  return process.env.CLAUDE_CONFIG_DIR || undefined
+}
+
+// Memoized: 150+ callers, many on hot paths. Keyed off configDirOverride() so
+// tests that change the env var get a fresh value without explicit cache.clear.
+// `??` is correct at the return below *because* the override is already folded
+// to undefined above; it is not a second copy of that decision.
 //
 // What that guards, since the value is a root of the permission engine: an
 // empty root is inert downstream today for one incidental reason —
@@ -42,11 +57,11 @@ import { CONFIG_DIR_NAME } from '../constants/product.js'
 // This guard is the owner.
 export const getClaudeConfigHomeDir = memoize(
   (): string => {
-    return (
-      process.env.CLAUDE_CONFIG_DIR || join(homedir(), CONFIG_DIR_NAME)
-    ).normalize('NFC')
+    return (configDirOverride() ?? join(homedir(), CONFIG_DIR_NAME)).normalize(
+      'NFC',
+    )
   },
-  () => process.env.CLAUDE_CONFIG_DIR,
+  configDirOverride,
 )
 
 export function getTeamsDir(): string {
