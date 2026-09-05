@@ -2519,7 +2519,7 @@ function isReadableConfigDirPath(absolutePath: string): boolean {
  *
  * The two reasons also split by flavour, which is the other thing a single
  * sentence hides: on `path.win32` the raw empty root matches **0 of 8**, since
- * `'' + '\'` is `\` and the candidates are `/`-spelled. So the separator does
+ * `'' + sep` is `\` and the candidates are `/`-spelled. So the separator does
  * cover `''` there and not on posix, and only the normalise covers both.
  *
  * The safety is therefore real, **unowned, and doubled** — two independent
@@ -2660,7 +2660,7 @@ function stripTrailingSeparators(root: string): string {
  * - Root `''`, `path.posix`, raw predicate: **8 of 8**. The sentence is TRUE,
  *   and it is the only stated reason that guard exists — do not delete it.
  * - Root `''`, `path.win32`, raw predicate: **0 of 8**. The catastrophe is
- *   POSIX-only, because `'' + '\'` is `\` and the candidates are `/`-spelled.
+ *   POSIX-only, because `'' + sep` is `\` and the candidates are `/`-spelled.
  *   Stated because the reflex is to assume a POSIX result transfers.
  * - Root `''`, either flavour, as the code actually runs it: **0 of 8**. The
  *   root is normalized first and `normalize('')` is `'.'` on both, so `./`
