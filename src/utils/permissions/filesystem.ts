@@ -2206,15 +2206,47 @@ function getFoldableRootsForSession(): FoldableRoot[] {
         // belong, because it advertises itself as already resolved. It is not:
         // it realpaths only its *base* and then joins `claude-{uid}` lexically,
         // so a link at that tail component leaves the root as lexical as the
-        // config home. It also returns a trailing separator — as can the two
-        // env-backed roots above, which is why the strip below is uniform
-        // rather than attached to this entry.
+        // config home.
+        //
+        // It also always ends in a separator: the body is
+        // `join(resolvedBaseTmpDir, getClaudeTempDirName()) + sep`, with no
+        // branch. Do not group that with the trailing separators the two
+        // env-backed roots above *can* carry — those need a user to type a
+        // slash into CLAUDE_CONFIG_DIR, this one needs nothing. An earlier
+        // version of this comment said `getClaudeTempDir()` "also" returns one,
+        // and the grouping is what made the separator handling below read as an
+        // edge case for a misconfigured setup. It is not: one root is in that
+        // state on every run, on every platform.
         getClaudeTempDir(),
       ]),
     ].map(root => ({
       lexical: stripTrailingSeparators(normalize(root)),
-      resolved: getPathsForPermissionCheck(root).map(form =>
-        stripTrailingSeparators(normalize(form)),
+      // The strip is on the ARGUMENT, and that is the whole point — stripping
+      // only the results cannot work, because by then the forms are already
+      // missing. `getPathsForPermissionCheck` walks the symlink chain with
+      // `lstat`/`readlink`, and POSIX makes a trailing separator *follow* the
+      // link: `lstatSync('hop/').isSymbolicLink()` is false where
+      // `lstatSync('hop')` is true, and `readlinkSync('hop/')` fails EINVAL.
+      // (Control: a real directory also reports false, so the value
+      // discriminates rather than being constant.) So a root that arrives with
+      // a separator makes the walk terminate on its first step; the
+      // intermediate hops are never collected, and only the final realpath
+      // survives via the fallback. Nothing downstream restores a form that was
+      // never gathered.
+      //
+      // This is not hypothetical and it is not conditional. `getClaudeTempDir()`
+      // ends in `sep` unconditionally, so before this strip that root's resolved
+      // set was wrong in every session. The observable consequence was a false
+      // *deny*: a candidate that is itself a symlink to the intermediate hop
+      // folded to nothing, disagreed with its own written spelling, and
+      // `allowOnlyIfResolvedFormsAgree` returned passthrough where it had
+      // previously allowed.
+      //
+      // Both `stripTrailingSeparators` calls are therefore load-bearing and they
+      // are not the same call twice: this one decides which forms exist, the one
+      // on `lexical` decides what they are folded back to.
+      resolved: getPathsForPermissionCheck(stripTrailingSeparators(root)).map(
+        form => stripTrailingSeparators(normalize(form)),
       ),
     }))
   )
@@ -2299,14 +2331,32 @@ function getFoldableRootsForSession(): FoldableRoot[] {
  * The load-bearing part is that the folded string is then *re-decided* by the
  * whole carve-out chain, not by the carve-out that admitted the path as
  * written. So a rewritten spelling can match a *different* carve-out than the
- * one the caller aimed at — `<cfg>/plans/link.md -> <cfg>/agents/a.md` is
- * decided as an agents-dir path. That is correct rather than merely tolerable,
- * because the two spellings name the same inode: the only thing that made the
- * second carve-out applicable is a link the user's own configuration put there,
- * and the alternative — deciding the target under the *source's* carve-out —
- * is the laundering this function exists to prevent. Re-deciding can therefore
- * change which allow is granted, but it cannot grant an allow to a file that
- * would not have one under its own name.
+ * one the caller aimed at — `<cfg>/plans/link.md -> <cfg>/agent-memory/x.md`
+ * folds into the agent-memory namespace and comes back with *that* carve-out's
+ * reason.
+ *
+ * What happens next is a **denial**, and an earlier version of this paragraph
+ * said the opposite. It claimed re-deciding "can change which allow is granted",
+ * which the consumer refutes: `allowOnlyIfResolvedFormsAgree` compares reasons,
+ * and on a mismatch returns `denied` — while on success it returns `decision`,
+ * the *written* form's result. A different allow is never granted. The
+ * docblock's own worked example measures `passthrough`, with controls showing
+ * that a same-carve-out symlink allows, the unlinked path allows, and the target
+ * allows under its own name — so the denial is the identity check firing and not
+ * a dead fixture. Two other paragraphs here already said so; this one was the
+ * cheapest sentence in the file to falsify and the one that was wrong.
+ *
+ * Which makes reason **distinctness** a third unenforced convention, alongside
+ * the two named at the loop. `identify` treats the reason string as the
+ * carve-out's identity, so two carve-outs sharing a string would be one identity
+ * to this check, and a path allowed by A whose resolved form lands in B would
+ * *agree* instead of being denied. That fails **open**. All 19 reasons are
+ * distinct today, but the margin is one word — "Project directory files are
+ * allowed for reading" against "Project temp directory files are allowed for
+ * reading" — and a new carve-out is written by copying a neighbouring block,
+ * where the reason line is the one most likely to be left alone. A duplicate
+ * would still be a static literal and would still satisfy the convention that
+ * *is* written down.
  *
  * `roots` is a required parameter with no default, deliberately. A default of
  * `getFoldableRootsForSession()` would read as harmless and would let a future
@@ -2539,6 +2589,15 @@ function allowOnlyIfResolvedFormsAgree(
   // than matching: fail closed instead of treating two absent identities as
   // agreement, which would hand a blanket allow to a future carve-out that
   // reports a different reason shape.
+  //
+  // There is one dynamic `reason` in this file — `reason: safetyCheck.message`
+  // on the `type: 'safetyCheck'` branch — and it is named here because it is the
+  // counter-example a reader will hit when they grep to check the convention,
+  // and finding it unexplained reads as the convention already being broken. It
+  // is outside this population twice over: its behaviour is `'ask'`, not
+  // `'allow'`, and its type is not `'other'`, so `identify` returns `undefined`
+  // for it and the `=== identity` comparison it would otherwise pollute is never
+  // reached. It fails closed.
   const identify = (result: PermissionResult): string | undefined =>
     result.decisionReason?.type === 'other'
       ? result.decisionReason.reason
