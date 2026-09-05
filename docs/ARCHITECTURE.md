@@ -10,6 +10,21 @@ error, while the document still reads as authoritative. Grep the symbol. If you
 add to this file, keep it that way — and prefer a `queryCheckpoint` label or an
 exported function name over a landmark that only exists in prose.
 
+**Every path here is a *suffix* of a real path**, not a path from the repo root
+— `main.tsx` is `src/main.tsx`, `BashTool/pathValidation.ts` is
+`src/tools/BashTool/pathValidation.ts`. Resolve one with
+`git ls-files '*<suffix>'`. Written this way because the shortest unambiguous
+suffix survives a directory move, which a rooted path does not, and this
+document is built to survive drift.
+
+Measured over the 89 distinct file names cited below: **77 resolve as suffixes.
+All 12 that do not are files this document explicitly says do not exist** — the
+dangling `handlers/ant.js`, `up.js`, `rollback.js` and `templateJobs.js` imports
+(§7), `REPLTool/toolWrappers.ts` behind the `USER_TYPE === 'ant'` gate (§6),
+`cli/transports/Transport.ts` (untracked), and `.mcp.json`, which is a
+per-project file the user creates. So a citation that fails to resolve is a bug
+in this document, with those exceptions and no others.
+
 Seven numbered sections, zooming in: whole lifecycle → startup → prompt submit →
 the agent turn loop → provider/network resolution → tool execution and
 permissions → the non-interactive `src/cli/` surface. §6 carries a second
@@ -24,9 +39,9 @@ flowchart TD
     A["./cli binary<br/>entrypoints/cli.tsx main()"] --> B{"fast-path<br/>bailout?"}
     B -->|"--version, daemon,<br/>mcp, ps/logs/attach"| Z["exit before the<br/>full CLI loads"]
     B -->|no| C["main.tsx main()<br/>init, migrations, settings"]
-    C --> D{"interactive?<br/>isNonInteractive"}
-    D -->|"-p / --print / no TTY"| E["runHeadless<br/>cli/print.ts"]
-    D -->|yes| F["Ink root + onboarding<br/>+ trust gate"]
+    C --> D{"isNonInteractive<br/>main.tsx"}
+    D -->|"yes: --print, --init-only,<br/>SDK URL, or no TTY"| E["runHeadless<br/>cli/print.ts"]
+    D -->|no| F["Ink root + onboarding<br/>+ trust gate"]
     F --> G["REPL renders<br/>screens/REPL.tsx"]
     G --> H["user submits a prompt"]
     H --> I["agent turn loop<br/>query.ts queryLoop"]
@@ -66,7 +81,7 @@ Two things worth noting up front:
 
 ```mermaid
 flowchart TD
-    A["cli.tsx<br/>startCapturingEarlyInput"] --> B["dynamic import main.js"]
+    A["entrypoints/cli.tsx<br/>startCapturingEarlyInput"] --> B["dynamic import main.js"]
     B --> C["commander preAction hook<br/>main.tsx"]
     C --> C1["init(): configs, env,<br/>mTLS/proxy — init.ts"]
     C1 --> C2["runMigrations<br/>main.tsx"]
@@ -251,7 +266,7 @@ flowchart TD
     F1 --> G["limitRequestConcurrency<br/>services/api/requestLimiter.ts"]
     F2 --> G
     F3 --> G
-    G --> H{"inFlight &lt; maxConcurrent?"}
+    G --> H{"inFlight below<br/>maxConcurrent?"}
     H -->|no| H1["queue — never a<br/>self-inflicted 429"]
     H -->|yes| I["fetch → SSE"]
     H1 --> I
