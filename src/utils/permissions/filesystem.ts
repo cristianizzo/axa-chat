@@ -117,6 +117,31 @@ const CONFIG_FOLDER_PERMISSION_PATTERNS = [
 ] as const
 
 /**
+ * Every separator spelling a caller may have used between a root and the rest
+ * of a path. Windows accepts both, POSIX only its own, so this is a `Set` of
+ * **size 2 on Windows and size 1 on POSIX** — deduped rather than written as a
+ * two-element literal precisely so the POSIX case does not test `'/'` twice.
+ *
+ * Hoisted because the two root-prefix loops that consume it
+ * (`relativeToConfigDirRoot` and `foldResolvedRootPrefix`) build it once per
+ * candidate root *form*, not once per call. Be exact about what that saves: it
+ * removes an **allocation**, not a comparison. The number of `startsWith` tests
+ * is unchanged, and on POSIX it was always 1 — so do not read this as making
+ * the loops cheaper in the sense that matters for the O(N) chain-walk cost
+ * discussed at `allowOnlyIfResolvedFormsAgree`. Different quantity.
+ *
+ * `sep` is a module-scope import, so evaluating this at module scope is
+ * deterministic; it does not depend on session or platform state that could
+ * change after load.
+ *
+ * The two consumers now share this constant, which is convenient and is *not*
+ * progress on their divergence: they disagree about how the **roots** are
+ * built, not about how separators are spelled. Sharing this does not close that
+ * gap and must not be cited as if it had.
+ */
+const ROOT_SEPARATOR_SPELLINGS: ReadonlySet<string> = new Set([sep, '/'])
+
+/**
  * Normalizes a path for case-insensitive comparison.
  * This prevents bypassing security checks using mixed-case paths on case-insensitive
  * filesystems (macOS/Windows) like `.cLauDe/Settings.locaL.json`.
@@ -1828,7 +1853,7 @@ function relativeToConfigDirRoot(normalizedPath: string): string | null {
     for (const rootForm of rootForms) {
       const rootLower = normalizeCaseForComparison(rootForm)
       if (pathLower === rootLower) return ''
-      for (const s of new Set([sep, '/'])) {
+      for (const s of ROOT_SEPARATOR_SPELLINGS) {
         if (pathLower.startsWith(rootLower + s.toLowerCase())) {
           return normalizedPath.slice(rootForm.length + s.length)
         }
@@ -2466,7 +2491,7 @@ function foldResolvedRootPrefix(form: string, roots: FoldableRoot[]): string {
         foldedRootLength = rootForm.length
         continue
       }
-      for (const s of new Set([sep, '/'])) {
+      for (const s of ROOT_SEPARATOR_SPELLINGS) {
         if (formLower.startsWith(rootLower + s)) {
           folded =
             lexical + sep + normalizedForm.slice(rootForm.length + s.length)
