@@ -13,21 +13,34 @@ exported function name over a landmark that only exists in prose.
 **Every path here is a *suffix* of a real path**, not a path from the repo root
 — `main.tsx` is `src/main.tsx`, `BashTool/pathValidation.ts` is
 `src/tools/BashTool/pathValidation.ts`. Resolve one with
-`git ls-files '*<suffix>'`. Written this way because the shortest unambiguous
-suffix survives a directory move, which a rooted path does not, and this
-document is built to survive drift.
+`git ls-files '*/<suffix>'` — **keep the slash.** Written this way because the
+shortest unambiguous suffix survives a directory move, which a rooted path does
+not, and this document is built to survive drift.
 
-Measured over the 90 distinct file names cited below: **78 resolve as suffixes
-against `origin/main`, and 12 do not.** All 12 are enumerated here, because a
+The slash is not decoration. Git's default pathspec is fnmatch *without*
+`FNM_PATHNAME`, so a leading `*` crosses `/` freely and the unslashed form is a
+**substring** matcher: drop the slash, cut a name off mid-token, and it still
+returns five paths — the same substring-vs-suffix trap described below, which
+the slash is what closes. (`**/` does not close it; without `:(glob)` magic
+neither form is read as a glob at all, and adding `:(glob)` breaks the plain
+form instead.)
+
+Measured over the 98 distinct file names cited below: **85 resolve as suffixes
+against `origin/main`, and 13 do not.** All 13 are enumerated here, because a
 count with a partial list is the shape that gets silently completed wrong — an
 earlier revision of this paragraph named 7 and asserted 12, and its one-line
 reason was false for 3 of the 5 it left unnamed. They fall into three groups,
 for three different reasons:
 
-1. **Six that genuinely have no file, and are cited precisely because they do
+1. **Seven that genuinely have no file, and are cited precisely because they do
    not** — the dangling `handlers/ant.js`, `up.js`, `rollback.js` and
    `templateJobs.js` imports and the phantom `Transport.js` contract (§7), and
-   `REPLTool/toolWrappers.ts` behind the `USER_TYPE === 'ant'` gate (§6).
+   two in the REPL tool directory — `REPLTool/toolWrappers.ts`, which has never
+   existed in this fork at all, and `REPLTool/REPLTool.ts`, which is required
+   behind the `USER_TYPE === 'ant'` gate and is absent (§6). Note that the
+   directory itself is **not** missing: `REPLTool/constants.ts` and
+   `REPLTool/primitiveTools.ts` both ship, so "the gate removes the directory"
+   is not the explanation for either absence.
 2. **Two that are second spellings of things already in group 1**, counted
    separately only because the sweep counts distinct strings —
    `cli/transports/Transport.ts` (the `.ts` spelling of the same phantom) and
@@ -41,15 +54,22 @@ for three different reasons:
    "corrected" to `.ts`** — the import statements in the source say `.js`, and
    the document quotes them as written.
 
-Plus `.mcp.json`, a per-project file the user creates, which is the twelfth.
+Plus `.mcp.json`, a per-project file the user creates, which is the thirteenth.
 So a citation that fails to resolve is a bug in this document, with those
 exceptions and no others.
 
-**Resolve with a suffix match, not a substring match.** Checking the list above
-with `grep -F` instead of an anchored `(^|/)<name>$` reports 78 resolving rather
-than 77 — one name substring-matches an unrelated path and the loose instrument
-reads it as found. That is a one-line discrepancy that looks like drift in the
-document and is actually drift in the check.
+**Resolve with a suffix match, not a substring match** — an anchored
+`(^|/)<name>$` against `git ls-tree -r origin/main --name-only`, not `grep -F`.
+A loose instrument reads a name that merely *appears inside* an unrelated path
+as found, and the resulting off-by-one looks like drift in this document when it
+is drift in the check. On the current name set the two happen to agree exactly,
+which is why the rule is stated rather than left to be noticed: the substring
+form is not safe here, it is only *currently* lucky, and a single new citation
+ending in a common tail flips it.
+
+Do not re-measure with `git ls-files`. It reads the index of whatever checkout
+it is run in — including a divergent branch or a stray untracked file — so it
+answers a question about one machine, not about `origin/main`.
 
 One deliberate omission, kept as a warning rather than fixed silently: an
 earlier revision called the phantom transport "untracked". That contradicted
@@ -410,11 +430,25 @@ path is a *deny*, not a skip. In the other direction, a hook that returns
 `allow` does **not** buy a bypass: `resolveHookPermissionDecision` in
 `services/tools/toolHooks.ts` re-runs `checkRuleBasedPermissions` over the
 hook's `updatedInput`, so a settings deny rule still overrides the hook and an
-ask rule still forces the dialog. `toolExecution.ts` is its only caller — its
-docstring used to name a second one in `REPLTool/toolWrappers.ts`, a file that
-does not ship in this fork because `REPLTool` is gated on `USER_TYPE === 'ant'`.
-The reason it stays a separate exported function is the invariant, not the
-caller count: a future caller must route the hook result through it rather than
+ask rule still forces the dialog. `toolExecution.ts` is its only caller. Its
+docstring named a second one in `REPLTool/toolWrappers.ts` until `944d6f2`
+removed the claim; that file has **never** existed in this fork —
+`git log --all -S'toolWrappers' -- src/` returns only the two commits that
+*delete* the string, never one that adds a file — so the docstring was asserting
+a lockstep with nothing.
+
+Do not restate the absence as "`REPLTool` is gated on `USER_TYPE === 'ant'`, so
+the directory does not ship". `src/tools/REPLTool/` ships: `constants.ts` and
+`primitiveTools.ts` are both on `origin/main`, and `primitiveTools` is imported
+by `utils/collapseReadSearch.ts` and `messages/CollapsedReadSearchContent.tsx`
+outside any gate. What the gate actually governs is the `require()` at the top of
+`tools.ts`, and *that* target — `REPLTool/REPLTool.ts` — is the one genuinely
+absent file, dangling in exactly the §7 way. Two different absences in one
+directory, with two different causes, is why the single-sentence version keeps
+coming out wrong.
+
+The reason `resolveHookPermissionDecision` stays a separate exported function is
+the invariant, not the caller count: a future caller must route the hook result through it rather than
 act on `allow` directly, and a second implementation of that precedence would be
 a defect.
 
