@@ -15,14 +15,26 @@ import { CONFIG_DIR_NAME } from '../constants/product.js'
 // exactly the state `unset` would have.
 //
 // What that guards, since the value is a root of the permission engine: an
-// empty root is inert downstream today for one incidental reason — `normalize('')`
-// is `'.'` (posix and win32 both), so it enters the root sets as a *relative*
-// entry and never matches an absolute candidate. Underneath that, the raw
-// predicates in utils/permissions/filesystem.ts are `form === root` and
-// `form.startsWith(root + separator)`, and an empty root satisfies the second
-// for every absolute path: measured against 8 candidates, root '' matches all
-// 8, where root '/cfg' correctly gives equal / prefix / no-match. Two
-// independently built root sets there — foldResolvedRootPrefix's and
+// empty root is inert downstream today for one incidental reason —
+// `path.normalize('')` (the path module's, not the String.prototype.normalize
+// called two lines below) returns `'.'` on posix and win32 alike, so an empty
+// root enters the root sets as a *relative* entry and never matches an
+// absolute candidate.
+//
+// Underneath that normalization, the raw predicates in
+// src/utils/permissions/filesystem.ts are `form === root` and
+// `form.startsWith(root + separator)` over both separator spellings, and an
+// empty root satisfies the second for any candidate whose normalized form
+// *begins with a separator*. State it that way rather than as "every absolute
+// path", which is what this comment said first and is false on win32:
+// measured, root '' matches 8/8 posix candidates, and on win32 it matches
+// `\\server\share\x`, `\\?\C:\y`, `\foo` and `/foo` but NOT `C:\foo`, `C:\`
+// or `D:\a\b` — drive-letter paths are absolute and do not begin with a
+// separator. Control both ways: root '/cfg' gives equal on `/cfg`, prefix on
+// `/cfg/x`, and no-match on `/cfgx` and `/other`, so the battery discriminates
+// rather than merely returning false.
+//
+// Two independently built root sets there — foldResolvedRootPrefix's and
 // relativeToConfigDirRoot's — are each held safe only by normalizing before
 // they compare. So the safety is real but unowned: a refactor that compares
 // first re-opens it silently, with nothing failing at the site that broke it.
