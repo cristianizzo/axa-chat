@@ -158,6 +158,86 @@ const CONFIG_FOLDER_PERMISSION_PATTERNS = [
 const ROOT_SEPARATOR_SPELLINGS: ReadonlySet<string> = new Set([sep, '/'])
 
 /**
+ * Does `p` already end in one of ROOT_SEPARATOR_SPELLINGS?
+ *
+ * Both root-prefix loops below test `rootLower + s` for each spelling `s`, which
+ * assumes the root form carries no trailing separator. That assumption is false
+ * for exactly one population, and it is one the roots are *deliberately* allowed
+ * to be in: `stripTrailingSeparatorsForWalk` returns a root-only spelling
+ * unchanged, because stripping `C:\` to `C:` changes what the string denotes.
+ * `rootLower + s` is then a doubled separator (`//`, `C:\\`), which no
+ * normalized path can start with, so every path under such a root stops
+ * matching. Hence the branch at both call sites: when the root form already ends
+ * in a separator the component boundary is present, so the prefix test is the
+ * bare root and the remainder starts at `rootForm.length`.
+ *
+ * Measured with `path.posix` / `path.win32` over a 23-root sweep run through the
+ * real pipeline (`stripTrailingSeparatorsForWalk` -> `normalize`, plus the fold
+ * site's further `stripTrailingSeparators`), covering `/`, `C:\`, `C://`,
+ * `\\server\share\`, `\\?\C:\` and their redundant spellings alongside ordinary
+ * `/cfg/` and `C:\cfg\` controls:
+ *
+ *                                              classify        fold
+ *   root forms reaching the loop with a
+ *     trailing separator                       posix 3         posix 3
+ *                                              win32 15        win32 5
+ *   of those, forms that are NOT root-only     0 on both       0 on both
+ *
+ * The second row is what makes the bare-prefix test safe — the trailing
+ * separator *is* the boundary — and the first row is the control that keeps the
+ * zero from being a dead instrument.
+ *
+ * The two loops do not share a population, so do not carry one reachability
+ * sentence across them. `relativeToConfigDirRoot` matches against
+ * `getResolvedConfigDirRoots`, which only normalizes, so it sees drive, share
+ * and extended-length roots as well as `/`. `foldResolvedRootPrefix` matches
+ * against `getFoldableRootsForSession`, which strips its forms afterwards, and
+ * `stripTrailingSeparators` reduces `C:\` to `C:` and `\\server\share\` to
+ * `\\server\share`; only the all-separator root survives its empty-string guard,
+ * so the fold's population is `/` on posix and `\` on win32 and nothing else.
+ *
+ * **Say out loud what the bare prefix test does when the root is `/`, because
+ * the sentence above understates it.** For every other member of this
+ * population the root is a drive, a share or an extended-length prefix and the
+ * bare test still selects a bounded subtree. For `/` it selects *everything*:
+ * `pathLower.startsWith('/')` is true of every absolute POSIX path, so a
+ * session with `CLAUDE_CONFIG_DIR=/` stops returning `null` from
+ * `relativeToConfigDirRoot` for any path at all, and every file on the machine
+ * arrives at `classifyConfigDirRelativePath`. That is a real behaviour change
+ * and it should be read deliberately rather than discovered.
+ *
+ * It grants nothing new, and the reason is worth writing down because "it is
+ * fine" is not checkable and this is:
+ *
+ *  - The **write** grant at the `=== 'open'` call site needs `'open'`, and
+ *    `classifyConfigDirRelativePath` **defaults to `'protected'`**. Reaching
+ *    `'open'` needs the first segment in `CONFIG_DIR_OPEN_DIRS`, so under a `/`
+ *    root the widened population is `/plans`, `/agent-memory`,
+ *    `/agent-memory-local`, `/magic-docs` and `/rules` — not `/etc`, `/usr` or
+ *    `/home`, which take the protected default.
+ *  - The **read** grant needs `'open'`, or `'protected'` *and*
+ *    `isReadableConfigDirPath`, which independently requires the first segment
+ *    in `CONFIG_DIR_READABLE_DIRS`. `/etc/passwd` classifies `'protected'` and
+ *    fails that second test, so it gets neither grant.
+ *  - `/` is not reachable by accident. It is a config *home*, and the only way
+ *    it becomes one is the user setting `CLAUDE_CONFIG_DIR=/` — at which point
+ *    treating `/plans` as their plans directory is the literal meaning of what
+ *    they asked for, not something this branch invented.
+ *
+ * Note the direction: before this branch a `/` root matched **nothing**,
+ * because `rootLower + s` was `//` and no normalized path starts with it. So
+ * the carve-outs a `CLAUDE_CONFIG_DIR=/` user configured silently did not work.
+ * This is a fix for that, not a widening past it — but the two are easy to
+ * confuse from the diff alone, which is why it is stated here.
+ */
+function endsWithSeparatorSpelling(p: string): boolean {
+  for (const s of ROOT_SEPARATOR_SPELLINGS) {
+    if (p.endsWith(s)) return true
+  }
+  return false
+}
+
+/**
  * Normalizes a path for case-insensitive comparison.
  * This prevents bypassing security checks using mixed-case paths on case-insensitive
  * filesystems (macOS/Windows) like `.cLauDe/Settings.locaL.json`.
@@ -1968,6 +2048,10 @@ function getResolvedConfigDirRoots(
  * to the earlier root for the same reason it does there: a tie means two roots
  * resolve to the same directory, so the relative paths are identical anyway.
  *
+ * They also now carry the same root-only branch, and that one is not cosmetic:
+ * the two reach it over different root sets, and the fold needs an extra guard
+ * on the side it emits. Both are written up at `endsWithSeparatorSpelling`.
+ *
  * One remaining difference between them is cosmetic and is left alone rather
  * than "aligned": the separator comparison here lowercases `s` and the fold
  * does not. This is settled by enumeration, not by sampling —
@@ -1990,6 +2074,30 @@ function relativeToConfigDirRoot(
       if (pathLower === rootLower) {
         relative = ''
         matchedRootLength = rootForm.length
+        continue
+      }
+      // A root form that already ends in a separator is a root-only spelling —
+      // `/`, `C:\`, `\\server\share\`, `\\?\C:\` — preserved that way on
+      // purpose; see `endsWithSeparatorSpelling`. Appending a second separator
+      // to it matches nothing, so match on the bare root and take the remainder
+      // from `rootForm.length`.
+      //
+      // Measured over the four root-only shapes plus `/cfg/` and `C:\cfg\`
+      // controls: 5 of 7 rows move, all of them root-only, e.g. `C:\` with
+      // `C:\a\b.md` goes null -> `a\b.md`, and both controls stay `a/b.md`.
+      // Without the controls "root-only" could be a predicate that is always
+      // true and the separator loop below would be dead.
+      //
+      // The direction is a **fail closed**, not a fail open: a null relative
+      // reads as `'outside'` in `classifyConfigDirPath` and false in
+      // `isReadableConfigDirPath`, and both consumers use those only to withhold
+      // an allow, so today the carve-out silently stops applying and the path
+      // falls through to ordinary permission rules.
+      if (endsWithSeparatorSpelling(rootForm)) {
+        if (pathLower.startsWith(rootLower)) {
+          relative = normalizedPath.slice(rootForm.length)
+          matchedRootLength = rootForm.length
+        }
         continue
       }
       for (const s of ROOT_SEPARATOR_SPELLINGS) {
@@ -2691,6 +2799,37 @@ function foldResolvedRootPrefix(form: string, roots: FoldableRoot[]): string {
       if (formLower === rootLower) {
         folded = lexical
         foldedRootLength = rootForm.length
+        continue
+      }
+      // Same doubled-separator hole as `relativeToConfigDirRoot`, fixed the same
+      // way — see `endsWithSeparatorSpelling` for the measurement and for why
+      // this site's population is narrower: the resolved forms here are stripped
+      // afterwards, so only the all-separator root (`/`, or `\` on win32)
+      // reaches this loop with a trailing separator.
+      //
+      // The emit needs its own guard because `lexical` is stripped by the same
+      // function and so can also be all-separator. Control, with the guard
+      // hard-wired off: an unlinked `CLAUDE_CONFIG_DIR=/` folds
+      // `/agent-memory/x.md` to `//agent-memory/x.md`, a spelling no carve-out
+      // recognises. With it, that row is a no-op — lexical and resolved are the
+      // same string, so there is nothing to rewrite — and the one row that moves
+      // is a root whose lexical spelling differs from a root-only resolved form:
+      // `CLAUDE_CONFIG_DIR=/link -> /` now folds `/agent-memory/x.md` to
+      // `/link/agent-memory/x.md` instead of leaving it unfolded.
+      //
+      // That direction is **closed**, checked here rather than carried over from
+      // the other site: an unfolded form is re-decided literally, matches no
+      // carve-out, and `allowOnlyIfResolvedFormsAgree` turns the reason mismatch
+      // into `denied`. No allow can be minted either way — that gate only ever
+      // downgrades the written form's decision.
+      if (endsWithSeparatorSpelling(rootForm)) {
+        if (formLower.startsWith(rootLower)) {
+          folded =
+            lexical +
+            (endsWithSeparatorSpelling(lexical) ? '' : sep) +
+            normalizedForm.slice(rootForm.length)
+          foldedRootLength = rootForm.length
+        }
         continue
       }
       for (const s of ROOT_SEPARATOR_SPELLINGS) {
