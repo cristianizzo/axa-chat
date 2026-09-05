@@ -1,4 +1,3 @@
-import { homedir } from 'os';
 import * as React from 'react';
 import type { Notification } from '../context/notifications.js';
 import { Text } from '../ink.js';
@@ -21,7 +20,7 @@ async function _temp() {
     logForDebugging("Showing marketplace config save failure notification");
     notifs.push({
       key: "marketplace-config-save-failed",
-      jsx: <Text color="error">Failed to save marketplace retry info · Check {getGlobalClaudeFile().replace(homedir(), "~")} permissions</Text>,
+      jsx: <Text color="error">Failed to save marketplace retry info · Check {getGlobalClaudeFile()} permissions</Text>,
       priority: "immediate",
       timeoutMs: 10000
     });
