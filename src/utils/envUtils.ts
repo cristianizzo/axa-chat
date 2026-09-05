@@ -5,10 +5,32 @@ import { CONFIG_DIR_NAME } from '../constants/product.js'
 
 // Memoized: 150+ callers, many on hot paths. Keyed off CLAUDE_CONFIG_DIR so
 // tests that change the env var get a fresh value without explicit cache.clear.
+//
+// `||`, deliberately, not `??`: `??` falls back on undefined only, so
+// `export CLAUDE_CONFIG_DIR=` (an empty *string*) used to propagate and this
+// function returned ''. Empty is treated as unset because that is what the user
+// meant — `export X=` and `unset X` are the same intent in a shell, and only
+// Node distinguishes them. Falling back beats throwing here: this runs before
+// any error UI exists, for 150+ callers, and the fallback lands the process in
+// exactly the state `unset` would have.
+//
+// What that guards, since the value is a root of the permission engine: an
+// empty root is inert downstream today for one incidental reason — `normalize('')`
+// is `'.'` (posix and win32 both), so it enters the root sets as a *relative*
+// entry and never matches an absolute candidate. Underneath that, the raw
+// predicates in utils/permissions/filesystem.ts are `form === root` and
+// `form.startsWith(root + separator)`, and an empty root satisfies the second
+// for every absolute path: measured against 8 candidates, root '' matches all
+// 8, where root '/cfg' correctly gives equal / prefix / no-match. Two
+// independently built root sets there — foldResolvedRootPrefix's and
+// relativeToConfigDirRoot's — are each held safe only by normalizing before
+// they compare. So the safety is real but unowned: a refactor that compares
+// first re-opens it silently, with nothing failing at the site that broke it.
+// This guard is the owner.
 export const getClaudeConfigHomeDir = memoize(
   (): string => {
     return (
-      process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), CONFIG_DIR_NAME)
+      process.env.CLAUDE_CONFIG_DIR || join(homedir(), CONFIG_DIR_NAME)
     ).normalize('NFC')
   },
   () => process.env.CLAUDE_CONFIG_DIR,
