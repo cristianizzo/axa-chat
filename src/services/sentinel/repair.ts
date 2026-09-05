@@ -217,9 +217,10 @@ async function mirrorDirtyFiles(
     const to = resolve(worktreePath, path)
     if (!isInside(gitRoot, from) || !isInside(worktreePath, to)) continue
 
-    // The worktree lives under `<gitRoot>/.claude/worktrees/`, so in a project
-    // that does not gitignore `.claude/` its own files come back as untracked
-    // changes. Copying those would be copying a directory into itself.
+    // The worktree lives under `<gitRoot>/<config>/worktrees/` (worktreePathFor
+    // joins CONFIG_DIR_NAME), so in a project that does not gitignore that
+    // directory its own files come back as untracked changes. Copying those
+    // would be copying a directory into itself.
     if (isInside(worktreePath, from)) continue
 
     const info = await lstatOrNull(from)

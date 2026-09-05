@@ -172,11 +172,12 @@ export function createAutoMemCanUseTool(memoryDir: string): CanUseToolFn {
   return async (tool: Tool, input: Record<string, unknown>) => {
     // Allow REPL — when REPL mode is enabled (ant-default), primitive tools
     // are hidden from the tool list so the forked agent calls REPL instead.
-    // REPL's VM context re-invokes this canUseTool for each inner primitive
-    // (toolWrappers.ts createToolWrapper), so the Read/Bash/Edit/Write checks
-    // below still gate the actual file and shell operations. Giving the fork a
-    // different tool list would break prompt cache sharing (tools are part of
-    // the cache key — see CacheSafeParams in forkedAgent.ts).
+    // REPL's VM context re-invokes this canUseTool for each inner primitive,
+    // so the Read/Bash/Edit/Write checks below still gate the actual file and
+    // shell operations. (The REPL executor itself is ant-only and is not
+    // present in this fork — see the USER_TYPE gate in tools.ts.) Giving the
+    // fork a different tool list would break prompt cache sharing (tools are
+    // part of the cache key — see CacheSafeParams in forkedAgent.ts).
     if (tool.name === REPL_TOOL_NAME) {
       return { behavior: 'allow' as const, updatedInput: input }
     }
