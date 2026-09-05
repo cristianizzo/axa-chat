@@ -900,13 +900,17 @@ export async function powershellToolHasPermission(
   // First-of-each-behavior wins (array order = step order), so single-check
   // ask messages are unchanged vs. sequential-early-return.
   //
-  // READING THE "was step N (:xxx-yyy)" HEADERS BELOW: those ranges are
-  // HISTORICAL. They locate each decision in the sequential-early-return
-  // layout this section replaced, so they resolve against no current ref —
-  // including this one. They are kept because they are the only surviving map
-  // from the old step numbering to the new decision order. Do not follow them
-  // as addresses, and do not "refresh" them to current line numbers: that
-  // would silently convert a history note into a false claim about this file.
+  // READING THE "Decision: ... — was ..." HEADERS BELOW: each carries a line
+  // range, and those ranges are HISTORICAL. There are nine of them; eight name
+  // a step number ("was step 4.42 (:805-833)") and one does not ("was
+  // :887-900"), so match on the "was" header, not on "step N".
+  //
+  // They locate each decision in the sequential-early-return layout this
+  // section replaced, so they resolve against no current ref — including this
+  // one. They are kept because they are the only surviving map from the old
+  // step numbering to the new decision order. Do not follow them as addresses,
+  // and do not "refresh" them to current line numbers: that would silently
+  // convert a history note into a false claim about this file.
   //
   // Pre-parse deny checks above (exact/prefix deny) stay sequential: they
   // fire even when pwsh is unavailable. Pre-parse asks (prefix ask, raw UNC)
