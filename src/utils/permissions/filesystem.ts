@@ -3429,7 +3429,16 @@ function decideEditableInternalPath(
     const jobDir = process.env.CLAUDE_JOB_DIR
     if (jobDir) {
       const jobsRoot = join(getClaudeConfigHomeDir(), 'jobs')
-      const jobDirForms = getPathsForPermissionCheck(jobDir).map(normalize)
+      // Stripped for the same reason as the config roots: this value arrives
+      // as typed, so it can carry a trailing separator or denote a root, and
+      // `getPathsForPermissionCheck` walks it. `jobsRoot` needs no strip —
+      // `join` appends a component, so it can be neither. "Denotes a root" and
+      // not "root-only": that phrase is the equivocation
+      // `stripTrailingSeparatorsForWalk` documents at length, and this is the
+      // sense meant here.
+      const jobDirForms = getPathsForPermissionCheck(
+        stripTrailingSeparatorsForWalk(jobDir),
+      ).map(normalize)
       const jobsRootForms = getPathsForPermissionCheck(jobsRoot).map(normalize)
       // Hijack guard: every resolved form of the job dir must sit under some
       // resolved form of the jobs root. Resolving both sides handles the case
