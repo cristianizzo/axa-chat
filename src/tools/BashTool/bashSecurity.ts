@@ -687,9 +687,18 @@ function validateGitCommit(context: ValidationContext): PermissionResult {
       // brackets in --author) are safe; unquoted `<>` are shell redirects.
       // NOTE: This simple quote tracker has NO backslash handling. `\'`/`\"`
       // outside quotes would desync it (bash: \' = literal ', tracker: toggles
-      // SQ). BUT line 584 already bailed on ANY backslash in originalCommand,
-      // so we never reach here with backslashes. For backslash-free input,
-      // simple quote toggling is correct (no way to escape quotes without \\).
+      // SQ). BUT the `originalCommand.includes('\\')` bail near the top of
+      // this same function (validateGitCommit) already returned passthrough on
+      // ANY backslash, so we never reach here with backslashes. For
+      // backslash-free input, simple quote toggling is correct (no way to
+      // escape quotes without \\).
+      //
+      // Cited by predicate, not by line: this previously said "line 584",
+      // which now points one line above `validateSafeCommandSubstitution` — a
+      // different function, containing no backslash bail at all. That is the
+      // bad failure mode for a safety argument. A reader checking the premise
+      // lands on unrelated heredoc code and can conclude the premise is
+      // unsupported, when it actually holds and sits ~70 lines above.
       let unquoted = ''
       let inSQ = false
       let inDQ = false

@@ -1326,14 +1326,23 @@ export function isCommandSafeViaFlagParsing(command: string): boolean {
   }
 
   // SECURITY: Reject ANY token containing `$` (variable expansion). The
-  // `env => \`$${env}\`` callback at line 825 preserves `$VAR` as LITERAL TEXT
-  // in tokens, but bash expands it at runtime (unset vars → empty string).
+  // `env => \`$${env}\`` callback that THIS function hands to
+  // tryParseShellCommand (the parse call at the top of
+  // isCommandSafeViaFlagParsing) preserves `$VAR` as LITERAL TEXT in tokens,
+  // but bash expands it at runtime (unset vars → empty string).
   // This parser differential defeats BOTH validateFlags and callbacks:
   //
   //   (1) `$VAR`-prefix defeats validateFlags `startsWith('-')` check:
   //       `git diff "$Z--output=/tmp/pwned"` → token `$Z--output=/tmp/pwned`
-  //       (starts with `$`) falls through as positional at ~:1730. Bash runs
+  //       (starts with `$`, not `-`) misses validateFlags's
+  //       `token.startsWith('-') && FLAG_PATTERN.test(token)` branch and
+  //       reaches its trailing else — "Non-flag argument ... this is allowed"
+  //       — which just advances and lets the loop return true. Bash runs
   //       `git diff --output=/tmp/pwned`. ARBITRARY FILE WRITE, zero perms.
+  //       NOTE: validateFlags is NOT in this file. It is imported at the top
+  //       from ../../utils/shell/readOnlyCommandValidation.ts and declared
+  //       there; cite it by name, since a line number read as local to this
+  //       file lands in git `--exec-path` handling and looks unrelated.
   //
   //   (2) `$VAR`-prefix → RCE via `rg --pre`:
   //       `rg . "$Z--pre=bash" FILE` → executes `bash FILE`. rg's config has
