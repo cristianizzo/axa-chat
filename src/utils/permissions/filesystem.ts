@@ -3,7 +3,7 @@ import { randomBytes } from 'crypto'
 import ignore from 'ignore'
 import memoize from 'lodash-es/memoize.js'
 import { homedir, tmpdir } from 'os'
-import { join, normalize, posix, sep } from 'path'
+import { join, normalize, parse, posix, sep } from 'path'
 import {
   getAutoMemPath,
   getMemoryBaseDir,
@@ -2179,11 +2179,76 @@ function isReadableConfigDirPath(absolutePath: string): boolean {
  * so they are two sources but one value at the defaults.
  *
  * Never strips to the empty string. An empty root prefix-matches every absolute
- * path, which would fold the whole filesystem onto one lexical spelling.
+ * path, which would fold the whole filesystem onto one lexical spelling. That
+ * guard is narrower than the rule it is an instance of — see
+ * `stripTrailingSeparatorsForWalk` — so do not reuse this function anywhere the
+ * stripped value is resolved rather than concatenated.
  */
 function stripTrailingSeparators(root: string): string {
   const stripped = root.replace(/[\\/]+$/, '')
   return stripped === '' ? root : stripped
+}
+
+/**
+ * The same strip, for the side that feeds `getPathsForPermissionCheck` — with
+ * the one exception where removing the separator changes what the string
+ * *denotes* rather than just how it is spelled.
+ *
+ * The two sides genuinely want different answers for a root-only path, which is
+ * why this is a second function and not a widened guard on the first:
+ *
+ * - The `lexical` side **must** strip. It emits `lexical + sep + rest`, so
+ *   `C:\` would produce `C:\\rest`; `C:` produces `C:\rest`, which is right.
+ * - This side **must not** strip, because `C:` is drive-*relative* in Windows —
+ *   it denotes the current directory on drive C:, not the drive root — so the
+ *   chain walk would be handed a different directory entirely, and the root's
+ *   resolved set would stop containing the root. Same polarity as the bug this
+ *   strip was added to fix: a false deny.
+ *
+ * `parse(p).root === p` is the denotation test, and it is deliberately not a
+ * `/^[A-Za-z]:$/` regex: it also covers POSIX `/`, UNC share roots
+ * (`\\server\share\`) and extended-length prefixes (`\\?\C:\`), each of which
+ * loses meaning the same way. Measured with `path.win32` / `path.posix`, which
+ * is testable from any host —
+ *
+ *   C:\              root='C:\'            root-only  (not stripped)
+ *   \\server\share\  root='\\server\share\' root-only  (not stripped)
+ *   \\?\C:\          root='\\?\C:\'        root-only  (not stripped)
+ *   /                root='/'              root-only  (not stripped)
+ *   C:\cfg\          root='C:\'            control    -> C:\cfg
+ *   \\server\share\sub\  root='\\server\share\'  control -> …\sub
+ *   /cfg/            root='/'              control    -> /cfg
+ *
+ * The controls matter: without them "root-only" could be a predicate that is
+ * simply always true, and the whole strip would be dead.
+ *
+ * **On POSIX this function is a proven no-op**, and that is worth stating
+ * because it bounds what any darwin/Linux fixture can show. `/` is the only
+ * root-only POSIX spelling, and `stripTrailingSeparators('/')` already returned
+ * `/` unchanged through its empty-string guard. Over a sweep of ten POSIX
+ * inputs the two functions differ **0** times; over six win32 inputs they differ
+ * **4** times, with `C:\cfg\` and `\\server\share\sub\` unchanged. The 4 is the
+ * control that keeps the 0 from being a dead instrument.
+ *
+ * The corollary is that the end-to-end permission effect is **not reproducible
+ * on a POSIX host** — the battery and the symlink fixtures are byte-identical
+ * across this change, which is the expected reading and not evidence the guard
+ * works. What is measured here is the predicate; what is reasoned is the
+ * consequence of handing `C:` to a chain walk.
+ *
+ * The old guard is the POSIX instance of exactly this rule, stated as a symptom
+ * ("never strips to the empty string") rather than as the reason; a Windows
+ * drive root is the same defect with a non-empty remainder, which is why the
+ * symptom-shaped guard did not catch it.
+ *
+ * Reachability is narrow and real: `join(…, CONFIG_DIR_NAME)` and
+ * `getClaudeTempDir()` both append a component and so can never be root-only.
+ * The population is a user pointing `CLAUDE_CONFIG_DIR`,
+ * `CLAUDE_CODE_REMOTE_MEMORY_DIR` or the auto-memory dir at a drive or share
+ * root, since those reach this function as typed.
+ */
+function stripTrailingSeparatorsForWalk(root: string): string {
+  return parse(root).root === root ? root : stripTrailingSeparators(root)
 }
 
 type FoldableRoot = { lexical: string; resolved: string[] }
@@ -2242,12 +2307,14 @@ function getFoldableRootsForSession(): FoldableRoot[] {
       // `allowOnlyIfResolvedFormsAgree` returned passthrough where it had
       // previously allowed.
       //
-      // Both `stripTrailingSeparators` calls are therefore load-bearing and they
-      // are not the same call twice: this one decides which forms exist, the one
-      // on `lexical` decides what they are folded back to.
-      resolved: getPathsForPermissionCheck(stripTrailingSeparators(root)).map(
-        form => stripTrailingSeparators(normalize(form)),
-      ),
+      // Both strips are therefore load-bearing and they are not the same call
+      // twice: this one decides which forms exist, the one on `lexical` decides
+      // what they are folded back to. They are also not the same *function*, and
+      // that is not an oversight — a root-only path is the one input where the
+      // two sides want opposite answers. See `stripTrailingSeparatorsForWalk`.
+      resolved: getPathsForPermissionCheck(
+        stripTrailingSeparatorsForWalk(root),
+      ).map(form => stripTrailingSeparators(normalize(form))),
     }))
   )
 }
