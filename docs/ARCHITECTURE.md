@@ -25,6 +25,17 @@ dangling `handlers/ant.js`, `up.js`, `rollback.js` and `templateJobs.js` imports
 per-project file the user creates. So a citation that fails to resolve is a bug
 in this document, with those exceptions and no others.
 
+**Environment variables are the one thing spelled in full, never abbreviated** —
+paths get shortened because a *suffix* still resolves, but a truncated env name
+resolves to nothing and there is no rule for reconstructing the missing prefix.
+The counter-example is in this document's own history: `CCR_V2` and
+`POST_FOR_SESSION_INGRESS_V2` (§7) look like they share a prefix, and they do
+not — the real names are `CLAUDE_CODE_USE_CCR_V2` and
+`CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2`, so guessing `CLAUDE_CODE_USE_` from
+the first gives a name that exists nowhere for the second. Measured over every
+`[A-Z][A-Z0-9_]{3,}` token cited below: all resolve in `src/` on `main` except
+`TS2307`, a `tsc` diagnostic code and not an identifier.
+
 Seven numbered sections, zooming in: whole lifecycle → startup → prompt submit →
 the agent turn loop → provider/network resolution → tool execution and
 permissions → the non-interactive `src/cli/` surface. §6 carries a second
@@ -255,8 +266,8 @@ without touching message history.
 flowchart TD
     A["getAnthropicClient<br/>services/api/client.ts"] --> B{"cloud env override?"}
     B -->|"CLAUDE_CODE_USE_BEDROCK"| B1["AnthropicBedrock"]
-    B -->|_USE_FOUNDRY| B2["AnthropicFoundry"]
-    B -->|_USE_VERTEX| B3["AnthropicVertex"]
+    B -->|"CLAUDE_CODE_USE_FOUNDRY"| B2["AnthropicFoundry"]
+    B -->|"CLAUDE_CODE_USE_VERTEX"| B3["AnthropicVertex"]
     B -->|none| C["getActiveAuthProvider<br/>utils/activeAuthProvider.ts"]
     C --> D["descriptor lookup<br/>config/providers/index.ts"]
     D --> E["buildProviderClientConfig<br/>services/api/providerClients.ts"]
@@ -545,8 +556,8 @@ flowchart TD
     S -->|no| SIO["StructuredIO<br/>NDJSON over stdio"]
     S -->|yes| RIO["RemoteIO<br/>extends StructuredIO"]
     RIO --> TU["getTransportForUrl<br/>transports/transportUtils.ts"]
-    TU -->|"CCR_V2"| T1["SSETransport<br/>SSE reads + POST writes"]
-    TU -->|"POST_FOR_SESSION_INGRESS_V2"| T2["HybridTransport<br/>WS reads + POST writes"]
+    TU -->|"CLAUDE_CODE_USE_CCR_V2"| T1["SSETransport<br/>SSE reads + POST writes"]
+    TU -->|"CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2"| T2["HybridTransport<br/>WS reads + POST writes"]
     TU -->|default| T3["WebSocketTransport"]
     B["src/bridge/<br/>replBridge · replBridgeTransport"] --> T1
     B --> T2
