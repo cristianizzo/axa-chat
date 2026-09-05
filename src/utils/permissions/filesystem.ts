@@ -2739,14 +2739,14 @@ function allowOnlyIfResolvedFormsAgree(
   // filesystems.
   let foldRoots: FoldableRoot[] | undefined
   for (const form of getPathsForPermissionCheck(absolutePath)) {
-    // The written spelling is skipped outright, not merely left unfolded.
-    // `decide(absolutePath)` above already returned `identity` for that exact
-    // string, and `decide` is deterministic for the duration of this loop — it
-    // reads session state that nothing here mutates — so a second call on the
-    // same string can only return what the first one did. Folding it instead of
-    // skipping it would be worse than useless: the fold could rewrite it into
-    // some *other* carve-out's namespace and manufacture a disagreement with
-    // the very decision this loop is checking.
+    // The written spelling is skipped outright, not merely left unfolded,
+    // because a second `decide` on it cannot help. `decide(absolutePath)` above
+    // produced the very decision this loop is checking the *other* forms
+    // against, so re-deciding that same string would compare the decision
+    // against a fresh recomputation of itself rather than against a different
+    // form. Folding it first would be worse than useless: the fold could
+    // rewrite it into some *other* carve-out's namespace and manufacture a
+    // disagreement with the decision being checked.
     //
     // Skipping is where the cost is. A path with no symlinks in it has exactly
     // one form, so before this `continue` the common case paid for the whole
@@ -2757,12 +2757,17 @@ function allowOnlyIfResolvedFormsAgree(
     // way, and that consistency is the check that this call is what was removed
     // rather than the harness moving under two separate runs.
     //
-    // Do not "simplify" this to re-deciding the written form for symmetry.
-    // Note the direction of the risk if `decide` ever *did* become
-    // non-deterministic: re-checking would fail closed and this `continue`
-    // fails open, so the determinism above is load-bearing rather than an
-    // optimisation note. It is a property of the carve-out chains, which read
-    // configuration but never write it.
+    // Do not "simplify" this to re-deciding the written form for symmetry, and
+    // do not restore the determinism argument this block used to carry. That
+    // argument claimed `decide` reads only session state that nothing here
+    // mutates. It also reads the filesystem: both `decideEditableInternalPath`
+    // and `decideReadableInternalPath` call `resolvesToFlagConfigFile`, which
+    // performs two live symlink walks, so a concurrent re-point can change
+    // `decide`'s answer for a fixed string. The skip does not rest on that
+    // guarantee and does not need it — both reasons above hold whether or not
+    // `decide` is stable. Re-deciding would not close anything either; it would
+    // surface the pre-existing race between the walk and the decision it
+    // informs, which this loop cannot close, as a spurious denial.
     if (form === absolutePath) continue
     foldRoots ??= getFoldableRootsForSession()
     const formDecision = decide(foldResolvedRootPrefix(form, foldRoots), input)
