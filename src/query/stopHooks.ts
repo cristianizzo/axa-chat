@@ -104,8 +104,12 @@ export async function* handleStopHooks(
   // assistant messages. Await the classifier so state.json is written before
   // the turn returns — otherwise `claude list` shows stale state for the gap.
   // Env key hardcoded (vs importing JOB_ENV_KEY from jobs/state) to match the
-  // require()-gated jobs/ import pattern above; spawn.test.ts asserts the
-  // string matches.
+  // require()-gated jobs/ import pattern above. NOTE: there is no
+  // `spawn.test.ts` asserting this spelling matches the one in
+  // utils/permissions/filesystem.ts — this repo has no test files — and
+  // `jobs/state` is not in the tree either, so nothing checks the two literals
+  // against each other or against whatever sets the variable. Change one and
+  // you must change the other by hand.
   if (
     feature('TEMPLATES') &&
     process.env.CLAUDE_JOB_DIR &&

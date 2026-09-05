@@ -83,7 +83,14 @@ export const DANGEROUS_FILES = [
   // owns. A write there corrupts that install's session and forces a re-login,
   // and it is just as hazardous on a machine that never had a legacy config dir.
   // Nothing in this repo may write this file; for auto-editing, this entry is
-  // what enforces that. Matched on basename anywhere in the path, hence bare.
+  // what enforces that. Stored bare because the check compares it against the
+  // **last** path segment only (`pathSegments.at(-1)`) — not against every
+  // segment, which an earlier wording of this line ("basename anywhere in the
+  // path") wrongly implied. Nothing is lost by that: the entry names a file, so
+  // the only path it needs to catch is one ending in it. Contrast
+  // DANGEROUS_DIRECTORIES, which really does scan every segment — see the loop
+  // over `pathSegments` in `isDangerousFilePathToAutoEdit`, where both lists are
+  // consumed — because a directory has to be caught with children beneath it.
   //
   // Polarity, because the `.claude` handling in this file runs both ways and
   // inspection cannot tell them apart: this is a denylist **entry**, so deleting
@@ -571,8 +578,29 @@ export function getProjectTempDir(): string {
 }
 
 /**
- * Returns the scratchpad directory path for the current session.
- * Path format: /tmp/claude-{uid}/{sanitized-cwd}/{sessionId}/scratchpad/
+ * Returns the scratchpad directory path for the current session, with **no**
+ * trailing separator.
+ * Path format: /tmp/claude-{uid}/{sanitized-cwd}/{sessionId}/scratchpad
+ *
+ * The neighbour above is the trap. `getProjectTempDir` genuinely does end in
+ * `sep` and its docblock correctly says so; this one is built from it, the `/`
+ * was carried down with the rest of the line, and `join` then dropped it. Two
+ * adjacent near-identical docblocks, only one of them true — which is what
+ * makes "make the code match the doc" the natural-looking fix here.
+ *
+ * It is the wrong fix. `isScratchpadPath` below tests
+ * `normalized === scratchpadDir` or `normalized.startsWith(scratchpadDir + sep)`,
+ * and appending a separator here kills both branches for every input that
+ * actually arrives: measured, a trailing-separator root returns false for the
+ * directory itself, for `…/scratchpad/file.txt` and for
+ * `…/scratchpad/sub/file.txt`, all three of which the shipped shape returns
+ * true for. `normalize` does not rescue it, and not for the reason usually
+ * given — it *preserves* a trailing separator rather than stripping one, so
+ * the sole surviving match would be the directory spelled with a trailing
+ * slash, which nothing here produces.
+ *
+ * The failure would be closed and silent: the scratchpad carve-out stops
+ * applying, writes are refused, and there is no error and no log to read.
  */
 export function getScratchpadDir(): string {
   return join(getProjectTempDir(), getSessionId(), 'scratchpad')
@@ -2466,9 +2494,43 @@ function isReadableConfigDirPath(absolutePath: string): boolean {
  * those two are the same string unless `CLAUDE_CODE_REMOTE_MEMORY_DIR` is set,
  * so they are two sources but one value at the defaults.
  *
- * Never strips to the empty string. An empty root prefix-matches every absolute
- * path, which would fold the whole filesystem onto one lexical spelling. That
- * guard is narrower than the rule it is an instance of — see
+ * Returns `root` unchanged whenever the strip would empty it, so `''` and a
+ * bare `/` both come back as they arrived. Be precise about what that guard
+ * does, because an earlier version of this sentence was not: it keeps the
+ * function total, it does not close a hole. An empty root is **inert**
+ * downstream. Both root-matching sites normalise before comparing, and
+ * `normalize('')` is `'.'` on posix and win32 alike — a relative spelling,
+ * which cannot prefix-match an absolute candidate.
+ *
+ * Do not strike the claim that was here — that an empty root "prefix-matches
+ * every absolute path" — because half of it is TRUE and it is the only stated
+ * reason this guard exists. Measured over an eight-candidate battery, root `''`
+ * against the **raw** matcher on `path.posix` matches **8 of 8**. What is false
+ * is the consequence for the function as it actually runs, and the normalise
+ * above is what makes it false.
+ *
+ * Do not credit the `root + separator` in the matchers with saving this one.
+ * That reason is real but it belongs to a different root: `'' + '/'` is `/`,
+ * which prefix-matches every posix absolute path, so the separator buys nothing
+ * here — while a root of `/` tests against `//` and so folds `/` and nothing
+ * else, **1 of 8**, on both flavours. `''` and `/` are the two extremes of this
+ * battery, not two spellings of one hazard, and collapsing them is how the
+ * superseded sentence was written.
+ *
+ * The two reasons also split by flavour, which is the other thing a single
+ * sentence hides: on `path.win32` the raw empty root matches **0 of 8**, since
+ * `'' + '\'` is `\` and the candidates are `/`-spelled. So the separator does
+ * cover `''` there and not on posix, and only the normalise covers both.
+ *
+ * The safety is therefore real, **unowned, and doubled** — two independent
+ * properties of Node's `path` that nothing here names, tests or depends on
+ * deliberately, either of which alone suffices on some platform, which is
+ * precisely why removing one would not fail a test. A refactor that compares
+ * before normalising re-opens it at both sites at once. An empty value is wrong
+ * for every consumer of `getClaudeConfigHomeDir`, not just this one, so it
+ * belongs rejected at the producer rather than absorbed here.
+ *
+ * This guard is narrower than the rule it is an instance of — see
  * `stripTrailingSeparatorsForWalk` — so do not reuse this function anywhere the
  * stripped value is resolved rather than concatenated.
  */
@@ -2482,76 +2544,229 @@ function stripTrailingSeparators(root: string): string {
  * the one exception where removing the separator changes what the string
  * *denotes* rather than just how it is spelled.
  *
- * The two sides genuinely want different answers for a root-only path, which is
- * why this is a second function and not a widened guard on the first:
+ * The two sides genuinely want different answers for a path that denotes a
+ * root, which is why this is a second function and not a widened guard on the
+ * first:
  *
  * - The `lexical` side **must** strip. It emits `lexical + sep + rest`, so
  *   `C:\` would produce `C:\\rest`; `C:` produces `C:\rest`, which is right.
- * - This side **must not** strip, because `C:` is drive-*relative* in Windows —
- *   it denotes the current directory on drive C:, not the drive root — so the
- *   chain walk would be handed a different directory entirely, and the root's
- *   resolved set would stop containing the root. Same polarity as the bug this
- *   strip was added to fix: a false deny.
+ * - This side **must not** strip, because the stripped form no longer names the
+ *   same directory. Same polarity as the bug this strip was added to fix: a
+ *   false deny — the chain walk is handed a different directory, so the root's
+ *   resolved set stops containing the root.
  *
- * The denotation test is *"does the stripped form plus one separator spell a
- * root?"*, and it is deliberately not a `/^[A-Za-z]:$/` regex: it also covers
- * POSIX `/`, UNC share roots (`\\server\share\`) and extended-length prefixes
- * (`\\?\C:\`), each of which loses meaning the same way.
+ * Read that second bullet over the whole population, not over `C:\` alone. The
+ * drive root is only the easiest case to state: `C:` is drive-*relative* in
+ * Windows, naming the current directory on drive C: rather than the drive root,
+ * so the substitution is a different directory that still exists — which is
+ * what makes it silent. The UNC and extended-length forms fail the same way for
+ * a different reason: `\\server\share` and `\\?\C:` have lost the separator that
+ * makes them a root at all. Three shapes, one rule — stripping changed what the
+ * string denotes — and a guard written for only the drive case would let the
+ * other two through.
+ *
+ * Two different things get called "root-only" around this function, and keeping
+ * them apart is the whole of the reasoning below:
+ *
+ * - **denotes a root** — a property of the string itself. `C:\`, `C://`,
+ *   `C:\\`, `C:////`, `C:\/`, `\\server\share\`, `\\server\share\\`,
+ *   `\\?\C:\`, `//server/share//` and POSIX `/` all denote filesystem roots.
+ * - **the predicate** — the boolean the last line of this function *tests*:
+ *   *"does the stripped form plus one separator spell a root?"* Not the value
+ *   that line returns, which is a string; the two are easy to conflate because
+ *   one expression contains the other.
+ *
+ * An earlier revision of this paragraph said they agree on every spelling above
+ * except `/`. Restricted to the ten spellings in the first bullet that is true,
+ * and the restriction was doing silent work, because the disagreements live
+ * mostly *outside* that list. Measured over the list plus the inputs it omits,
+ * the two senses disagree on `/`, `//`, `///`, `C:` (and `c:`) and `''` under
+ * `path.win32`, and on `/`, `//`, `///` and `''` under `path.posix`.
+ *
+ * Read `C:` first, because it is not an exotic input: it is the exact value the
+ * *old* predicate produced by stripping `C://`. It denotes no root —
+ * `normalize('C:')` is `C:.` and `isAbsolute('C:')` is false, so it is
+ * drive-relative and resolving against it pulls in the process working
+ * directory — and the predicate calls it a root anyway, because `C:` plus one
+ * separator spells `C:\`. That is the outcome this function wants, reached
+ * through a sense the second bullet does not claim. It is the sharpest reason
+ * not to read the predicate as a test for denotation anywhere else.
+ *
+ * `/` **denotes a root and fails the predicate**, because
+ * `stripTrailingSeparators('/')` returns `/` unchanged through its own
+ * empty-string guard, so the predicate is asked about the stripped form plus a
+ * separator — `/\` under `path.win32`, `//` under `path.posix` — and neither
+ * of those spells a root. The input is returned verbatim either way, by the
+ * sibling's guard rather than by this test. `//` and `///` fail the same way,
+ * and on **both** flavours — they are not a POSIX-only artefact. Worth saying,
+ * because when a claim about this function splits by flavour the reflex is to
+ * assume win32 is the exception, and here it is not.
+ *
+ * They disagree on `''` as well. Do not write that one off as unreachable: a
+ * set-but-empty `CLAUDE_CONFIG_DIR` has reached `getClaudeConfigHomeDir()` and
+ * come back as `''`, because a null-ish fallback treats `export X=` and
+ * `unset X` differently while a shell does not. Whether that is still true when
+ * you read this depends on the guard *there* — check `getClaudeConfigHomeDir`,
+ * not this function, and do not encode the answer here, because a sentence
+ * about someone else's operator is a sentence that rots. What this function can
+ * say for itself is the weaker and durable half: the disagreement is inert
+ * here, since `''` is returned verbatim, which is the answer a plain strip
+ * gives too. It is not inert downstream, which is why the guard lives upstream
+ * of both of us rather than in either.
+ *
+ * Every claim below says which of the two senses it is in, because a sentence
+ * that is true in one of them is not evidence for the other, and the superseded
+ * version of this comment used the single phrase "root-only" for both across
+ * fourteen sites in this file — re-derived at `origin/main`, one occurrence per
+ * line, not inherited. Thirteen is the number you get from a docblock-scoped
+ * pass, and it is wrong: the fourteenth is a `//` comment in
+ * `getFoldableRootsForSession`'s **body**, at the second of the two strips.
+ * Two further clauses are driven by the same equivocation without containing
+ * the phrase, so scope the sweep by meaning and not by string, and expect two
+ * passes rather than one.
+ *
+ * The predicate is deliberately not a `/^[A-Za-z]:$/` regex: it covers UNC
+ * share roots (`\\server\share\`) and extended-length prefixes (`\\?\C:\`) as
+ * well as drive roots, each of which loses meaning the same way. It does not
+ * need to cover POSIX `/`: that one does reach the strip, but the sibling's
+ * guard hands it back unchanged before this test can matter.
  *
  * It is also deliberately **not** `parse(root).root === root`, which is what
  * this function asked until Copilot found the hole. That predicate tests for a
  * *canonically spelled* root, not for a root — so every redundant spelling
  * failed it and fell through to the strip, which is the one outcome this
  * function exists to prevent. `C://`, `C:\\`, `C:////` and `C:\/` all became
- * drive-relative `C:`, and `\\server\share\\` and `\\?\C:\\` lost the root
- * separator. Asking about the stripped form instead moves the question off the
- * spelling, so the input can be returned verbatim.
+ * drive-relative `C:`, and `\\server\share\\`, `\\?\C:\\` and
+ * `//server/share//` lost the root separator — seven spellings, of which the
+ * forward-slash UNC form is the one most easily missed, since every other UNC
+ * spelling here is written with backslashes. Asking about the stripped form
+ * instead moves the question off the spelling, so the input can be returned
+ * verbatim.
  *
  * **Do not simplify this to `normalize(root)`.** It looks equivalent and is
- * not: `normalize` also folds `..` lexically, which is not symlink-safe, and
- * this value is handed straight to a chain walk. `/cfg/../` would become `/` —
- * a root that prefix-matches every absolute path, which is the exact
- * catastrophe `stripTrailingSeparators`' empty-string guard exists to prevent,
- * reached by a new route. It re-spells canonical input too (`c:/` -> `c:\`,
- * and on win32 `/` -> `\`). Over one generated 206-input sweep, `normalize`
- * changes this function's answer on 97 win32 and 5 POSIX inputs where the
- * shipped shape changes 18 and 0.
+ * not: `normalize` folds `..` lexically, which is not symlink-safe, and this
+ * value is handed straight to a chain walk — `/cfg/../` becomes `/`, so a root
+ * the user pointed inside their home silently becomes the filesystem root,
+ * without either `..` hop being checked against what the links actually
+ * resolve to. It re-spells canonical input too (`c:/` -> `c:\`, and on win32
+ * `/` -> `\`), which defeats the whole point of returning root spellings
+ * verbatim.
+ *
+ * The superseded comment justified the sibling's empty-string guard with "an
+ * empty root prefix-matches every absolute path", and the correction is finer
+ * than striking it. Both matchers test `cand === root || cand.startsWith(root +
+ * sep)`, so over the eight-candidate battery, measured:
+ *
+ * - Root `''`, `path.posix`, raw predicate: **8 of 8**. The sentence is TRUE,
+ *   and it is the only stated reason that guard exists — do not delete it.
+ * - Root `''`, `path.win32`, raw predicate: **0 of 8**. The catastrophe is
+ *   POSIX-only, because `'' + '\'` is `\` and the candidates are `/`-spelled.
+ *   Stated because the reflex is to assume a POSIX result transfers.
+ * - Root `''`, either flavour, as the code actually runs it: **0 of 8**. The
+ *   root is normalized first and `normalize('')` is `'.'` on both, so `./`
+ *   prefix-matches no absolute path. Control that the normalize is not inert:
+ *   root `/cfg` on win32 moves 1 -> 2 of 8 across it.
+ * - Root `/`, every configuration above: **1 of 8**, itself and nothing else.
+ *
+ * So `''` and `/` are the two extremes of this battery, not two spellings of one
+ * hazard, and an earlier revision of this paragraph inherited the `''` claim and
+ * attached it to `/`. What holds the empty root harmless is two independent,
+ * undocumented properties of *other* code — the `+ sep` in the matcher and the
+ * upstream `normalize` — either of which alone suffices, so neither has an owner
+ * and a refactor can take one without any test noticing. The same shape holds at
+ * `relativeToConfigDirRoot`. The guard is what makes the question moot; the
+ * conclusion above survives on its other three reasons regardless.
  *
  * Measured with `path.win32` — note that `parse` **and** `sep` are both
  * platform-bound, so a host-independent check has to substitute both —
  *
- *   C:\                  root-only   not stripped
- *   C://                 root-only   not stripped
- *   C:\\                 root-only   not stripped
- *   \\server\share\      root-only   not stripped
- *   \\server\share\\     root-only   not stripped
- *   \\?\C:\              root-only   not stripped
- *   /                    root-only   not stripped
- *   C:\cfg\              control     -> C:\cfg
- *   \\server\share\sub\  control     -> …\sub
- *   /cfg/                control     -> /cfg
+ * Every spelling named above appears here, so that no number below is spliced
+ * together from two instruments:
  *
- * The controls matter: without them "root-only" could be a predicate that is
- * simply always true, and the whole strip would be dead. Hard-wiring the
- * predicate to false moves 6 of these 10 rows, so it is load-bearing rather
- * than decorative, and no root-only row is re-spelled.
+ *                        denotes root   predicate   result
+ *   C:\                  yes            true        verbatim
+ *   C://                 yes            true        verbatim
+ *   C:\\                 yes            true        verbatim
+ *   C:////               yes            true        verbatim
+ *   C:\/                 yes            true        verbatim
+ *   \\server\share\      yes            true        verbatim
+ *   \\server\share\\     yes            true        verbatim
+ *   \\?\C:\              yes            true        verbatim
+ *   \\?\C:\\             yes            true        verbatim
+ *   //server/share//     yes            true        verbatim
+ *   /                    yes            FALSE       verbatim (via sibling)
+ *   C:\cfg\              no             false       -> C:\cfg
+ *   \\server\share\sub\  no             false       -> …\sub
+ *   /cfg/                no             false       -> /cfg
  *
- * **On POSIX this function is a proven no-op**, and that is worth stating
- * because it bounds what any darwin/Linux fixture can show. `/` is the only
- * root-only POSIX spelling, and `stripTrailingSeparators('/')` already returns
- * `/` unchanged through its empty-string guard. Over the 206-input sweep the
- * two functions differ **0** times under `path.posix` and **27** times under
- * `path.win32`; the 27 is the control that keeps the 0 from being a dead
- * instrument.
+ * The `denotes root` column is measured on `parse(normalize(p)).root ===
+ * normalize(p)` and not on `parse(p).root === p`. That matters, because the
+ * naive form is the discarded predicate from two paragraphs up, and it
+ * disagrees with the canonical one on 7 of these 14 rows — including
+ * `//server/share//`, which it calls "not a root". Measuring denotation with a
+ * spelling-sensitive instrument reproduces the exact bug this function exists
+ * to fix, inside the evidence for the fix.
  *
- * Two counting traps, both of which have already been walked into here. The
- * quantities above are *three different things* — this function versus a plain
+ * Those 7 disagreeing rows are, measured, the same 7 spellings listed as the
+ * defect above, and that is not a coincidence to be re-derived next time: the
+ * naive instrument *is* the old predicate, so the rows it gets wrong are by
+ * construction the rows the old predicate got wrong. If the two sets ever come
+ * apart, one of them was mis-measured.
+ *
+ * The `/` row is the one to read twice: it is the only row *in this table* where
+ * the two columns disagree, and it is the input every wrong sentence this
+ * comment has carried was about. Do not read that as "the only disagreement" —
+ * the table is a sample and the full set is enumerated above, including `C:`,
+ * `c:` and `''`, which disagree the *other* way (denote no root, satisfy the
+ * predicate), and `//` and `///`, which disagree the same way `/` does.
+ *
+ * The controls matter: without them the predicate could be one that is simply
+ * always true, and the whole strip would be dead. Hard-wiring it to false
+ * moves 10 of these 14 rows, so it is load-bearing rather than decorative, and
+ * no row that denotes a root is re-spelled.
+ *
+ * The superseded comment carried the proof of its own equivocation right here,
+ * which is the cheapest way to see why the two senses had to be named apart. Its
+ * table labelled **7** rows `root-only`, and the paragraph two lines below it
+ * said hard-wiring the predicate to false moves **6** of them. Under one meaning
+ * of `root-only` those numbers must match. They differ by exactly `/` — the row
+ * that denotes a root and fails the predicate — so the mismatch *is* the two
+ * senses, sitting four lines apart. The sentence
+ * after it, "no root-only row is re-spelled", is true under both senses; a true
+ * neighbour is what let the inconsistent pair look settled.
+ *
+ * **On POSIX this function is a no-op for every input**, which bounds what any
+ * darwin/Linux fixture can show. That is a property of the predicate and not a
+ * result over a sample, so state it as the argument rather than as a count:
+ * on `path.posix` the predicate can only be true when the stripped form plus
+ * `/` spells a root, i.e. when the stripped form is empty — and
+ * `stripTrailingSeparators` returns the empty string for exactly one input,
+ * the empty string, for which a plain strip gives the same answer anyway.
+ * Every other POSIX input, `/` and `//` included, fails the predicate and is
+ * returned by the sibling's guard or by the strip. So this function and a
+ * plain strip agree everywhere under `path.posix` and diverge only under
+ * `path.win32`.
+ *
+ * Say **10 of the 14** for that win32 divergence, not seven. Seven is the
+ * defect list — the spellings the *old* predicate got wrong — and this is the
+ * different quantity flagged immediately below: against a plain strip the
+ * canonically spelled roots `C:\`, `\\server\share\` and `\\?\C:\` move too,
+ * even though the old predicate already handled them. Every root-denoting row
+ * moves except `/`, which the sibling's guard reaches first.
+ *
+ * Two counting traps, both of which have already been walked into here. There
+ * are *three different quantities* in play — this function versus a plain
  * strip, this function versus its previous shape, and rows moved by disabling
- * the predicate — so a bare "differs N times" is unreadable without its pair.
- * And `/` is root-only yet does **not** differ from a plain strip, because the
- * sibling's guard reaches it first; counting it as a difference is how the
- * superseded version of this comment claimed 4 differences over a battery that
- * had 3.
+ * the predicate — so a bare "differs N times" is unreadable without saying
+ * which pair it compares. And `/` denotes a root yet does **not** differ from
+ * a plain strip, because the sibling's guard reaches it first; counting it as
+ * a difference is how the superseded version of this comment claimed 4
+ * differences over a battery that had 3. That sentence is a trap in the other
+ * direction too: as written above it is a claim about denotation and it is
+ * true, but the same words read in the predicate sense are false, and nothing
+ * in them says which. A true sentence is not a safe sentence to align its
+ * neighbours to — check that it means what they mean before using it as the
+ * anchor.
  *
  * The corollary is that the end-to-end permission effect is **not reproducible
  * on a POSIX host** — the permission battery and the symlink fixtures are
@@ -2560,21 +2775,30 @@ function stripTrailingSeparators(root: string): string {
  * predicate; what is reasoned is the consequence of handing `C:` to a chain
  * walk.
  *
- * The old guard is the POSIX instance of exactly this rule, stated as a symptom
- * ("never strips to the empty string") rather than as the reason; a Windows
- * drive root is the same defect with a non-empty remainder, which is why the
- * symptom-shaped guard did not catch it.
+ * The old guard is not this function's rule restricted to POSIX — it is a
+ * different test that happens to cover the one POSIX case. It fires on exactly
+ * one stripped value, the empty string, which is why `/` survives it; this
+ * function's predicate is false for `/` and contributes nothing there. Both
+ * guards are instances of one underlying rule — do not strip when the strip
+ * changes what the string denotes — but the old one states a symptom ("never
+ * strips to the empty string") rather than the reason; a Windows drive root is
+ * the same defect with a non-empty remainder, which is why the symptom-shaped
+ * guard did not catch it.
  *
  * Reachability is narrow and real: `join(…, CONFIG_DIR_NAME)` and
- * `getClaudeTempDir()` both append a component and so can never be root-only.
+ * `getClaudeTempDir()` both append a component and so can never denote a root.
  * The population is a user pointing `CLAUDE_CONFIG_DIR`,
  * `CLAUDE_CODE_REMOTE_MEMORY_DIR` or the auto-memory dir at a drive or share
  * root, since those reach this function as typed.
  */
 function stripTrailingSeparatorsForWalk(root: string): string {
-  // `stripTrailingSeparators` never returns the empty string, so this always
-  // has something to test, and the POSIX root reaches the strip branch and is
-  // returned unchanged by that guard rather than by the test below.
+  // `stripTrailingSeparators` returns the empty string for one input — the
+  // empty string — and `'' + sep` spells a root, so that input satisfies the
+  // predicate below without denoting a root. It is returned verbatim, which is
+  // the same answer a plain strip gives, so the disagreement is inert here; it
+  // is not inert in the sibling, whose own guard exists for it. The POSIX root
+  // reaches the strip branch and is returned unchanged by that guard rather
+  // than by the test below.
   const stripped = stripTrailingSeparators(root)
   const withOneSeparator = stripped + sep
   return parse(withOneSeparator).root === withOneSeparator ? root : stripped
@@ -2639,8 +2863,9 @@ function getFoldableRootsForSession(): FoldableRoot[] {
       // Both strips are therefore load-bearing and they are not the same call
       // twice: this one decides which forms exist, the one on `lexical` decides
       // what they are folded back to. They are also not the same *function*, and
-      // that is not an oversight — a root-only path is the one input where the
-      // two sides want opposite answers. See `stripTrailingSeparatorsForWalk`.
+      // that is not an oversight — a path that denotes a root is the one input
+      // where the two sides want opposite answers. See
+      // `stripTrailingSeparatorsForWalk`.
       resolved: getPathsForPermissionCheck(
         stripTrailingSeparatorsForWalk(root),
       ).map(form => stripTrailingSeparators(normalize(form))),
@@ -3183,22 +3408,40 @@ function decideEditableInternalPath(
 
   // Template job's own directory. Env key hardcoded (vs importing JOB_ENV_KEY
   // from jobs/state) so tree-shaking eliminates the string from external
-  // builds — spawn.test.ts asserts the string matches. Hijack guard: the env
-  // var value must itself resolve under ~/.claude/jobs/. Symlink guard: every
-  // resolved form of the target (lexical + symlink chain) must fall under some
-  // resolved form of the job dir, so a symlink inside the job dir pointing at
-  // e.g. ~/.ssh/authorized_keys does not get a free write. Resolving both
-  // sides handles the macOS /tmp → /private/tmp case where the config dir
-  // lives under a symlinked root.
+  // builds. Hijack guard: the env var value must itself resolve under the
+  // config home's `jobs/` — that is `~/.axa/jobs` by default and whatever
+  // CLAUDE_CONFIG_DIR points at otherwise, so do not re-spell it as a fixed
+  // path. Symlink guard: every resolved form of the target (lexical + symlink
+  // chain) must fall under some resolved form of the job dir, so a symlink
+  // inside the job dir pointing at e.g. ~/.ssh/authorized_keys does not get a
+  // free write. Resolving both sides handles the macOS /tmp → /private/tmp
+  // case where the config dir lives under a symlinked root.
+  //
+  // Two things this comment used to claim, both checked and both false. There
+  // is no `spawn.test.ts` asserting the two hardcoded spellings agree — this
+  // repo has no test files at all — so the literal here and the one in
+  // query/stopHooks.ts are coupled by nothing but the comments naming each
+  // other. And `JOB_ENV_KEY`/`jobs/state` is not in the tree either: nothing
+  // under src/ sets CLAUDE_JOB_DIR, only these two files and stopHooks read
+  // it. The name is therefore externally owned in the AXA.md sense — whatever
+  // spawns a job supplies it — so a branding sweep must not rename it.
   if (feature('TEMPLATES')) {
     const jobDir = process.env.CLAUDE_JOB_DIR
     if (jobDir) {
       const jobsRoot = join(getClaudeConfigHomeDir(), 'jobs')
       const jobDirForms = getPathsForPermissionCheck(jobDir).map(normalize)
       const jobsRootForms = getPathsForPermissionCheck(jobsRoot).map(normalize)
-      // Hijack guard: every resolved form of the job dir must sit under
-      // some resolved form of the jobs root. Resolving both sides handles
-      // the case where ~/.claude is a symlink (e.g. to /data/claude-config).
+      // Hijack guard: every resolved form of the job dir must sit under some
+      // resolved form of the jobs root. Resolving both sides handles the case
+      // where the config home is itself a symlink (e.g. to /data/axa-config).
+      //
+      // Both `+ sep` tests below use the platform separator only, deliberately,
+      // and are NOT a third place that needs ROOT_SEPARATOR_SPELLINGS. That set
+      // exists for comparisons where one side is a lexical spelling that was
+      // never normalised; here all three operands — the job-dir forms, the
+      // jobs-root forms and each target form — are put through `normalize`
+      // first, and `normalize` rewrites `/` to `\` under win32, so no other
+      // separator spelling can reach either test.
       const isUnderJobsRoot = jobDirForms.every(jd =>
         jobsRootForms.some(jr => jd.startsWith(jr + sep)),
       )
