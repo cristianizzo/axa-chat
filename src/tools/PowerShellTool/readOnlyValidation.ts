@@ -1364,7 +1364,8 @@ export function isAllowlistedCommand(
   // (CMDLET_PATH_CONFIG) are already protected by SAFE_PATH_ELEMENT_TYPES in
   // pathValidation.ts — this closes the gap for non-file cmdlets (Get-Process,
   // Get-Service, Get-Command, ~15 others). PS equivalent of Bash's blanket `$`
-  // token check at BashTool/readOnlyValidation.ts:~1356.
+  // token check — the `token.includes('$')` rejection loop inside
+  // isCommandSafeViaFlagParsing in BashTool/readOnlyValidation.ts.
   //
   // Placement: BEFORE external-command dispatch so git/gh/docker/dotnet get
   // this too (defense-in-depth with their string-based `$` checks; catches
@@ -1373,8 +1374,10 @@ export function isAllowlistedCommand(
   // so `git log -n 5` passes.
   //
   // SECURITY: elementTypes undefined → fail-closed. The real parser always
-  // sets it (parser.ts:769/781/812), so undefined means an untrusted or
-  // malformed element. Previously skipped (fail-open) for test-helper
+  // sets it: every ParsedCommandElement is built by transformCommandAst or
+  // transformExpressionElement in utils/powershell/parser.ts, and both declare
+  // elementTypes as a non-optional local and place it unconditionally in the
+  // object they return. So undefined means an untrusted or malformed element. Previously skipped (fail-open) for test-helper
   // convenience; test helpers now set elementTypes explicitly.
   // elementTypes[0] is the command name; args start at elementTypes[1].
   if (!cmd.elementTypes) {

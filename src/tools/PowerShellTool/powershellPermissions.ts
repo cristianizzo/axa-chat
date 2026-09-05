@@ -731,8 +731,14 @@ export async function powershellToolHasPermission(
   // This ensures user-configured exact allow rules work even when pwsh is
   // unavailable. When parsing succeeds, the exact allow check is deferred to
   // after step 4.4 (sub-command deny/ask) — matching BashTool's ordering where
-  // the main-flow exact allow at bashPermissions.ts:1520 runs after sub-command
-  // deny checks (1442-1458). Without this, an exact allow on a compound command
+  // bashToolHasPermission's `if (exactMatchResult.behavior === 'allow')` return
+  // (in bashPermissions.ts, under the comment "Allow if exact command was
+  // allowed") runs after its
+  // `subcommandPermissionDecisions.find(_ => _.behavior === 'deny')` gate.
+  // Re-derived 2026-09 and the ordering still holds; the two line numbers this
+  // comment used to carry were both dead, and one of them landed in unrelated
+  // speculative-classifier plumbing.
+  // Without this, an exact allow on a compound command
   // would bypass deny rules on sub-commands.
   //
   // SECURITY (parse-failed branch): the nameType guard in step 5 lives
@@ -809,9 +815,11 @@ export async function powershellToolHasPermission(
       //   `& 'Invoke-Expression' 'p'`  → first token `&` removed by split but
       //                                  `'Invoke-Expression'` retains quotes
       //                                  → deny(iex:*) misses
-      // The parse-succeeded path handles these via AST (parser.ts:839 strips
-      // quotes from rawNameUnstripped; invocation operators are separate AST
-      // nodes). This fallback mirrors that normalization.
+      // The parse-succeeded path handles these via AST: transformCommandAst in
+      // utils/powershell/parser.ts derives `rawName` as
+      // `rawNameUnstripped.replace(/^['"]|['"]$/g, '')`, and invocation
+      // operators are separate AST nodes. This fallback mirrors that
+      // normalization.
       // Loop strips nested assignments: $x = $y = iex → $y = iex → iex
       let normalized = trimmedFrag
       let m: RegExpMatchArray | null
@@ -876,7 +884,9 @@ export async function powershellToolHasPermission(
   // ========================================================================
   // COLLECT-THEN-REDUCE: post-parse decisions (deny > ask > allow > passthrough)
   // ========================================================================
-  // Ported from bashPermissions.ts:1446-1472. Every post-parse check pushes
+  // Ported from bashToolHasPermission's `subcommandPermissionDecisions` array
+  // in bashPermissions.ts and the deny/ask/allow `find`s that consume it.
+  // Every post-parse check pushes
   // its decision into a single array; a single reduce applies precedence.
   // This structurally closes the ask-before-deny bug class: an 'ask' from an
   // earlier check (security flags, provider paths, cd+git) can no longer mask
@@ -889,6 +899,14 @@ export async function powershellToolHasPermission(
   //
   // First-of-each-behavior wins (array order = step order), so single-check
   // ask messages are unchanged vs. sequential-early-return.
+  //
+  // READING THE "was step N (:xxx-yyy)" HEADERS BELOW: those ranges are
+  // HISTORICAL. They locate each decision in the sequential-early-return
+  // layout this section replaced, so they resolve against no current ref —
+  // including this one. They are kept because they are the only surviving map
+  // from the old step numbering to the new decision order. Do not follow them
+  // as addresses, and do not "refresh" them to current line numbers: that
+  // would silently convert a history note into a false claim about this file.
   //
   // Pre-parse deny checks above (exact/prefix deny) stay sequential: they
   // fire even when pwsh is unavailable. Pre-parse asks (prefix ask, raw UNC)
@@ -1110,8 +1128,27 @@ export async function powershellToolHasPermission(
   // When cd/Set-Location is paired with git, don't allow without prompting —
   // cd to a malicious directory makes git dangerous (fake hooks, bare repo
   // attacks). Collect-then-reduce keeps the improvement over BashTool: in
-  // bash, cd+git (B9, line 1416) runs BEFORE sub-command deny (B11), so cd+git
-  // ask masks deny. Here, both are in the same decision array; deny wins.
+  // bash, the cd+git guard returns `ask` BEFORE the sub-command deny check
+  // runs, so a cd+git ask masks a deny that would otherwise have fired. Here,
+  // both are in the same decision array; deny wins.
+  //
+  // Both bash referents are in `bashToolHasPermission` (bashPermissions.ts),
+  // in this order: the `compoundCommandHasCd && hasGitCommand` block returning
+  // `behavior: 'ask'`, then `subcommandPermissionDecisions.find(_ =>
+  // _.behavior === 'deny')`. Cited by name because the previous revision cited
+  // them as "B9, line 1416" and "B11", and BOTH pointers were dead: `B9`/`B11`
+  // appear nowhere in bashPermissions.ts (nor anywhere in src/ outside this
+  // comment), and bashPermissions.ts:1416 is a deny-enforcement docblock, not
+  // a cd+git guard. Dead pointers inside a security-ordering claim are worse
+  // than useless — that line number lands on deny code of the right *kind*,
+  // so following it looks like confirmation.
+  //
+  // The ordering claim itself was re-derived from source and holds. Note that
+  // bash's ordering is deliberate, not an oversight: its own comment explains
+  // the guard must run before subcommand checks because those re-derive
+  // `compoundCommandHasCd=false` from `git status` alone. So this is a genuine
+  // tradeoff bash makes, not a bug it has — collect-then-reduce is how we get
+  // the early-guard behaviour without paying the masking cost.
   //
   // SECURITY: NO cd-to-CWD no-op exclusion. A previous iteration excluded
   // `Set-Location .` as a no-op, but the "first non-dash arg" heuristic used
@@ -1599,11 +1636,15 @@ export async function powershellToolHasPermission(
   if (subCommandsNeedingApproval.length === 0) {
     // SECURITY: empty-list auto-allow is only safe when there's nothing
     // unverifiable. If the pipeline has script blocks, every safe-output
-    // cmdlet was filtered at :1032, but the block content wasn't verified —
-    // non-command AST nodes (AssignmentStatementAst etc.) are invisible to
-    // getAllCommands. `Where-Object {$true} | Sort-Object {$env:PATH='evil'}`
-    // would auto-allow here. hasAssignments is top-level-only (parser.ts:1385)
-    // so it doesn't catch nested assignments either. Prompt instead.
+    // cmdlet was filtered by isProvablySafeStatement (which reads
+    // SAFE_OUTPUT_CMDLETS — both live in PowerShellTool/readOnlyValidation.ts,
+    // NOT in this file), but the block content wasn't verified — non-command
+    // AST nodes (AssignmentStatementAst etc.) are invisible to getAllCommands.
+    // `Where-Object {$true} | Sort-Object {$env:PATH='evil'}` would auto-allow
+    // here. hasAssignments doesn't catch nested assignments either:
+    // deriveSecurityFlags in utils/powershell/parser.ts sets it only from
+    // `stmt.statementType === 'AssignmentStatementAst'` in its top-level
+    // `parsed.statements` loop. Prompt instead.
     if (deriveSecurityFlags(parsed).hasScriptBlocks) {
       return {
         behavior: 'ask',
