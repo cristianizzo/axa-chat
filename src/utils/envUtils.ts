@@ -16,8 +16,9 @@ import { CONFIG_DIR_NAME } from '../constants/product.js'
 //
 // What that guards, since the value is a root of the permission engine: an
 // empty root is inert downstream today for one incidental reason —
-// `path.normalize('')` (the path module's, not the String.prototype.normalize
-// called two lines below) returns `'.'` on posix and win32 alike, so an empty
+// `path.normalize('')` (the path module's, not the String.prototype
+// `.normalize('NFC')` on the return statement below) returns `'.'` on posix
+// and win32 alike, so an empty
 // root enters the root sets as a *relative* entry and never matches an
 // absolute candidate.
 //
