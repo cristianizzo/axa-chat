@@ -228,9 +228,15 @@ async function main(): Promise<void> {
   //      in scripts/build.ts — but that list is not a gate. Passing an undeclared
   //      `--feature=TEMPLATES` by hand compiles the flag in; build.ts only warns.
   //   2. The module is absent, so any build with the flag on fails to resolve and
-  //      writes no artifact. Measured: `bun run ./scripts/build.ts --dev
-  //      --feature-set=dev-full --feature=TEMPLATES` exits non-zero with
-  //      `Could not resolve: "../cli/handlers/templateJobs.js"`.
+  //      writes no artifact. Measured — this command exits non-zero with
+  //      `Could not resolve: "../cli/handlers/templateJobs.js"`:
+  //
+  //          bun run ./scripts/build.ts --dev --feature-set=dev-full --feature=TEMPLATES
+  //
+  //      With the flag off it is eliminated rather than merely unreached:
+  //      `templateJobs`, `templatesMain` and `cli_templates_path` are all absent
+  //      from the artifact, against a control of `cli_entry` and `cli_bridge_path`
+  //      confirming checkpoint literals do survive into it.
   //
   // Barrier 2 is an accident, not a decision — outside this comment `templateJobs`
   // is named nowhere in src/ but the import below, and src/cli/handlers/ holds six
