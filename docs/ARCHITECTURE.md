@@ -189,7 +189,7 @@ flowchart TD
     B4 -->|yes| B5["compact transcript<br/>services/compact/autoCompact.ts"]
     B4 -->|no| C
     B5 --> C["resolve model<br/>getRuntimeMainLoopModel<br/>utils/model/model.ts"]
-    C --> D["deps.callModel<br/>→ services/claude.ts"]
+    C --> D["deps.callModel<br/>→ services/api/claude.ts"]
     D --> E["stream SSE"]
     E --> F["yield assistant blocks"]
     F --> G{"tool_use<br/>block?"}
@@ -217,9 +217,9 @@ block is dispatched the moment it completes rather than after the message does
 `config.gates.streamingToolExecution`.
 
 **Error/fallback branches.** The error classes live in
-`services/api/withRetry.ts`; all are caught back in `query.ts`'s two
-`catch (innerError)` arms, which tombstone the partial attempt and re-enter the
-loop:
+`services/api/withRetry.ts`; all are caught back in `query.ts`'s single
+`catch (innerError)`, whose `FallbackTriggeredError` and `RefusalFallbackError`
+branches tombstone the partial attempt and re-enter the loop:
 
 | Condition | Behaviour |
 |---|---|
@@ -266,7 +266,7 @@ Three details that are load-bearing and non-obvious:
    `isActiveAccountServingRequests()` in `utils/model/providers.ts`, which the
    banner and the small-fast-model tier both consult.
 2. **The concurrency slot is held until the response body finishes**, not until
-   `fetch` resolves. `services/claude.ts` returns the stream and it is consumed
+   `fetch` resolves. `services/api/claude.ts` returns the stream and it is consumed
    outside `withRetry`, so releasing on resolution would let a whole subagent
    fan-out through at once. The release is wired into the `ReadableStream` that
    wraps `response.body`, plus an early `release()` for the bodyless case. Kimi
