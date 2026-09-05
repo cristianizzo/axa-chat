@@ -1,4 +1,9 @@
-node_modules/
+# Deliberately NOT `node_modules/`. A trailing slash restricts a pattern to
+# DIRECTORIES, and a symlink pointing at a directory is not a directory for that
+# purpose -- so the slashed form does not ignore the shared, symlinked
+# node_modules that worktrees here are set up with, and `git status` in one
+# reports `?? node_modules`. Leave this entry unslashed.
+node_modules
 dist/
 /cli
 /cli-dev
