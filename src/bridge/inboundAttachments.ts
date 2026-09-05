@@ -3,7 +3,9 @@
  *
  * Web composer uploads via cookie-authed /api/{org}/upload, sends file_uuid
  * alongside the message. Here we fetch each via GET /api/oauth/files/{uuid}/content
- * (oauth-authed, same store), write to ~/.claude/uploads/{sessionId}/, and
+ * (oauth-authed, same store), write to uploads/{sessionId}/ under the config
+ * home (CLAUDE_CONFIG_DIR when set, else ~/.axa) — see uploadsDir() below, which
+ * resolves it via getClaudeConfigHomeDir() rather than hardcoding a path — and
  * return @path refs to prepend. Claude's Read tool takes it from there.
  *
  * Best-effort: any failure (no token, network, non-2xx, disk) logs debug and
