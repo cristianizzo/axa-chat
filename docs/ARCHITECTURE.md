@@ -652,13 +652,20 @@ subdirectory of the print path.
 > `utils/mcpWebSocketTransport.ts` exports a second, unrelated class also named
 > `WebSocketTransport`.
 
-**Dangling `src/cli/*` imports are otherwise all dead code, not bugs.**
-`handlers/ant.js`, `up.js`, `rollback.js` and `templateJobs.js` have no files
-because every one of their import sites sits inside `if ("external" === 'ant')`,
-which is statically false and eliminated at build. `Transport.js` above is the
-sole exception, and that is exactly what makes it worth singling out: "the file
-is missing" is the normal state here, so the one case where it matters hides
-among the cases where it does not.
+**The other dangling `src/cli/*` imports are dead code, not bugs — but by two
+different mechanisms, and the difference matters.** `handlers/ant.js`, `up.js`
+and `rollback.js` have no files because every one of their import sites sits
+inside `if ("external" === 'ant')`, which is statically false and eliminated at
+build. `templateJobs.js` is **not** in that group, and a single-mechanism reading
+of this paragraph is wrong about it: its one import site, in
+`entrypoints/cli.tsx`, is gated on `feature('TEMPLATES')` — a real build-time
+feature flag, not a constant-folded `false`. Build with that feature on and the
+site is compiled in, at which point the missing module is what stops it. That is
+the two-barrier structure the in-source comment at that site already spells out,
+where module absence is the *second* barrier and the build only warns.
+`Transport.js` above is the exception to both, and that is exactly what makes it
+worth singling out: "the file is missing" is the normal state here, so the one
+case where it matters hides among the cases where it does not.
 
 **Four things outside `src/cli/` reach into it — enumerate them, don't assume one.**
 Grep `from '…cli/` and `import('…cli/` rather than trusting this list, but as read:
@@ -672,9 +679,14 @@ Grep `from '…cli/` and `import('…cli/` rather than trusting this list, but a
 
 `main.tsx` is a fifth and a different kind: it is the subcommand dispatcher, so it
 `await import()`s `cli/handlers/*` (mcp, auth, plugins, agents, autoMode, util),
-`cli/print.js`, `cli/update.js` and `cli/up.js` lazily — roughly thirty dynamic
-sites, deliberately dynamic to keep `axa --version` from paying for `print.ts`.
-That is the intended entry into this directory, not a boundary violation.
+`cli/print.js` and `cli/update.js` lazily — roughly thirty dynamic sites,
+deliberately dynamic to keep `axa --version` from paying for `print.ts`. Those
+two specifiers resolve to `cli/print.ts` and `cli/update.ts`, which exist; the
+`.js` is the ordinary ESM spelling, not a defect. Eleven further dynamic sites in
+the same file do *not* resolve — `cli/up.js`, `rollback.js` and nine
+`handlers/ant.js` — but every one of them is inside the `'ant'` gate from the
+paragraph above and is never reached. That is the intended entry into this
+directory, not a boundary violation.
 
 The two rows worth treating as real seam pressure are `REPL.tsx` and
 `ConsoleOAuthFlow.tsx`: interactive UI reaching into the non-interactive surface
