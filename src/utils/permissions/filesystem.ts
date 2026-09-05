@@ -2762,12 +2762,14 @@ function allowOnlyIfResolvedFormsAgree(
     // argument claimed `decide` reads only session state that nothing here
     // mutates. It also reads the filesystem: both `decideEditableInternalPath`
     // and `decideReadableInternalPath` call `resolvesToFlagConfigFile`, which
-    // performs two live symlink walks, so a concurrent re-point can change
-    // `decide`'s answer for a fixed string. The skip does not rest on that
-    // guarantee and does not need it — both reasons above hold whether or not
-    // `decide` is stable. Re-deciding would not close anything either; it would
-    // surface the pre-existing race between the walk and the decision it
-    // informs, which this loop cannot close, as a spurious denial.
+    // walks the symlink chain of every configured settings and `--mcp-config`
+    // path as well as the subject — one walk per configured path, not one per
+    // call site — so a concurrent re-point can change `decide`'s answer for a
+    // fixed string. The skip does not rest on that guarantee and does not need
+    // it — both reasons above hold whether or not `decide` is stable.
+    // Re-deciding would not close anything either; it would surface the
+    // pre-existing race between the walk and the decision it informs, which
+    // this loop cannot close, as a spurious denial.
     if (form === absolutePath) continue
     foldRoots ??= getFoldableRootsForSession()
     const formDecision = decide(foldResolvedRootPrefix(form, foldRoots), input)
