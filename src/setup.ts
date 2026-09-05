@@ -279,8 +279,14 @@ export async function setup(
     // Clear memory files cache since originalCwd has changed
     clearMemoryFileCaches()
     // Settings cache was populated in init() (via applySafeConfigEnvironmentVariables)
-    // and again at captureHooksConfigSnapshot() above, both from the original dir's
-    // .axa/settings.json. Re-read from the worktree and re-capture hooks.
+    // and again at captureHooksConfigSnapshot() above — not from a single file.
+    // captureHooksConfigSnapshot goes through getHooksFromAllowedSources, which
+    // consults policySettings and then getSettings_DEPRECATED's merge of the
+    // user/project/local sources; applySafeConfigEnvironmentVariables reads the
+    // global config's env. What goes stale here is only the project-scoped
+    // members of that merge — .axa/settings.json and .axa/settings.local.json —
+    // which are anchored at the pre-worktree cwd. Re-read from the worktree and
+    // re-capture hooks.
     updateHooksConfigSnapshot()
   }
 

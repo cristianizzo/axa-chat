@@ -735,9 +735,12 @@ export async function main() {
         rawCliArgs.splice(pmEqIdx, 1);
       }
       // Forward session-resume + model flags to the remote CLI's initial spawn.
-      // --continue/-c and --resume <uuid> operate on the REMOTE session history
-      // (which persists under projects/<cwd>/ in the remote's config home —
-      // CLAUDE_CONFIG_DIR there when set, else ~/.axa).
+      // --continue/-c and --resume <uuid> operate on the REMOTE session history,
+      // which persists in the remote's own config home (CLAUDE_CONFIG_DIR there
+      // when set, else ~/.axa) at the path getProjectDir() builds:
+      // `projects/` + sanitizePath(cwd). That is not the cwd as spelled —
+      // every non-alphanumeric becomes `-`, and an over-long name is truncated
+      // and suffixed with a hash.
       // --model controls which model the remote uses.
       const extractFlag = (flag: string, opts: {
         hasValue?: boolean;
