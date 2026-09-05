@@ -640,7 +640,10 @@ export function extractOutputRedirections(cmd: string): {
   let hasDangerousRedirection = false
 
   // SECURITY: Extract heredocs BEFORE line-continuation joining AND parsing.
-  // This matches splitCommandWithOperators (line 101). Quoted-heredoc bodies
+  // This matches splitCommandWithOperators, whose
+  // `heredocs } = extractHeredocs(command)` runs before its continuation join
+  // (the other extractHeredocs callers destructure processedCommand alone, so
+  // that binding list is what identifies the one meant). Quoted-heredoc bodies
   // are LITERAL text in bash (`<< 'EOF'\n${}\nEOF` — ${} is NOT expanded, and
   // `\<newline>` is NOT a continuation). But shell-quote doesn't understand
   // heredocs; it sees `${}` on line 2 as an unquoted bad substitution and throws.

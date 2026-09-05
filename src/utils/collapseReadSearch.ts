@@ -706,9 +706,12 @@ function createCollapsedGroup(
       totalReadCount - toolMemoryReadCount - teamMemReadCount,
     ),
     listCount: group.listCount,
-    // REPL operations are intentionally not collapsed (see isCollapsible: false at line 32),
-    // so replCount in collapsed groups is always 0. The replCount field is kept for
-    // sub-agent progress display in AgentTool/UI.tsx which has a separate code path.
+    // REPL is absorbed silently rather than counted: the
+    // `toolName === REPL_TOOL_NAME` branch of getToolSearchOrReadInfo returns
+    // isCollapsible: true with isAbsorbedSilently: true, and the absorbed arm of
+    // the grouping loop adds no count — so replCount in collapsed groups is
+    // always 0. The replCount field is kept for sub-agent progress display in
+    // AgentTool/UI.tsx, which increments its own group on a separate code path.
     replCount: 0,
     memorySearchCount: group.memorySearchCount,
     memoryReadCount,
