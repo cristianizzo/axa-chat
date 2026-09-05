@@ -144,7 +144,13 @@ for (let i = 0; i < args.length; i += 1) {
     featureSet.add(arg.slice('--feature='.length))
   }
 }
-// Validate feature flags against known list
+// Warn on unrecognised feature flags. This does NOT reject them: the flag stays
+// in `featureSet` and is passed through to `bun build` below, so an undeclared
+// `--feature=X` still takes effect. That is deliberate — it is how you try a flag
+// out before adding it to a list, and README documents the invocation — but it
+// means this loop is a spell-checker, not a gate. Do not cite it as one when
+// arguing a feature is unreachable; a reader has already been misled that way by
+// an earlier version of this comment, which said "Validate".
 const allKnownFeatures = new Set([...defaultFeatures, ...fullExperimentalFeatures])
 for (const f of featureSet) {
   if (!allKnownFeatures.has(f)) {
