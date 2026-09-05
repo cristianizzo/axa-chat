@@ -2230,36 +2230,72 @@ function stripTrailingSeparators(root: string): string {
  *   resolved set would stop containing the root. Same polarity as the bug this
  *   strip was added to fix: a false deny.
  *
- * `parse(p).root === p` is the denotation test, and it is deliberately not a
- * `/^[A-Za-z]:$/` regex: it also covers POSIX `/`, UNC share roots
- * (`\\server\share\`) and extended-length prefixes (`\\?\C:\`), each of which
- * loses meaning the same way. Measured with `path.win32` / `path.posix`, which
- * is testable from any host —
+ * The denotation test is *"does the stripped form plus one separator spell a
+ * root?"*, and it is deliberately not a `/^[A-Za-z]:$/` regex: it also covers
+ * POSIX `/`, UNC share roots (`\\server\share\`) and extended-length prefixes
+ * (`\\?\C:\`), each of which loses meaning the same way.
  *
- *   C:\              root='C:\'            root-only  (not stripped)
- *   \\server\share\  root='\\server\share\' root-only  (not stripped)
- *   \\?\C:\          root='\\?\C:\'        root-only  (not stripped)
- *   /                root='/'              root-only  (not stripped)
- *   C:\cfg\          root='C:\'            control    -> C:\cfg
- *   \\server\share\sub\  root='\\server\share\'  control -> …\sub
- *   /cfg/            root='/'              control    -> /cfg
+ * It is also deliberately **not** `parse(root).root === root`, which is what
+ * this function asked until Copilot found the hole. That predicate tests for a
+ * *canonically spelled* root, not for a root — so every redundant spelling
+ * failed it and fell through to the strip, which is the one outcome this
+ * function exists to prevent. `C://`, `C:\\`, `C:////` and `C:\/` all became
+ * drive-relative `C:`, and `\\server\share\\` and `\\?\C:\\` lost the root
+ * separator. Asking about the stripped form instead moves the question off the
+ * spelling, so the input can be returned verbatim.
+ *
+ * **Do not simplify this to `normalize(root)`.** It looks equivalent and is
+ * not: `normalize` also folds `..` lexically, which is not symlink-safe, and
+ * this value is handed straight to a chain walk. `/cfg/../` would become `/` —
+ * a root that prefix-matches every absolute path, which is the exact
+ * catastrophe `stripTrailingSeparators`' empty-string guard exists to prevent,
+ * reached by a new route. It re-spells canonical input too (`c:/` -> `c:\`,
+ * and on win32 `/` -> `\`). Over one generated 206-input sweep, `normalize`
+ * changes this function's answer on 97 win32 and 5 POSIX inputs where the
+ * shipped shape changes 18 and 0.
+ *
+ * Measured with `path.win32` — note that `parse` **and** `sep` are both
+ * platform-bound, so a host-independent check has to substitute both —
+ *
+ *   C:\                  root-only   not stripped
+ *   C://                 root-only   not stripped
+ *   C:\\                 root-only   not stripped
+ *   \\server\share\      root-only   not stripped
+ *   \\server\share\\     root-only   not stripped
+ *   \\?\C:\              root-only   not stripped
+ *   /                    root-only   not stripped
+ *   C:\cfg\              control     -> C:\cfg
+ *   \\server\share\sub\  control     -> …\sub
+ *   /cfg/                control     -> /cfg
  *
  * The controls matter: without them "root-only" could be a predicate that is
- * simply always true, and the whole strip would be dead.
+ * simply always true, and the whole strip would be dead. Hard-wiring the
+ * predicate to false moves 6 of these 10 rows, so it is load-bearing rather
+ * than decorative, and no root-only row is re-spelled.
  *
  * **On POSIX this function is a proven no-op**, and that is worth stating
  * because it bounds what any darwin/Linux fixture can show. `/` is the only
- * root-only POSIX spelling, and `stripTrailingSeparators('/')` already returned
- * `/` unchanged through its empty-string guard. Over a sweep of ten POSIX
- * inputs the two functions differ **0** times; over six win32 inputs they differ
- * **4** times, with `C:\cfg\` and `\\server\share\sub\` unchanged. The 4 is the
- * control that keeps the 0 from being a dead instrument.
+ * root-only POSIX spelling, and `stripTrailingSeparators('/')` already returns
+ * `/` unchanged through its empty-string guard. Over the 206-input sweep the
+ * two functions differ **0** times under `path.posix` and **27** times under
+ * `path.win32`; the 27 is the control that keeps the 0 from being a dead
+ * instrument.
+ *
+ * Two counting traps, both of which have already been walked into here. The
+ * quantities above are *three different things* — this function versus a plain
+ * strip, this function versus its previous shape, and rows moved by disabling
+ * the predicate — so a bare "differs N times" is unreadable without its pair.
+ * And `/` is root-only yet does **not** differ from a plain strip, because the
+ * sibling's guard reaches it first; counting it as a difference is how the
+ * superseded version of this comment claimed 4 differences over a battery that
+ * had 3.
  *
  * The corollary is that the end-to-end permission effect is **not reproducible
- * on a POSIX host** — the battery and the symlink fixtures are byte-identical
- * across this change, which is the expected reading and not evidence the guard
- * works. What is measured here is the predicate; what is reasoned is the
- * consequence of handing `C:` to a chain walk.
+ * on a POSIX host** — the permission battery and the symlink fixtures are
+ * byte-identical across every change to this function, which is the expected
+ * reading and not evidence the guard works. What is measured here is the
+ * predicate; what is reasoned is the consequence of handing `C:` to a chain
+ * walk.
  *
  * The old guard is the POSIX instance of exactly this rule, stated as a symptom
  * ("never strips to the empty string") rather than as the reason; a Windows
@@ -2273,7 +2309,12 @@ function stripTrailingSeparators(root: string): string {
  * root, since those reach this function as typed.
  */
 function stripTrailingSeparatorsForWalk(root: string): string {
-  return parse(root).root === root ? root : stripTrailingSeparators(root)
+  // `stripTrailingSeparators` never returns the empty string, so this always
+  // has something to test, and the POSIX root reaches the strip branch and is
+  // returned unchanged by that guard rather than by the test below.
+  const stripped = stripTrailingSeparators(root)
+  const withOneSeparator = stripped + sep
+  return parse(withOneSeparator).root === withOneSeparator ? root : stripped
 }
 
 type FoldableRoot = { lexical: string; resolved: string[] }
