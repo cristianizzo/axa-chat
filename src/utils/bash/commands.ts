@@ -642,11 +642,15 @@ export function extractOutputRedirections(cmd: string): {
   // SECURITY: Extract heredocs BEFORE line-continuation joining AND parsing.
   // This matches splitCommandWithOperators, whose
   // `heredocs } = extractHeredocs(command)` runs before its continuation join
-  // (the other extractHeredocs callers destructure processedCommand alone, so
-  // that binding list is what identifies the one meant). Quoted-heredoc bodies
-  // are LITERAL text in bash (`<< 'EOF'\n${}\nEOF` — ${} is NOT expanded, and
-  // `\<newline>` is NOT a continuation). But shell-quote doesn't understand
-  // heredocs; it sees `${}` on line 2 as an unquoted bad substitution and throws.
+  // (of the six extractHeredocs call sites, four destructure processedCommand
+  // alone and the fifth is this function's own, which passes `cmd` and renames
+  // its binding — so the exact string above is unique to the one meant, and
+  // grepping it returns two hits: this comment and its target).
+  //
+  // Quoted-heredoc bodies are LITERAL text in bash (`<< 'EOF'\n${}\nEOF` — ${}
+  // is NOT expanded, and `\<newline>` is NOT a continuation). But shell-quote
+  // doesn't understand heredocs; it sees `${}` on line 2 as an unquoted bad
+  // substitution and throws.
   //
   // ORDER MATTERS: If we join continuations first, a quoted heredoc body
   // containing `x\<newline>DELIM` gets joined to `xDELIM` — the delimiter
