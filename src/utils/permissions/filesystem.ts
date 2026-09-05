@@ -2186,10 +2186,9 @@ function stripTrailingSeparators(root: string): string {
   return stripped === '' ? root : stripped
 }
 
-function getFoldableRootsForSession(): {
-  lexical: string
-  resolved: string[]
-}[] {
+type FoldableRoot = { lexical: string; resolved: string[] }
+
+function getFoldableRootsForSession(): FoldableRoot[] {
   return (
     // Deduped because the pairs collapse in the common case:
     // getMemoryBaseDir() === the config home unless CLAUDE_CODE_REMOTE_MEMORY_DIR
@@ -2308,13 +2307,19 @@ function getFoldableRootsForSession(): {
  * is the laundering this function exists to prevent. Re-deciding can therefore
  * change which allow is granted, but it cannot grant an allow to a file that
  * would not have one under its own name.
+ *
+ * `roots` is a required parameter with no default, deliberately. A default of
+ * `getFoldableRootsForSession()` would read as harmless and would let a future
+ * caller reintroduce a per-form realpath sweep without writing anything that
+ * looks like a cost — see the sole call site, which resolves them once per
+ * decision precisely to avoid that.
  */
-function foldResolvedRootPrefix(form: string): string {
+function foldResolvedRootPrefix(form: string, roots: FoldableRoot[]): string {
   const normalizedForm = normalize(form)
   const formLower = normalizeCaseForComparison(normalizedForm)
   let folded: string | undefined
   let foldedRootLength = -1
-  for (const { lexical, resolved } of getFoldableRootsForSession()) {
+  for (const { lexical, resolved } of roots) {
     for (const rootForm of resolved) {
       // Longest matching root wins, and this is load-bearing rather than
       // defensive — but not for the reason an earlier draft of this comment
@@ -2542,6 +2547,46 @@ function allowOnlyIfResolvedFormsAgree(
   if (identity === undefined) {
     return denied
   }
+  // Resolved once per decision, and lazily. This loop is not bounded at two
+  // forms: `getPathsForPermissionCheck` walks the whole symlink chain and
+  // returns *every* intermediate target. Its own `maxDepth` is 40, but on macOS
+  // the kernel's SYMLOOP_MAX binds first — at 33 hops the walk is refused and
+  // the form list collapses back to 2. So N is attacker-influenced (anything
+  // that can create links under a carve-out root sets it) but hard-bounded at
+  // 32, which is what makes the remaining cost tolerable rather than a hazard.
+  //
+  // Folding each form against a freshly resolved root set did one realpath
+  // sweep of five-to-seven roots *per form*. Hoisting removes that term.
+  // Measured on one harness, an allowed agent-memory path behind N links, µs
+  // per check with the number of `getFoldableRootsForSession` calls beside it:
+  //
+  //     N            0        1        2        8       16       32
+  //     per form   0/87    1/240    2/396   8/1489  16/3534  32/10146
+  //     hoisted    0/88    1/242    1/332   1/1039   1/2543   1/8248
+  //
+  // Read the two rows honestly: the *call count* goes flat, the *time* does
+  // not. A residual O(N²) remains — each of the N re-decisions walks what is
+  // left of the chain again — and this hoist does not touch it, so the saving
+  // is 19% at N=32 and the worst case is still ~8ms. That is the true claim;
+  // "the hoist makes it flat" would be checkable and wrong.
+  //
+  // Two rows are controls rather than results. N=0 is the common case and must
+  // stay at *zero* resolutions — hence `??=` and not an eager call, since a
+  // path with no links has one form, which the `continue` below skips, so
+  // nothing is folded and nothing is resolved; an eager hoist would regress it
+  // to one. N=1 must be an exact no-op, one resolution either way, and 240 vs
+  // 242µs is that.
+  //
+  // This is a per-decision snapshot, NOT a memo, and the distinction is the
+  // whole reason it is safe: its lifetime is exactly this call, so it cannot
+  // outlive the decision it informs. Caching resolved roots *across* calls is a
+  // separate live defect that fails open, because a stale root is a
+  // demonstrated way to mint an allow. Do not promote this to module scope.
+  // Reusing one snapshot across the forms is also the more coherent reading —
+  // every form of one path is judged against the same root set, where
+  // re-resolving per form could judge two forms against two different
+  // filesystems.
+  let foldRoots: FoldableRoot[] | undefined
   for (const form of getPathsForPermissionCheck(absolutePath)) {
     // The written spelling is skipped outright, not merely left unfolded.
     // `decide(absolutePath)` above already returned `identity` for that exact
@@ -2568,7 +2613,8 @@ function allowOnlyIfResolvedFormsAgree(
     // optimisation note. It is a property of the carve-out chains, which read
     // configuration but never write it.
     if (form === absolutePath) continue
-    const formDecision = decide(foldResolvedRootPrefix(form), input)
+    foldRoots ??= getFoldableRootsForSession()
+    const formDecision = decide(foldResolvedRootPrefix(form, foldRoots), input)
     if (
       formDecision.behavior !== 'allow' ||
       identify(formDecision) !== identity
