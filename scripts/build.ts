@@ -99,8 +99,64 @@ function getSourceSha(): string | null {
   )
 }
 
-function getDevVersion(baseVersion: string): string {
-  const timestamp = new Date().toISOString()
+/**
+ * The build stamps a wall-clock time into the binary twice — `MACRO.BUILD_TIME`,
+ * and the date/time inside a dev `MACRO.VERSION`. Both now derive from this one
+ * read, so setting `AXA_SOURCE_DATE_EPOCH` (whole seconds since the Unix epoch)
+ * makes them stable across builds of the same ref.
+ *
+ * Same idea as `SOURCE_DATE_EPOCH` and deliberately not that name: we minted
+ * this one, so no party outside the repo held the name first and it stays ours
+ * to change — unlike the `CLAUDE_*` names, which are read here and set only by
+ * someone we cannot update. Note that a wrapper or CI job is the intended
+ * setter, so this variable is read in the tree and assigned nowhere in it; that
+ * shape is not what makes a name external, prior ownership is.
+ *
+ * It does NOT make the build reproducible, and that is measured rather than
+ * assumed. Two `build:dev:full` runs of one ref with this variable set to the
+ * same value — nothing normalised afterwards — still differ by 75,834 bytes.
+ * `--bytecode` is the overwhelming majority of that and varies from run to run,
+ * so pinning the stamps moves the total around rather than down.
+ *
+ * Every figure below is a **single pair of builds**, and the run-to-run spread
+ * was never measured. Read them as orders of magnitude, not as values, and in
+ * particular **do not order them against each other**: an unpinned pair came out
+ * at 75,144, which is *smaller* than the pinned 75,834, and that gap (690) is
+ * itself smaller than the stamp population it would have to beat to mean
+ * anything. Of that unpinned 75,144 the stamps were 460, or 0.6%. With
+ * `--bytecode` off, one pair differed by 1,550, of which the stamps were 85
+ * (5.5%) — leaving ~1,465 bytes unexplained, which is an observation from one
+ * pair and neither a bound nor a mean. Re-measure before treating any of these
+ * as a target; a later pair returning 1,600 is the spread, not a regression.
+ *
+ * Pinning this buys stamp-stability and nothing more.
+ */
+function resolveBuildDate(): Date {
+  const raw = process.env.AXA_SOURCE_DATE_EPOCH
+  // Unset and empty both mean "use the wall clock", so a wrapper can pass the
+  // variable through unconditionally without having to decide whether to set it.
+  if (!raw) return new Date()
+  // Reject rather than fall back. A malformed value that quietly degraded to
+  // `new Date()` would hand back a build the caller believes is pinned and is
+  // not, and that only ever surfaces as an unexplained diff much later.
+  if (!/^\d+$/.test(raw)) {
+    console.error(
+      `\x1b[31m[error]\x1b[0m AXA_SOURCE_DATE_EPOCH must be whole seconds since the Unix epoch, got "${raw}"`,
+    )
+    process.exit(1)
+  }
+  const date = new Date(Number(raw) * 1000)
+  if (Number.isNaN(date.getTime())) {
+    console.error(
+      `\x1b[31m[error]\x1b[0m AXA_SOURCE_DATE_EPOCH is out of range for a date: "${raw}"`,
+    )
+    process.exit(1)
+  }
+  return date
+}
+
+function getDevVersion(baseVersion: string, buildDate: Date): string {
+  const timestamp = buildDate.toISOString()
   const date = timestamp.slice(0, 10).replaceAll('-', '')
   const time = timestamp.slice(11, 19).replaceAll(':', '')
   const sha = getSourceSha() ?? 'unknown'
@@ -162,8 +218,9 @@ const features = [...featureSet]
 const outfile =
   outfileOverride ??
   (compile ? (dev ? './dist/cli-dev' : './dist/cli') : dev ? './cli-dev' : './cli')
-const buildTime = new Date().toISOString()
-const version = dev ? getDevVersion(pkg.version) : pkg.version
+const buildDate = resolveBuildDate()
+const buildTime = buildDate.toISOString()
+const version = dev ? getDevVersion(pkg.version, buildDate) : pkg.version
 
 const outDir = dirname(outfile)
 if (outDir !== '.') {
