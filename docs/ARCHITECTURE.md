@@ -17,13 +17,49 @@ exported function name over a landmark that only exists in prose.
 suffix survives a directory move, which a rooted path does not, and this
 document is built to survive drift.
 
-Measured over the 89 distinct file names cited below: **77 resolve as suffixes.
-All 12 that do not are files this document explicitly says do not exist** — the
-dangling `handlers/ant.js`, `up.js`, `rollback.js` and `templateJobs.js` imports
-(§7), `REPLTool/toolWrappers.ts` behind the `USER_TYPE === 'ant'` gate (§6),
-`cli/transports/Transport.ts` (untracked), and `.mcp.json`, which is a
-per-project file the user creates. So a citation that fails to resolve is a bug
-in this document, with those exceptions and no others.
+Measured over the 90 distinct file names cited below: **78 resolve as suffixes
+against `origin/main`, and 12 do not.** All 12 are enumerated here, because a
+count with a partial list is the shape that gets silently completed wrong — an
+earlier revision of this paragraph named 7 and asserted 12, and its one-line
+reason was false for 3 of the 5 it left unnamed. They fall into three groups,
+for three different reasons:
+
+1. **Six that genuinely have no file, and are cited precisely because they do
+   not** — the dangling `handlers/ant.js`, `up.js`, `rollback.js` and
+   `templateJobs.js` imports and the phantom `Transport.js` contract (§7), and
+   `REPLTool/toolWrappers.ts` behind the `USER_TYPE === 'ant'` gate (§6).
+2. **Two that are second spellings of things already in group 1**, counted
+   separately only because the sweep counts distinct strings —
+   `cli/transports/Transport.ts` (the `.ts` spelling of the same phantom) and
+   `cli/up.js` (the path-qualified spelling of the same dangling handler). No
+   new missing files here.
+3. **Three that are ESM import specifiers, not filenames** — `cli/print.js`,
+   `cli/update.js` and `main.js`. These resolve to `src/cli/print.ts`,
+   `src/cli/update.ts` and `src/main.tsx`, which all exist. A `.js` specifier
+   for a TypeScript source is the normal ESM spelling (§7 covers the ~30
+   dynamic imports that use it), so **these are not defects and must not be
+   "corrected" to `.ts`** — the import statements in the source say `.js`, and
+   the document quotes them as written.
+
+Plus `.mcp.json`, a per-project file the user creates, which is the twelfth.
+So a citation that fails to resolve is a bug in this document, with those
+exceptions and no others.
+
+**Resolve with a suffix match, not a substring match.** Checking the list above
+with `grep -F` instead of an anchored `(^|/)<name>$` reports 78 resolving rather
+than 77 — one name substring-matches an unrelated path and the loose instrument
+reads it as found. That is a one-line discrepancy that looks like drift in the
+document and is actually drift in the check.
+
+One deliberate omission, kept as a warning rather than fixed silently: an
+earlier revision called the phantom transport "untracked". That contradicted
+§7's *"does not exist and never has"*, and both statements were true of
+different things — a stray untracked copy sat in *one developer's* working
+tree, while `git log --all` on that path is empty for the repository. **A
+statement about a working tree does not belong in a document about the
+repository.** `git ls-files` reads an index, `git ls-tree <ref>` reads a ref,
+and `ls` reads a disk; only the middle one generalises past the machine it was
+run on.
 
 **Environment variables are the one thing spelled in full, never abbreviated** —
 paths get shortened because a *suffix* still resolves, but a truncated env name
