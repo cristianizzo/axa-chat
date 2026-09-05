@@ -1,3 +1,12 @@
+// THIS MODULE RUNS THE BUILD AT IMPORT TIME. It has no main() and no export
+// guard: the top-level statements below read argv and write a binary — ./cli
+// with no arguments at all, and ./cli-dev, ./dist/cli or ./dist/cli-dev
+// depending on --dev and --compile (see the `outfile` assignment). So a bare
+// `import('./scripts/build.ts')` is identical to `bun run
+// ./scripts/build.ts` — it is NOT a syntax check, and wrapping it in .catch()
+// makes a successful build look like a clean one. Someone has already clobbered
+// a release artifact this way while trying to verify that an edit parsed.
+// To check this file without building, transpile it; do not import it.
 import {
   chmodSync,
   existsSync,
