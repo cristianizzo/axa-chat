@@ -2147,8 +2147,9 @@ function isReadableConfigDirPath(absolutePath: string): boolean {
  * so it is a second instance of the bug, not a precedent that makes it safe.
  *
  * The cost is real and is paid per *allowed* decision, never on the rejected
- * path. See `allowOnlyIfResolvedFormsAgree`, which skips the fold for the
- * written spelling, so a path with no symlinks in it does not reach here at all.
+ * path. See `allowOnlyIfResolvedFormsAgree`, which skips the written spelling
+ * outright — not merely its fold — so a path with no symlinks in it does not
+ * reach here at all.
  */
 /**
  * Removes trailing separators from a fold root. Applied to **both** sides.
@@ -2479,21 +2480,37 @@ function foldResolvedRootPrefix(form: string): string {
  * Cost, measured rather than estimated, and attributed to the right change —
  * an earlier draft of this comment charged the fold with the *chokepoint's*
  * cost, because the figure was taken against `d29a5bc` rather than against the
- * commit below. Per allowed decision, µs/call:
+ * commit below. Per allowed decision, µs/call, every cell from one harness and
+ * min-of-three:
  *
  *                              canonical root   root via a symlink
- *   d29a5bc (no chokepoint)          71               84 (wrong answer)
- *   chokepoint alone                148              277 (false denial)
- *   + this fold                     152              331
+ *   d29a5bc (no chokepoint)         80.5             87.0 (wrong answer)
+ *   chokepoint, fold disabled      173.0             false denial
+ *   + this fold                    171.8            366.0
+ *   + identity-form skip            92.1            273.9   <- current
  *
- * So the chokepoint costs ~+77µs and this fold ~+4µs in the default layout,
- * where `~/.axa` is a real directory: the identity-form skip below means a path
- * with no symlinks never resolves a root at all. The ~+54µs is paid only when
- * the config root is itself a link, only on decisions that were already going
- * to be allowed, and it buys back the 277µs `passthrough` in the row above it,
- * which is a *denial of a legitimate write*. The rejected path is unchanged at
- * ~112µs and is the common one: the early return means nothing here is resolved
- * unless the path as written was already going to be allowed.
+ * Read the second row's right-hand cell as a *refusal*, not a missing number.
+ * With the fold disabled the symlinked case comes back `passthrough`, so there
+ * is no allowed decision there to time; an earlier table printed 277µs in that
+ * cell, which was the cost of the denial, labelled as though it were the cost
+ * of an allow. Timing a row without first asserting it is still an `allow` is
+ * how that happened, and the harness now aborts instead.
+ *
+ * Every cell was re-measured together because the original harness was not
+ * kept, and patching one cell of a table from a second instrument is the same
+ * error in a smaller package. Absolute values are ~10-15% above the earlier
+ * table's on this machine; the shape is what reproduces, and the shape is the
+ * claim.
+ *
+ * So the chokepoint costs ~+91µs before the skip and ~+12µs after it, and this
+ * fold is free to the limit of measurement on a canonical root — 173.0 vs
+ * 171.8 is noise, and the fold is ordered *after* the identity-form skip below,
+ * so a path with no symlinks never resolves a root at all. The remaining
+ * ~+187µs is paid only when the config root is itself a link, only on decisions
+ * already going to be allowed, and it buys back a `passthrough` on a
+ * *legitimate write*. The rejected path is the common one and is flat at
+ * ~103-107µs across all four builds and both modes — that flatness is the
+ * control that none of this reaches the path most calls take.
  *
  * This settles the decision, not the race. Resolution is a filesystem read and
  * the write happens later in FileWriteTool with no O_NOFOLLOW, so a link
@@ -2526,17 +2543,32 @@ function allowOnlyIfResolvedFormsAgree(
     return denied
   }
   for (const form of getPathsForPermissionCheck(absolutePath)) {
-    // The written spelling is never folded. `decide(absolutePath)` above already
-    // returned `identity` for that exact string, so re-deciding it is a no-op
-    // that cannot fail — and folding it first could only rewrite it into some
-    // *other* carve-out's namespace and manufacture a disagreement with the
-    // decision this loop is checking. Skipping it is therefore free of
-    // behaviour, and it is also where the cost goes: a path with no symlinks in
-    // it has exactly one form, so the common case resolves no roots at all.
-    const formDecision = decide(
-      form === absolutePath ? form : foldResolvedRootPrefix(form),
-      input,
-    )
+    // The written spelling is skipped outright, not merely left unfolded.
+    // `decide(absolutePath)` above already returned `identity` for that exact
+    // string, and `decide` is deterministic for the duration of this loop — it
+    // reads session state that nothing here mutates — so a second call on the
+    // same string can only return what the first one did. Folding it instead of
+    // skipping it would be worse than useless: the fold could rewrite it into
+    // some *other* carve-out's namespace and manufacture a disagreement with
+    // the very decision this loop is checking.
+    //
+    // Skipping is where the cost is. A path with no symlinks in it has exactly
+    // one form, so before this `continue` the common case paid for the whole
+    // carve-out chain twice to learn nothing: 171.8µs → 92.1µs per allowed
+    // check, and 366.0µs → 273.9µs when the config dir is behind a link and the
+    // loop has real work to do as well. See the table above, which is measured
+    // on the same harness — the saving is ~80µs and ~92µs, one `decide` either
+    // way, and that consistency is the check that this call is what was removed
+    // rather than the harness moving under two separate runs.
+    //
+    // Do not "simplify" this to re-deciding the written form for symmetry.
+    // Note the direction of the risk if `decide` ever *did* become
+    // non-deterministic: re-checking would fail closed and this `continue`
+    // fails open, so the determinism above is load-bearing rather than an
+    // optimisation note. It is a property of the carve-out chains, which read
+    // configuration but never write it.
+    if (form === absolutePath) continue
+    const formDecision = decide(foldResolvedRootPrefix(form), input)
     if (
       formDecision.behavior !== 'allow' ||
       identify(formDecision) !== identity
