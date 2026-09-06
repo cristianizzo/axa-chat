@@ -1526,9 +1526,11 @@ function layoutNode(
         lineCross = maxAscent + maxDescent
       }
     }
-    // layoutNode(c) at line ~1117 above already resolved c.layout.margin[] via
-    // resolveEdges4Into with the same ownerW — read directly instead of
-    // re-resolving through childMarginForAxis → 2× resolveEdge.
+    // The layoutNode(c) call above (the one passing
+    // `isMainRow ? MeasureMode.Exactly : childCrossMode,`) already resolved
+    // c.layout.margin[] via resolveEdges4Into with the same ownerW — read
+    // directly instead of re-resolving through childMarginForAxis → 2×
+    // resolveEdge.
     const mainLead = leadingEdge(mainAxis)
     const mainTrail = trailingEdge(mainAxis)
     let consumed = lineGap
@@ -1671,8 +1673,9 @@ function layoutNode(
     // Re-stretch children whose cross is auto and align is stretch, now that
     // the line cross size is known. Needed for multi-line wrap (line cross
     // wasn't known during initial measure) AND single-line when the container
-    // cross was not Exactly (initial stretch at ~line 1250 was skipped because
-    // innerCrossSize wasn't defined — the container sized to max child cross).
+    // cross was not Exactly (the initial stretch branch, guarded by
+    // `isDefined(innerCrossSize) &&`, was skipped because innerCrossSize wasn't
+    // defined — the container sized to max child cross).
     if (isWrap || crossMode !== MeasureMode.Exactly) {
       for (const c of line) {
         const cStyle = c.style

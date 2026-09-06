@@ -455,9 +455,10 @@ function TranscriptSearchBar({
   // applySearchHighlight scans the whole screen buffer. The query
   // text rendered here IS on screen — /foo matches its own 'foo' in
   // the bar. With no content matches that's the ONLY visible match →
-  // gets CURRENT → underlined. noSelect makes searchHighlight.ts:76
-  // skip these cells (same exclusion as gutters). You can't text-
-  // select the bar either; it's transient chrome, fine.
+  // gets CURRENT → underlined. noSelect makes the scan skip these
+  // cells — same exclusion as gutters. The scan is
+  // `export function applySearchHighlight` in src/ink/searchHighlight.ts.
+  // You can't text-select the bar either; it's transient chrome, fine.
   noSelect>
       <Text>/</Text>
       <Text>{query.slice(0, off)}</Text>
@@ -794,12 +795,18 @@ export function REPL({
 
   // Start background plugin installations
 
-  // SECURITY: This code is guaranteed to run ONLY after the "trust this folder" dialog
-  // has been confirmed by the user. The trust dialog is shown in cli.tsx (line ~387)
-  // before the REPL component is rendered. The dialog blocks execution until the user
-  // accepts, and only then is the REPL component mounted and this effect runs.
-  // This ensures that plugin installations from repository and user settings only
-  // happen after explicit user consent to trust the current working directory.
+  // SECURITY: plugin installations from repository and user settings must not run
+  // before the user has consented to trust the current working directory. Two
+  // separate things hold that, and only the first is load-bearing:
+  //   1. performStartupChecks itself returns early unless
+  //      checkHasTrustDialogAccepted() passes. This is the enforcement.
+  //   2. Setup awaits the trust dialog
+  //      (`<TrustDialog commands={commands} onDone={done} />`) before the REPL is
+  //      mounted, so in practice this effect cannot run first.
+  // This effect is currently the callee's only call site, but (2) is an argument
+  // about mount ordering across three files: it is not checkable from here and a
+  // change to setup can invalidate it silently. Do not drop the callee's check
+  // on the strength of it.
   useEffect(() => {
     if (isRemoteSession) return;
     void performStartupChecks(setAppState);
@@ -4310,8 +4317,9 @@ export function REPL({
     if (input === '[' && !dumpMode) {
       // Force dump-to-scrollback. Also expand + uncap — no point dumping
       // a subset. Terminal/tmux cmd-F can now find anything. Guard here
-      // (not in isActive) so v still works post-[ — dump-mode footer at
-      // ~4898 wires editorStatus, confirming v is meant to stay live.
+      // (not in isActive) so v still works post-[ — the dump-mode footer
+      // (`suppressShowAll={dumpMode}`) wires editorStatus, confirming v is
+      // meant to stay live.
       setDumpMode(true);
       setShowAllInTranscript(true);
       event.stopImmediatePropagation();
@@ -4474,7 +4482,8 @@ export function REPL({
         setSearchOpen(false);
         // onCancel path: bar unmounts before its useEffect([query])
         // can fire with ''. Without this, searchCount stays stale
-        // (n guard at :4956 passes) and VML's matches[] too
+        // (the `c === 'n' || c === 'N'` guard still sees it above
+        // zero) and VML's matches[] too
         // (nextMatch walks the old array). Phantom nav, no
         // highlight. onExit (Enter, q non-empty) still commits.
         if (!q) {

@@ -195,10 +195,10 @@ export function StreamingMarkdown({
 
   configureMarked();
 
-  // Strip before boundary tracking so it matches <Markdown>'s stripping
-  // (line 29). When a closing tag arrives, stripped(N+1) is not a prefix
-  // of stripped(N), but the startsWith reset below handles that with a
-  // one-time re-lex on the smaller stripped string.
+  // Strip before boundary tracking so it matches <Markdown>'s own stripping
+  // (`cachedLexer(stripPromptXMLTags(children))`). When a closing tag arrives,
+  // stripped(N+1) is not a prefix of stripped(N), but the startsWith reset below
+  // handles that with a one-time re-lex on the smaller stripped string.
   const stripped = stripPromptXMLTags(children);
   const stablePrefixRef = useRef('');
 
