@@ -100,13 +100,35 @@ The counter-example is in this document's own history: `CCR_V2` and
 `POST_FOR_SESSION_INGRESS_V2` (§7) look like they share a prefix, and they do
 not — the real names are `CLAUDE_CODE_USE_CCR_V2` and
 `CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2`, so guessing `CLAUDE_CODE_USE_` from
-the first gives a name that exists nowhere for the second. Measured over all 29
-distinct `[A-Z][A-Z0-9_]{3,}` tokens cited **anywhere in this document**: 27
-resolve in `src/` on `main`, and the exception set has exactly two members —
-`TS2307`, a `tsc` diagnostic code, and `FNM_PATHNAME`, a POSIX `fnmatch` flag
-named in the pathspec paragraph above. Neither is an identifier in this repo,
-which is the whole reason they are the exceptions; both are named because a
-one-member exception set is the shape that gets silently completed wrong.
+the first gives a name that exists nowhere for the second. Measured over all 26
+distinct `(?<![A-Za-z0-9_])[A-Z][A-Z0-9_]{3,}(?![A-Za-z0-9_])` tokens cited
+**anywhere in this document**: 24 resolve in `src/` on `main`, and the exception
+set has exactly two members — `TS2307`, a `tsc` diagnostic code, and
+`FNM_PATHNAME`, a POSIX `fnmatch` flag named in the pathspec paragraph above.
+Neither is an identifier in this repo, which is the whole reason they are the
+exceptions; both are named because a one-member exception set is the shape that
+gets silently completed wrong.
+
+**The boundaries in that pattern are the correction, and the way it was wrong
+is the reason this paragraph exists.** An earlier revision stated the extractor
+unbounded, as `[A-Z][A-Z0-9_]{3,}`, and reported **29 / 27**. Unbounded, it cuts
+mixed-case identifiers mid-word and mints three tokens that were never cited:
+the leading four or five characters of `CCRClient`, `REPLTool` and
+`SSETransport`. This is the same defect the paragraph above warns about for file
+names — a loose matcher inventing members — arriving on the *extraction* side
+rather than the resolution side, which is the side nobody thought to bound.
+
+**What makes it worth a paragraph is that it was invisible from every artefact
+the page exposes.** The miss set is `{TS2307, FNM_PATHNAME}` under both
+instruments and the differential is 2 under both, so the enumeration a reader
+can check was correct while both totals were wrong. That is not luck: a token
+carved out of a longer identifier is a substring of a string that is present in
+`src/` by construction, so a phantom minted this way is *guaranteed* to land on
+the resolving side and can never disturb the exception list. **An unbounded
+extractor and a substring resolver hide each other.** Bound both, and state the
+extraction pattern as well as the resolution instrument — a count whose
+population cannot be re-derived from the page is unverifiable however carefully
+it was taken.
 
 Seven numbered sections, zooming in: whole lifecycle → startup → prompt submit →
 the agent turn loop → provider/network resolution → tool execution and
