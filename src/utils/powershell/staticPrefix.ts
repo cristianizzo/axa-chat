@@ -142,7 +142,8 @@ async function extractPrefixFromElement(
   // Bare-root guard: buildPrefix returns 'git' for `git` with no subcommand
   // found (empty args, or only global flags). That's too broad — would
   // auto-allow `git push --force` forever. Bash's extractor doesn't gate this
-  // (bash/prefix.ts:363, separate fix). Reject single-word results for
+  // — its `collapsed.push(longestCommonPrefix(group))` in bash/prefix.ts has
+  // no equivalent check (separate fix). Reject single-word results for
   // commands whose spec declares subcommands OR that have DEPTH_RULES entries
   // (gcloud, aws, kubectl, etc.) which implies subcommand structure even
   // without a loaded spec. (bug #17)
@@ -241,13 +242,15 @@ export async function getCompoundCommandPrefixesStatic(
   // word-aligned longest common prefix. `npm run test` + `npm run lint`
   // → `npm run`. But NEVER collapse down to a bare subcommand-aware root:
   // `git add` + `git commit` would LCP to `git`, which extractPrefixFromElement
-  // explicitly refuses as too broad (line ~119). Collapsing through that gate
+  // explicitly refuses as too broad — see its `Bare-root guard:` above.
+  // Collapsing through that gate
   // would suggest PowerShell(git:*) → auto-allows git push --force forever.
   // When LCP yields a bare subcommand-aware root, drop the group entirely
   // rather than suggest either the too-broad root or N un-collapsed rules.
   //
   // Bash's getCompoundCommandPrefixesStatic has this same collapse without
-  // the guard (src/utils/bash/prefix.ts:360-365) — that's a separate fix.
+  // the guard — its `collapsed.push(longestCommonPrefix(group))` in
+  // src/utils/bash/prefix.ts — that's a separate fix.
   //
   // Grouping and word-comparison are case-insensitive (PowerShell is
   // case-insensitive: Git === git, Get-Process === get-process). The Map key
