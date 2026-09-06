@@ -2286,7 +2286,9 @@ export function checkSemantics(commands: SimpleCommand[]): SemanticCheckResult {
           // `timeout .5 echo ok` works. Previously this branch `break`ed
           // (fail-OPEN) so `timeout .5 eval "id"` with `Bash(timeout:*)` left
           // name='timeout' and eval was never checked. Now fail CLOSED —
-          // consistent with the unknown-FLAG handling above (lines ~1895,1912).
+          // consistent with the flag loop just above, which likewise elects to
+          // "fail closed on any unrecognized flag" rather than fall through to
+          // name='timeout'.
           return {
             ok: false,
             reason: `timeout duration '${a[i]}' cannot be statically analyzed`,

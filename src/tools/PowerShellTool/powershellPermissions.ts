@@ -1299,9 +1299,10 @@ export async function powershellToolHasPermission(
 
   // Decision: path constraints — was step 4.44 (:835-845).
   // The deny-capable check that was being masked by earlier asks. Returns
-  // 'deny' when an Edit(...) deny rule matches an extracted path (pathValidation
-  // lines ~994, 1088, 1160, 1210), 'ask' for paths outside working dirs, or
-  // 'passthrough'.
+  // 'deny' when an Edit(...) deny rule matches an extracted path — the four
+  // `if (decisionReason?.type === 'rule') {` deny returns in
+  // PowerShellTool/pathValidation.ts — 'ask' for paths outside working dirs,
+  // or 'passthrough'.
   //
   // Thread hasCdSubCommand (BashTool compoundCommandHasCd parity): when the
   // compound contains a cwd-changing cmdlet, checkPathConstraints forces 'ask'

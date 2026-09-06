@@ -435,8 +435,13 @@ const SAFE_ENV_VARS = new Set([
  *
  * SECURITY: These env vars are stripped before permission-rule matching, which
  * means `DOCKER_HOST=tcp://evil.com docker ps` matches a `Bash(docker ps:*)`
- * rule after stripping. This is INTENTIONALLY ANT-ONLY (gated at line ~380)
- * and MUST NEVER ship to external users. DOCKER_HOST redirects the Docker
+ * rule after stripping. This is INTENTIONALLY ANT-ONLY and MUST NEVER ship to
+ * external users. There is no single gate to point at: the restriction is
+ * carried by four textually identical copies of
+ * `process.env.USER_TYPE === 'ant' && ANT_ONLY_SAFE_ENV_VARS.has(varName)`,
+ * one per env-stripping call site. To audit it, grep that string — EVERY
+ * `.has(` use of this set must sit inside it, or the stripping ships to
+ * external users. DOCKER_HOST redirects the Docker
  * daemon endpoint — stripping it defeats prefix-based permission restrictions
  * by hiding the network endpoint from the permission check. KUBECONFIG
  * similarly controls which cluster kubectl talks to. These are convenience
@@ -541,8 +546,9 @@ export function stripSafeWrappers(command: string): string {
     // timeout ran. Contrast ENV_VAR_PATTERN below which already allowlists.
     /^timeout[ \t]+(?:(?:--(?:foreground|preserve-status|verbose)|--(?:kill-after|signal)=[A-Za-z0-9_.+-]+|--(?:kill-after|signal)[ \t]+[A-Za-z0-9_.+-]+|-v|-[ks][ \t]+[A-Za-z0-9_.+-]+|-[ks][A-Za-z0-9_.+-]+)[ \t]+)*(?:--[ \t]+)?\d+(?:\.\d+)?[smhd]?[ \t]+/,
     /^time[ \t]+(?:--[ \t]+)?/,
-    // SECURITY: keep in sync with checkSemantics wrapper-strip (ast.ts
-    // ~:1990-2080) AND stripWrappersFromArgv (pathValidation.ts ~:1260).
+    // SECURITY: keep in sync with the wrapper-strip loop at the top of
+    // `export function checkSemantics` (src/utils/bash/ast.ts) AND with
+    // stripWrappersFromArgv (pathValidation.ts ~:1260).
     // Previously this pattern REQUIRED `-n N`; checkSemantics already handled
     // bare `nice` and legacy `-N`. Asymmetry meant checkSemantics exposed the
     // wrapped command to semantic checks but deny-rule matching and the cd+git

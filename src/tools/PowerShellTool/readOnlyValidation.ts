@@ -1498,7 +1498,8 @@ export function isAllowlistedCommand(
       // -ErrorAction/-Verbose/-Debug etc. are accepted by every cmdlet via
       // [CmdletBinding()] and only route error/warning/progress streams —
       // they can't make a read-only cmdlet write. pathValidation.ts already
-      // merges these into its per-cmdlet param sets (line ~1339); this is
+      // merges these into its per-cmdlet param sets — see its
+      // `[...config.knownSwitches, ...COMMON_SWITCHES]` — and this is
       // the same merge for safeFlags. Without it, `Get-Content file.txt
       // -ErrorAction SilentlyContinue` prompts despite Get-Content being
       // allowlisted. Only for cmdlets — native exes don't have common params.

@@ -952,8 +952,9 @@ async function* runShellCommand({
       // Wake the generator's Promise.race so it sees backgroundShellId.
       // Without this, if the poller has stopped ticking for this task
       // (no output + shared-poller race with sibling stopPolling calls)
-      // and the process is hung on I/O, the race at line ~1357 never
-      // resolves and the generator deadlocks despite being backgrounded.
+      // and the process is hung on I/O, the generator's
+      // `Promise.race([resultPromise, progressSignal])` never resolves and the
+      // generator deadlocks despite being backgrounded.
       const resolve = resolveProgress;
       if (resolve) {
         resolveProgress = null;
