@@ -1646,9 +1646,10 @@ export async function initBridgeCore(
           })
       : Promise.resolve()
 
-    // Run stopWork and archiveSession in parallel. gracefulShutdown.ts:407
-    // races runCleanupFunctions() against 2s (NOT the 5s outer failsafe),
-    // so archive is capped at 1.5s at the injection site to stay under budget.
+    // Run stopWork and archiveSession in parallel. The `Promise.race` guarded
+    // by `new CleanupTimeoutError()` in utils/gracefulShutdown.ts races
+    // runCleanupFunctions() against 2s (NOT the 5s outer failsafe), so archive
+    // is capped at 1.5s at the injection site to stay under budget.
     // archiveSession is contractually no-throw; the injected implementations
     // log their own success/failure internally.
     await Promise.all([stopWorkP, archiveSession(currentSessionId)])
