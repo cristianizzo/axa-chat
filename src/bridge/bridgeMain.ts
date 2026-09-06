@@ -2709,7 +2709,8 @@ export async function bridgeMain(args: string[]): Promise<void> {
   // Single-session only: --continue forces single-session mode on resume,
   // so a pointer written in multi-session mode would contradict the user's
   // config when they try to resume. The resumable-shutdown path is also
-  // gated to single-session (line ~1254) so the pointer would be orphaned.
+  // gated to single-session (`config.spawnMode === 'single-session'`) so the
+  // pointer would be orphaned.
   if (initialSessionId && spawnMode === 'single-session') {
     const { writeBridgePointer } = await import('./bridgePointer.js')
     const pointerPayload = {
