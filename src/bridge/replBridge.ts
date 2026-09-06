@@ -1488,9 +1488,10 @@ export async function initBridgeCore(
                   // SI recovers, next poll → onWorkReceived → fresh transport
                   // → initial flush succeeds → onStateChange('connected') in
                   // the initial-flush `.finally(() => {`. Without this, state
-                  // stays 'reconnecting' even after SI recovers — daemon.ts:437
-                  // denies all permissions, useReplBridge.ts:311 keeps
-                  // replBridgeSessionActive=false.
+                  // stays 'reconnecting' even after SI recovers — the
+                  // `case 'reconnecting':` arm in hooks/useReplBridge.tsx keeps
+                  // replBridgeSessionActive=false, so the footer pill and
+                  // BridgeDialog both go on reporting the session as inactive.
                   // If the env was archived during the outage, poll 404 →
                   // onEnvironmentLost recovery path handles it.
                   wakePollLoop()
