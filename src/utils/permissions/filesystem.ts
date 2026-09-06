@@ -2509,26 +2509,32 @@ function isReadableConfigDirPath(absolutePath: string): boolean {
  * is the consequence for the function as it actually runs, and the normalise
  * above is what makes it false.
  *
- * Do not credit the `root + separator` in the matchers with saving this one.
- * That reason is real but it belongs to a different root: `'' + '/'` is `/`,
- * which prefix-matches every posix absolute path, so the separator buys nothing
- * here — while a root of `/` tests against `//` and so folds `/` and nothing
- * else, **1 of 8**, on both flavours. `''` and `/` are the two extremes of this
- * battery, not two spellings of one hazard, and collapsing them is how the
- * superseded sentence was written.
+ * Do not credit a separator in the matchers with saving this one, and do not
+ * paraphrase those matchers as `root + sep`. Both iterate
+ * `ROOT_SEPARATOR_SPELLINGS`, which is `new Set([sep, '/'])` — one member on
+ * posix, two on win32 — so `/` is tried as a separator on **both** flavours and
+ * `'' + '/'` is `/`, which prefix-matches every candidate here. The empty root
+ * matches **8 of 8** raw on posix *and* on win32. An earlier revision of this
+ * paragraph said **0 of 8** for win32 and called the hazard POSIX-only; that is
+ * the number the `root + sep` paraphrase predicts, not the one the code gives.
+ * The separator covers `''` on neither flavour.
  *
- * The two reasons also split by flavour, which is the other thing a single
- * sentence hides: on `path.win32` the raw empty root matches **0 of 8**, since
- * `'' + sep` is `\` and the candidates are `/`-spelled. So the separator does
- * cover `''` there and not on posix, and only the normalise covers both.
+ * A root of `/` is a separate case, and no longer the opposite extreme this
+ * paragraph once made it. A root form that already ends in a separator spelling
+ * takes the bare-prefix branch — see `endsWithSeparatorSpelling` — so `/`
+ * matches every candidate, **8 of 8**, raw and as the code runs it, on both
+ * flavours, rather than the **1 of 8** stated here before. That is deliberate
+ * and is argued where the branch lives, not here; `/` only becomes a config-dir
+ * root if the user sets `CLAUDE_CONFIG_DIR=/`, and these carve-outs withhold
+ * allows rather than granting them.
  *
- * The safety is therefore real, **unowned, and doubled** — two independent
- * properties of Node's `path` that nothing here names, tests or depends on
- * deliberately, either of which alone suffices on some platform, which is
- * precisely why removing one would not fail a test. A refactor that compares
- * before normalising re-opens it at both sites at once. An empty value is wrong
- * for every consumer of `getClaudeConfigHomeDir`, not just this one, so it
- * belongs rejected at the producer rather than absorbed here.
+ * The safety is therefore real, **unowned, and single** — one undocumented
+ * property of Node's `path`, the upstream `normalize`, which nothing here
+ * names, tests or depends on deliberately. There is no spare: a refactor that
+ * compares before normalising re-opens it at both sites at once, and no test
+ * fails at either. An empty value is wrong for every consumer of
+ * `getClaudeConfigHomeDir`, not just this one, so it belongs rejected at the
+ * producer rather than absorbed here.
  *
  * This guard is narrower than the rule it is an instance of — see
  * `stripTrailingSeparatorsForWalk` — so do not reuse this function anywhere the
@@ -2654,34 +2660,80 @@ function stripTrailingSeparators(root: string): string {
  *
  * The superseded comment justified the sibling's empty-string guard with "an
  * empty root prefix-matches every absolute path", and the correction is finer
- * than striking it. Both matchers test `cand === root || cand.startsWith(root +
- * sep)`, so over the eight-candidate battery, measured:
+ * than striking it. Both matchers test `cand === root`, then — for a root form
+ * that already ends in a separator spelling — a bare `cand.startsWith(root)`,
+ * and otherwise `cand.startsWith(root + s)` for every `s` in
+ * `ROOT_SEPARATOR_SPELLINGS`. Do not shorten that to `root + sep`: the set is
+ * `new Set([sep, '/'])`, so it has two members on win32 and one on posix, and
+ * the short form is false on win32 while staying true on posix — the flavour a
+ * darwin/Linux host checks casually is exactly the one that hides the
+ * difference.
+ *
+ * The eight candidates, enumerated so that no number below rests on a battery
+ * the reader cannot rebuild. All are `/`-spelled, which is what both a posix
+ * host and a hand-set `CLAUDE_CONFIG_DIR` produce:
+ *
+ *   /                                        /cfg2
+ *   /cfg                                     /home/u/.axa
+ *   /cfg/agent-memory                        /home/u/.axa/settings.json
+ *   /cfg/agent-memory/axa-tools/MEMORY.md    /tmp
+ *
+ * Measured over them, against the matcher as spelled out above:
  *
  * - Root `''`, `path.posix`, raw predicate: **8 of 8**. The sentence is TRUE,
  *   and it is the only stated reason that guard exists — do not delete it.
- * - Root `''`, `path.win32`, raw predicate: **0 of 8**. The catastrophe is
- *   POSIX-only, because `'' + sep` is `\` and the candidates are `/`-spelled.
- *   Stated because the reflex is to assume a POSIX result transfers.
- * - Root `''`, either flavour, as the code actually runs it: **0 of 8**. The
- *   root is normalized first and `normalize('')` is `'.'` on both, so `./`
- *   prefix-matches no absolute path. Control that the normalize is not inert:
- *   root `/cfg` on win32 moves 1 -> 2 of 8 across it.
- * - Root `/`, every configuration above: **1 of 8**, itself and nothing else.
+ * - Root `''`, `path.win32`, raw predicate: **8 of 8** as well. An earlier
+ *   revision said **0 of 8** and called the catastrophe POSIX-only, reasoning
+ *   that `'' + sep` is `\` while the candidates are `/`-spelled. That follows
+ *   from the `root + sep` short form; the real matcher also tries the `/`
+ *   member of `ROOT_SEPARATOR_SPELLINGS` on win32, so the POSIX result does
+ *   transfer after all.
+ * - Root `''`, either flavour, as the code actually runs it: **0 of 8**. Both
+ *   sides are normalized — the callers are `relativeToConfigDirRoot(
+ *   normalize(form), roots)` and the parameter is named `normalizedPath`, and
+ *   the fold site matches against `normalizedForm` — and `normalize('')` is
+ *   `'.'` on both flavours, so `./` prefix-matches no absolute path.
+ * - Root `/`, every configuration above: **8 of 8**. An earlier revision said
+ *   **1 of 8**, "itself and nothing else". That was true of the older matcher,
+ *   which appended a second separator to a root already ending in one and so
+ *   tested `//`; the root-only branch matches such a root as a bare prefix
+ *   instead. See `endsWithSeparatorSpelling`.
  *
- * So `''` and `/` are the two extremes of this battery, not two spellings of one
- * hazard, and an earlier revision of this paragraph inherited the `''` claim and
- * attached it to `/`. What holds the empty root harmless is two independent,
- * undocumented properties of *other* code — the `+ sep` in the matcher and the
- * upstream `normalize` — either of which alone suffices, so neither has an owner
- * and a refactor can take one without any test noticing. The same shape holds at
- * `relativeToConfigDirRoot`. The guard is what makes the question moot; the
- * conclusion above survives on its other three reasons regardless.
+ * Controls for the normalize step, taken in the same run and in the same
+ * both-sides configuration as the row above: root `/cfg//` moves **0 -> 2 of
+ * 8** across it on both flavours, while root `/cfg` stays at **3 of 8**. One
+ * row that moves and one that does not, because a control that always moves
+ * shows only that the instrument is live, not that it discriminates. The
+ * control this paragraph used to cite — `/cfg` on win32, 1 -> 2 of 8 — is inert
+ * against the current matcher, so re-taking it as written would publish a dead
+ * control.
+ *
+ * So `''` and `/` are not the two extremes of this battery any more: both match
+ * every candidate raw, and only the normalize separates them. What holds the
+ * empty root harmless is a **single** undocumented property of *other* code,
+ * that upstream `normalize`. This paragraph previously offered two — "the `+
+ * sep` in the matcher and the upstream `normalize`, either of which alone
+ * suffices" — and the first arm covers `''` on neither flavour. There is no
+ * spare, so a refactor that drops the normalize opens the hole with nothing
+ * failing, and a comment promising a redundancy that is not there is a
+ * fail-open in the documentation. The same shape holds at both matchers,
+ * `relativeToConfigDirRoot` and `foldResolvedRootPrefix`. The guard is what
+ * makes the question moot; the conclusion above survives on its other three
+ * reasons regardless.
  *
  * Measured with `path.win32` — note that `parse` **and** `sep` are both
- * platform-bound, so a host-independent check has to substitute both —
+ * platform-bound, so a host-independent check has to substitute both. The
+ * battery above needs a **third** substitution that this table does not:
+ * `ROOT_SEPARATOR_SPELLINGS` is built from `sep` at module load, so it does not
+ * follow a flavour swapped in afterwards, and a probe that swaps only `parse`
+ * and `sep` measures the host's separator set against the other flavour's
+ * paths —
  *
- * Every spelling named above appears here, so that no number below is spliced
- * together from two instruments:
+ * The rows below were taken in one run of one instrument, so that no number
+ * here is spliced together from two. They do not exhaust the spellings named
+ * above: `//`, `///`, `C:`, `c:` and `''` are read in the prose after the
+ * table instead, and the paragraph on the `/` row says why the first two are
+ * not folded into it:
  *
  *                        denotes root   predicate   result
  *   C:\                  yes            true        verbatim
@@ -2719,6 +2771,15 @@ function stripTrailingSeparators(root: string): string {
  * the table is a sample and the full set is enumerated above, including `C:`,
  * `c:` and `''`, which disagree the *other* way (denote no root, satisfy the
  * predicate), and `//` and `///`, which disagree the same way `/` does.
+ *
+ * Those two are deliberately **not** folded into the `/` row as an
+ * "all-separator" family, even though this function treats all three alike:
+ * each denotes a root, fails the predicate, and comes back verbatim through the
+ * sibling's guard. Measured, they part company on the *other* instrument — the
+ * naive `parse(p).root === p` calls `//` and `///` not roots, while it agrees
+ * with the canonical form about `/`. A family row would therefore be
+ * heterogeneous in the `denotes root` column and would move the "7 of these 14"
+ * count above, which is measured over the rows exactly as they are written.
  *
  * The controls matter: without them the predicate could be one that is simply
  * always true, and the whole strip would be dead. Hard-wiring it to false
