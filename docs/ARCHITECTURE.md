@@ -25,12 +25,12 @@ the slash is what closes. (`**/` does not close it; without `:(glob)` magic
 neither form is read as a glob at all, and adding `:(glob)` breaks the plain
 form instead.)
 
-Measured over the 98 distinct file names cited below: **85 resolve as suffixes
-against `origin/main`, and 13 do not.** All 13 are enumerated here, because a
-count with a partial list is the shape that gets silently completed wrong — an
-earlier revision of this paragraph named 7 and asserted 12, and its one-line
-reason was false for 3 of the 5 it left unnamed. They fall into three groups,
-for three different reasons:
+Measured over the 98 distinct file names cited **anywhere in this document**:
+**85 resolve as suffixes against `origin/main`, and 13 do not.** All 13 are
+enumerated here, because a count with a partial list is the shape that gets
+silently completed wrong — an earlier revision of this paragraph named 7 and
+asserted 12, and its one-line reason was false for 3 of the 5 it left unnamed.
+They fall into three groups, for three different reasons:
 
 1. **Seven that genuinely have no file, and are cited precisely because they do
    not** — the dangling `handlers/ant.js`, `up.js`, `rollback.js` and
@@ -67,6 +67,18 @@ which is why the rule is stated rather than left to be noticed: the substring
 form is not safe here, it is only *currently* lucky, and a single new citation
 ending in a common tail flips it.
 
+**And scope the population explicitly, because "below" is not free.** Both
+counts in this section previously said *"cited below"*, and the word was doing
+opposite work in each. The file-name count was taken over the whole document:
+scoped strictly below its own line the population is **97**, not 98, because
+`src/tools/BashTool/pathValidation.ts` is cited only in the pathspec paragraph
+above it — so 85 would become 84 while the 13 stayed put. The identifier count
+below was taken the other way, and *needed* to be, because `FNM_PATHNAME` sits
+in that same paragraph above. Under a single consistent reading, one of the two
+was always wrong. Neither error was substantive — both stray names are
+legitimate — but the numbers are the entire point of these two paragraphs, so
+each now names its own scope rather than sharing a word.
+
 Do not re-measure with `git ls-files`. It reads the index of whatever checkout
 it is run in — including a divergent branch or a stray untracked file — so it
 answers a question about one machine, not about `origin/main`.
@@ -88,9 +100,13 @@ The counter-example is in this document's own history: `CCR_V2` and
 `POST_FOR_SESSION_INGRESS_V2` (§7) look like they share a prefix, and they do
 not — the real names are `CLAUDE_CODE_USE_CCR_V2` and
 `CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2`, so guessing `CLAUDE_CODE_USE_` from
-the first gives a name that exists nowhere for the second. Measured over every
-`[A-Z][A-Z0-9_]{3,}` token cited below: all resolve in `src/` on `main` except
-`TS2307`, a `tsc` diagnostic code and not an identifier.
+the first gives a name that exists nowhere for the second. Measured over all 29
+distinct `[A-Z][A-Z0-9_]{3,}` tokens cited **anywhere in this document**: 27
+resolve in `src/` on `main`, and the exception set has exactly two members —
+`TS2307`, a `tsc` diagnostic code, and `FNM_PATHNAME`, a POSIX `fnmatch` flag
+named in the pathspec paragraph above. Neither is an identifier in this repo,
+which is the whole reason they are the exceptions; both are named because a
+one-member exception set is the shape that gets silently completed wrong.
 
 Seven numbered sections, zooming in: whole lifecycle → startup → prompt submit →
 the agent turn loop → provider/network resolution → tool execution and
