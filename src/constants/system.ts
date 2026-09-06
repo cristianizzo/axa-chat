@@ -77,10 +77,10 @@ export function getAttributionHeader(fingerprint: string): string {
   // cc_workload: turn-scoped hint so the API can route e.g. cron-initiated
   // requests to a lower QoS pool. Absent = interactive default. Safe re:
   // fingerprint (a parameter here; callers compute it via `computeFingerprint`
-  // in utils/fingerprint.ts, from msg chars + version only) and
-  // cch attestation (placeholder overwritten in serialized body bytes after
-  // this string is built). Server _parse_cc_header tolerates unknown extra
-  // fields so old API deploys silently ignore this.
+  // in utils/fingerprint.ts, from FINGERPRINT_SALT + msg chars + version only)
+  // and cch attestation (placeholder overwritten in serialized body bytes
+  // after this string is built). Server _parse_cc_header tolerates unknown
+  // extra fields so old API deploys silently ignore this.
   const workload = getWorkload()
   const workloadPair = workload ? ` cc_workload=${workload};` : ''
   const header = `x-anthropic-billing-header: cc_version=${version}; cc_entrypoint=${entrypoint};${cch}${workloadPair}`
