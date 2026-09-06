@@ -76,7 +76,8 @@ export function getAttributionHeader(fingerprint: string): string {
   const cch = ' cch=00000;'
   // cc_workload: turn-scoped hint so the API can route e.g. cron-initiated
   // requests to a lower QoS pool. Absent = interactive default. Safe re:
-  // fingerprint (computed from msg chars + version only, line 78 above) and
+  // fingerprint (a parameter here; callers compute it via `computeFingerprint`
+  // in utils/fingerprint.ts, from msg chars + version only) and
   // cch attestation (placeholder overwritten in serialized body bytes after
   // this string is built). Server _parse_cc_header tolerates unknown extra
   // fields so old API deploys silently ignore this.

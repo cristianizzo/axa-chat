@@ -1285,7 +1285,8 @@ export async function initBridgeCore(
                   // maxConsecutiveFailures attempts), flush() still resolved
                   // normally but the events were NOT delivered. Don't mark
                   // UUIDs as flushed — keep them eligible for re-send on the
-                  // next onWorkReceived (JWT refresh re-dispatch, line ~1144).
+                  // next onWorkReceived (the `JWT refresh: when it expires`
+                  // re-dispatch above).
                   if (newTransport.droppedBatchCount > dropsBefore) {
                     logForDebugging(
                       `[bridge:repl] Initial flush dropped ${newTransport.droppedBatchCount - dropsBefore} batch(es) — not marking ${sdkMessages.length} UUID(s) as flushed`,
@@ -1485,10 +1486,11 @@ export async function initBridgeCore(
                   )
                   // SI has been down ~20 min. Wake the poll loop so that when
                   // SI recovers, next poll → onWorkReceived → fresh transport
-                  // → initial flush succeeds → onStateChange('connected') at
-                  // ~line 1420. Without this, state stays 'reconnecting' even
-                  // after SI recovers — daemon.ts:437 denies all permissions,
-                  // useReplBridge.ts:311 keeps replBridgeSessionActive=false.
+                  // → initial flush succeeds → onStateChange('connected') in
+                  // the initial-flush `.finally(() => {`. Without this, state
+                  // stays 'reconnecting' even after SI recovers — daemon.ts:437
+                  // denies all permissions, useReplBridge.ts:311 keeps
+                  // replBridgeSessionActive=false.
                   // If the env was archived during the outage, poll 404 →
                   // onEnvironmentLost recovery path handles it.
                   wakePollLoop()
@@ -1510,11 +1512,13 @@ export async function initBridgeCore(
   const pointerRefreshTimer = perpetual
     ? setInterval(() => {
         // doReconnect() reassigns currentSessionId/environmentId non-
-        // atomically (env at ~:634, session at ~:719, awaits in between).
+        // atomically (env just below `reuseEnvironmentId = requestedEnvId`,
+        // session at `currentSessionId = newSessionId`, awaits in between).
         // If this timer fires in that window, its fire-and-forget write can
-        // race with (and overwrite) doReconnect's own pointer write at ~:740,
-        // leaving the pointer at the now-archived old session. doReconnect
-        // writes the pointer itself, so skipping here is free.
+        // race with (and overwrite) doReconnect's own pointer write under
+        // `Rewrite the crash-recovery pointer`, leaving the pointer at the
+        // now-archived old session. doReconnect writes the pointer itself, so
+        // skipping here is free.
         if (reconnectPromise) return
         void writeBridgePointer(dir, {
           sessionId: currentSessionId,
