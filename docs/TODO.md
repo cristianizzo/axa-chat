@@ -361,12 +361,11 @@ fixed".
   a place the user cannot reach. Separate from the naming sweep and more urgent
   than it: this is a feedback path that does not exist.
 - [x] **`.axa/settings.json` had narrower protection than the
-  `.claude/settings.json` it replaced — FIXED by `1e957b4` on
-  `fix/carveout-symlink-resolution`, unmerged as of 2026-09-04.** Kept here
-  because the defect is live on `main` until that branch lands, and because the
-  follow-on constraint below is the thing that actually bites.
-  On `main` (`d29a5bc`), `isClaudeSettingsPath` accepts the two spellings by
-  **different mechanisms with different reach**: `.claude/settings.json` and
+  `.claude/settings.json` it replaced — FIXED by `1e957b4`, merged 2026-09-04.**
+  Kept here for the diagnosis, which the one-line fix does not record, and
+  because the follow-on constraint below is the thing that actually bites.
+  Before that commit (`d29a5bc`), `isClaudeSettingsPath` accepted the two
+  spellings by **different mechanisms with different reach**: `.claude/settings.json` and
   `.claude/settings.local.json` match an unconditional `endsWith`, commented
   *"Include .claude/settings.json even for other projects"*, so they are caught
   anywhere on disk; the `.axa` spelling is reached only through
@@ -376,15 +375,15 @@ fixed".
   neither. `1e957b4` extracts an `isSettingsFileUnder(configDirName)` helper and
   calls it for both `CONFIG_DIR_NAME` and the `'.claude'` literal, keeping the
   legacy arm rather than replacing it.
-  **Consequence for the naming sweep, and it inverts with the merge.** The
-  docblock example at `pathValidation.ts:130`/`:132` is a sibling-directory
-  payload (`-/../.claude/settings.local.json`). Respelled to `.axa` *on `main`* it
-  would no longer be caught by `isClaudeConfigFilePath` at all — the sentence
-  would stay defensible while ceasing to be true for the reason it states. After
-  `1e957b4` merges, `.axa` is matched by the same arm and the respelling becomes
-  safe. **So this rewrite is blocked on that merge, not on judgement.** The
-  general gate still applies to the rest of the sweep: does the comment name a
-  spelling-specific mechanism? If yes, the code is deliberate — leave it.
+  **Consequence for the naming sweep, and it inverted when that commit landed.**
+  The docblock example at `pathValidation.ts:130`/`:132` is a sibling-directory
+  payload (`-/../.claude/settings.local.json`). Respelled to `.axa` *before*
+  `1e957b4` it would no longer have been caught by `isClaudeConfigFilePath` at
+  all — the sentence would have stayed defensible while ceasing to be true for
+  the reason it states. Now that both spellings go through the same
+  `isSettingsFileUnder` arm, the respelling is safe. The general gate still
+  applies to the rest of the sweep: does the comment name a spelling-specific
+  mechanism? If yes, the code is deliberate — leave it.
 - [ ] **`getClaudeConfigHomeDir` is one lexical root provider behind six roots —
   canonicalising it is the actual fix; the fold on
   `fix/carveout-symlink-resolution` is containment.** The permission chokepoint

@@ -671,8 +671,10 @@ replaces stdio with a transport, overriding `flushInternalEvents` and
 are never validated.** `entrypoints/sdk/controlSchemas.ts` is ~660 lines of Zod
 describing 21 request subtypes, and it looks like a validation boundary. It is
 not one: `SDKControlRequestSchema` and `SDKControlRequestInnerSchema` have **no
-`.parse`/`.safeParse` caller anywhere in `src/`**. Their only consumer is the
-`z.infer` barrel that produces the `SDKControl*` types. `StructuredIO`'s line
+`.parse`/`.safeParse` caller anywhere in `src/`**. They have no consumer in the
+tree at all: the `z.infer` barrel that would turn them into the `SDKControl*`
+types is `entrypoints/sdk/controlTypes.ts`, which is **missing** — the schemas
+are a type source with the type half unbuilt. `StructuredIO`'s line
 processor JSON-parses each NDJSON line and applies a bare `as StdinMessage |
 SDKMessage`, so any well-formed JSON with `type: 'control_request'` reaches
 `print.ts`'s dispatch chain whatever its `subtype` says. (Contrast
