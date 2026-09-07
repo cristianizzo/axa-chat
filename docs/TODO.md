@@ -360,6 +360,70 @@ fixed".
   `#claude-code-feedback` (`C07VBSHV7EV`). In a fork the model confidently offers
   a place the user cannot reach. Separate from the naming sweep and more urgent
   than it: this is a feedback path that does not exist.
+- [x] **`.axa/settings.json` had narrower protection than the
+  `.claude/settings.json` it replaced — FIXED by `1e957b4` on
+  `fix/carveout-symlink-resolution`, unmerged as of 2026-09-04.** Kept here
+  because the defect is live on `main` until that branch lands, and because the
+  follow-on constraint below is the thing that actually bites.
+  On `main` (`d29a5bc`), `isClaudeSettingsPath` accepts the two spellings by
+  **different mechanisms with different reach**: `.claude/settings.json` and
+  `.claude/settings.local.json` match an unconditional `endsWith`, commented
+  *"Include .claude/settings.json even for other projects"*, so they are caught
+  anywhere on disk; the `.axa` spelling is reached only through
+  `getSettingsPaths().some(exact equality)`, which is session-scoped, and the rest
+  of `isClaudeConfigFilePath` is `join(getOriginalCwd(), CONFIG_DIR_NAME, …)`,
+  also cwd-anchored. A foreign project's `.axa/settings.json` was matched by
+  neither. `1e957b4` extracts an `isSettingsFileUnder(configDirName)` helper and
+  calls it for both `CONFIG_DIR_NAME` and the `'.claude'` literal, keeping the
+  legacy arm rather than replacing it.
+  **Consequence for the naming sweep, and it inverts with the merge.** The
+  docblock example at `pathValidation.ts:130`/`:132` is a sibling-directory
+  payload (`-/../.claude/settings.local.json`). Respelled to `.axa` *on `main`* it
+  would no longer be caught by `isClaudeConfigFilePath` at all — the sentence
+  would stay defensible while ceasing to be true for the reason it states. After
+  `1e957b4` merges, `.axa` is matched by the same arm and the respelling becomes
+  safe. **So this rewrite is blocked on that merge, not on judgement.** The
+  general gate still applies to the rest of the sweep: does the comment name a
+  spelling-specific mechanism? If yes, the code is deliberate — leave it.
+- [ ] **`getClaudeConfigHomeDir` is one lexical root provider behind six roots —
+  canonicalising it is the actual fix; the fold on
+  `fix/carveout-symlink-resolution` is containment.** The permission chokepoint
+  `allowOnlyIfResolvedFormsAgree` keeps an `allow` only if every form from
+  `getPathsForPermissionCheck` decides with the *same reason string*. A carve-out
+  therefore breaks exactly when its root is spelled lexically: the path-as-written
+  hits the carve-out, the resolved form falls through to a different arm, the two
+  reason strings differ, and the allow is dropped. Reached through a symlinked
+  config dir — `CLAUDE_CONFIG_DIR=/link` where `/link -> /real`, which is the
+  normal shape on macOS (`/tmp -> /private/tmp`) and for any home on a symlinked
+  volume — the carve-outs below stop firing and the user is denied access to their
+  own config files.
+  Roots that build lexically off it, verified at `d29a5bc`:
+  `getTeamsDir` (`utils/envUtils.ts:17`), `getProjectsDir`
+  (`utils/sessionStorage.ts:198`, `utils/sessionStoragePortable.ts:325`),
+  `getProjectDir` (`sessionStoragePortable.ts:329`, and through it `getSessionDir`
+  → `getToolResultsDir` in `utils/toolResultStorage.ts`), `getMemoryBaseDir`
+  (`memdir/paths.ts:85`), `getPlansDirectory` (`utils/plans.ts:79`), and the
+  inline `jobsRoot` in `utils/permissions/filesystem.ts`. One defect, six
+  symptoms — which is why fixing it at the root repairs carve-outs no fixture has
+  measured, and why the per-carve-out fold cannot.
+  Two adjacent facts found while enumerating:
+  `getMemoryBaseDir` returns `CLAUDE_CODE_REMOTE_MEMORY_DIR` verbatim when set, so
+  it is a second un-canonicalised root, not just a derived one. And
+  `getPlansDirectory`'s traversal guard for the `plansDirectory` setting is
+  `resolved.startsWith(cwd + sep)` over a `resolve()` result — `resolve()` does not
+  consult the filesystem, so the guard is satisfied lexically regardless of where
+  the directory actually points.
+  **Not done on that branch, deliberately.** `getClaudeConfigHomeDir`
+  (`utils/envUtils.ts:8`) has 157 references across 61 files, many on hot paths,
+  and is `memoize`d on `() => process.env.CLAUDE_CONFIG_DIR` — so a canonicalising
+  version computed once before the config dir exists (first run creates it) would
+  cache the un-canonicalised value for the whole process, with the key giving no
+  reason to recompute. `realpathSync` also throws on a path that does not exist
+  yet, so the canonicalisation needs the same ancestor-walk-and-fall-back that
+  `getPathsForPermissionCheck` already does (`utils/fsOperations.ts:255-267`).
+  None of that is unsolvable; all of it is a blast radius that does not belong in
+  a permissions bugfix. Do it as its own change, with the config-dir carve-out
+  matrix (canonical root vs symlinked root, expected identical) as the gate.
 - [ ] **No test suite at all.** No `test` script in `package.json`, no `*.test.*`
   anywhere. Every verification in the 2026-09-04 round therefore ran through
   baseline-diff typechecking, source reading, and hand-written probes. That
@@ -490,6 +554,28 @@ were checked against the code rather than assumed:
     legitimately mean "has a claude.ai subscription" for billing/upgrade UI.
   - Also: `Retry-After: 0` is floored at the backoff minimum, and background jobs
     bail on 429 rather than retrying into a spent per-minute window.
+
+- [ ] **Computer use — native desktop control** (design 2026-09-05). Full design:
+  **`docs/COMPUTER-USE.md`**. Everything — libraries, files to add, files to
+  change, tool contract, permissions, signing, packaging, implementation order —
+  lives there; do not duplicate it here.
+
+- [ ] **Browser use via MCP** — separate from the above and not a prerequisite
+  for it. No repo code: point the existing MCP layer at a pinned
+  browser-automation server. Reads pages as accessibility snapshots, not pixels,
+  so it works on every provider and costs a fraction of screenshot control. Real
+  work is (1) a first-class enablement path instead of hand-edited MCP JSON,
+  (2) the capability set — `storage`/`network`/`devtools`/`testing` off by
+  default, (3) permission rules written *before* it ships, (4) a decision on
+  `browser_evaluate` / `browser_run_code_unsafe`, which run arbitrary page code
+  and sit in the server's core set, and (5) persistent profile (inherits the
+  user's logins) vs isolated.
+
+- [ ] **MCP permission rules have no argument granularity** — `toolMatchesRule`
+  returns `false` for any rule with `ruleContent`, and the generic MCP
+  `checkPermissions` returns `passthrough`, so `mcp__computer-use__type(Terminal)`
+  parses, persists, and silently never matches. Found while designing computer
+  use; affects every MCP server, so it is its own defect.
 
 - [ ] **`/fork` — branch a session and stay in the original** — Shipped by both
   Kimi Code and Codex CLI (`codex exec fork`), so the interaction is proven.
