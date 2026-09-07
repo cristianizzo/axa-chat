@@ -103,11 +103,6 @@ export const DANGEROUS_DIRECTORIES = [
   '.vscode',
   '.idea',
   CONFIG_DIR_NAME,
-  // Legacy, and deliberately still listed. A project that has not been
-  // migrated still keeps live config here, so dropping it would remove this
-  // protection from exactly the projects that predate the rename — the ones
-  // still relying on it.
-  '.claude',
   // Credential / persistence directories. Writing here grants persistent
   // access or exposes secrets: an edit to ~/.ssh/authorized_keys is a
   // backdoor, and these hold private keys / cloud credentials. Listed as
@@ -384,7 +379,7 @@ export function isClaudeSettingsPath(filePath: string): boolean {
   const isSettingsFileUnder = (configDirName: string): boolean =>
     normalizedPath.endsWith(`${sep}${configDirName}${sep}settings.json`) ||
     normalizedPath.endsWith(`${sep}${configDirName}${sep}settings.local.json`)
-  if (isSettingsFileUnder(CONFIG_DIR_NAME) || isSettingsFileUnder('.claude')) {
+  if (isSettingsFileUnder(CONFIG_DIR_NAME)) {
     return true
   }
   // Check for current project's settings files (including managed settings and CLI args)
@@ -643,9 +638,11 @@ function isDangerousFilePathToAutoEdit(path: string): boolean {
       // stores git worktrees), not a user-created dangerous directory. Skip the
       // config segment when it's followed by 'worktrees'. Any nested config
       // directories within the worktree (not followed by 'worktrees') are still
-      // blocked. Both spellings, since an unmigrated project still has its
-      // worktrees under the legacy name.
-      if (dir === CONFIG_DIR_NAME || dir === '.claude') {
+      // blocked.
+      // Exemption, not a guard: skips a config-dir segment followed by
+      // `worktrees`, which is where this tool keeps its own. Removing it does
+      // not loosen anything — it makes every worktree edit prompt.
+      if (dir === CONFIG_DIR_NAME) {
         const nextSegment = pathSegments[i + 1]
         if (
           nextSegment &&
