@@ -18,7 +18,7 @@ import { getProjectsDir, sanitizePath } from '../../utils/sessionStoragePortable
 /**
  * Names Windows refuses to use for a directory, whatever the extension.
  *
- * Checked on every platform, not just Windows: a `~/.axa` copied from a Mac to
+ * Checked on every platform, not just Windows: a `~/.claude` copied from a Mac to
  * a Windows machine should not arrive holding a directory that cannot be
  * opened there.
  */

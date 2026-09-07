@@ -514,7 +514,7 @@ deny rules become denyRead/denyWrite. Network domains come from
 `sandbox.filesystem.*` paths do **not** use the same resolution semantics as
 permission rules — `resolveSandboxFilesystemPath` versus
 `resolvePathPatternForSandbox`. Two escape-hardening measures are deliberate and
-should not be "simplified away": settings files and `.axa/skills` are
+should not be "simplified away": settings files and `.claude/skills` are
 unconditionally denyWrite, and `scrubBareGitRepoFiles()` deletes bare-repo files
 planted at cwd during a sandboxed command before unsandboxed git can see them.
 

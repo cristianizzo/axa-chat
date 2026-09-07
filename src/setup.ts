@@ -284,7 +284,7 @@ export async function setup(
     // consults policySettings and then getSettings_DEPRECATED's merge of the
     // user/project/local sources; applySafeConfigEnvironmentVariables reads the
     // global config's env. What goes stale here is only the project-scoped
-    // members of that merge — .axa/settings.json and .axa/settings.local.json —
+    // members of that merge — .claude/settings.json and .claude/settings.local.json —
     // which are anchored at the pre-worktree cwd. Re-read from the worktree and
     // re-capture hooks.
     updateHooksConfigSnapshot()

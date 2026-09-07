@@ -1,5 +1,5 @@
 /**
- * Reading the project store: what is on disk under `~/.axa/projects`, how big
+ * Reading the project store: what is on disk under `~/.claude/projects`, how big
  * it is, and which real directory each project came from.
  *
  * Everything here is derived. There is no index and no metadata file — a
@@ -30,7 +30,7 @@ import {
 
 export type ProjectSummary = {
   /**
-   * The directory name under `~/.axa/projects`, e.g.
+   * The directory name under `~/.claude/projects`, e.g.
    * `-Users-cristianizzo-Developers-axa-chat`. This is the project's identity
    * on disk — it is what every action has to operate on, because it is the
    * only thing guaranteed to be unique.

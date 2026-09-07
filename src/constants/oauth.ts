@@ -20,7 +20,7 @@ function getOauthConfigType(): OauthConfigType {
  * global config filename can have on disk.
  *
  * The permission engine needs the whole family, not the one the current
- * environment selects: `~/.axa/config-custom-oauth.json` holds the same OAuth
+ * environment selects: `~/.claude/config-custom-oauth.json` holds the same OAuth
  * account material whether or not CLAUDE_CODE_CUSTOM_OAUTH_URL happens to be set
  * in the process doing the reading. Keeping the list here, beside the function
  * that chooses between them, is what stops the two drifting apart.

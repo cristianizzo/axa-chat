@@ -2,9 +2,9 @@
  * Files are loaded in the following order:
  *
  * 1. Managed memory (eg. /etc/claude-code/CLAUDE.md) - Global instructions for all users
- * 2. User memory (~/.axa/AXA.md) - Private global instructions for all projects
- * 3. Project memory (AXA.md, .axa/AXA.md, and .axa/rules/*.md in project roots) - Instructions checked into the codebase
- * 4. Local memory (AXA.local.md in project roots) - Private project-specific instructions
+ * 2. User memory (~/.claude/CLAUDE.md) - Private global instructions for all projects
+ * 3. Project memory (CLAUDE.md, .claude/CLAUDE.md, and .claude/rules/*.md in project roots) - Instructions checked into the codebase
+ * 4. Local memory (CLAUDE.local.md in project roots) - Private project-specific instructions
  *
  * Files are loaded in reverse order of priority, i.e. the latest files are highest priority
  * with the model paying more attention to them.
@@ -13,7 +13,7 @@
  * - User memory is loaded from the user's home directory
  * - Project and Local files are discovered by traversing from the current directory up to root
  * - Files closer to the current directory have higher priority (loaded later)
- * - AXA.md, .axa/AXA.md, and all .md files in .axa/rules/ are checked in each directory for Project memory
+ * - CLAUDE.md, .claude/CLAUDE.md, and all .md files in .claude/rules/ are checked in each directory for Project memory
  *
  * Memory @include directive:
  * - Memory files can include other files using @ notation
@@ -888,7 +888,7 @@ export const getMemoryFiles = memoize(
         pathInWorkingPath(dir, canonicalRoot) &&
         !pathInWorkingPath(dir, gitRoot)
 
-      // Try reading the project memory file (AXA.md) - only if projectSettings is enabled
+      // Try reading the project memory file (CLAUDE.md) - only if projectSettings is enabled
       if (isSettingSourceEnabled('projectSettings') && !skipProject) {
         const projectPath = join(dir, MEMORY_FILE_NAME)
         result.push(
@@ -1281,7 +1281,7 @@ export async function getMemoryFilesForNestedDirectory(
 ): Promise<MemoryFileInfo[]> {
   const result: MemoryFileInfo[] = []
 
-  // Process project memory files (AXA.md and <config>/AXA.md)
+  // Process project memory files (CLAUDE.md and <config>/CLAUDE.md)
   if (isSettingSourceEnabled('projectSettings')) {
     const projectPath = join(dir, MEMORY_FILE_NAME)
     result.push(
@@ -1305,7 +1305,7 @@ export async function getMemoryFilesForNestedDirectory(
     }
   }
 
-  // Process local memory file (AXA.local.md)
+  // Process local memory file (CLAUDE.local.md)
   if (isSettingSourceEnabled('localSettings')) {
     const localPath = join(dir, LOCAL_MEMORY_FILE_NAME)
     result.push(
@@ -1413,11 +1413,11 @@ export async function processConditionedMdRules(
       return false
     }
 
-    // For Project rules: glob patterns are relative to the directory containing .axa
+    // For Project rules: glob patterns are relative to the directory containing .claude
     // For Managed/User rules: glob patterns are relative to the original CWD
     const baseDir =
       type === 'Project'
-        ? dirname(dirname(rulesDir)) // Parent of .axa
+        ? dirname(dirname(rulesDir)) // Parent of .claude
         : getOriginalCwd() // Project root for managed/user rules
 
     const relativePath = isAbsolute(targetPath)

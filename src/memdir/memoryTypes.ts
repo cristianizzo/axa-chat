@@ -3,7 +3,7 @@
  *
  * Memories are constrained to four types capturing context NOT derivable
  * from the current project state. Code patterns, architecture, git history,
- * and file structure are derivable (via grep/git/AXA.md) and should NOT
+ * and file structure are derivable (via grep/git/CLAUDE.md) and should NOT
  * be saved as memories.
  *
  * The two TYPES_SECTION_* exports below are intentionally duplicated rather

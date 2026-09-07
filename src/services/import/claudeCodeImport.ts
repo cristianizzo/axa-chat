@@ -1,8 +1,12 @@
 /**
  * Import an existing Claude Code installation into axa.
  *
- * axa owns `~/.axa` outright and starts empty, so a user coming from Claude
- * Code would otherwise lose their history and have to log in again. This module
+ * axa's config directory is `~/.claude` by default now, the same one Claude
+ * Code uses — see `planClaudeCodeImport()` below, which treats that as the
+ * default case and short-circuits when source and destination resolve to the
+ * same directory. This module only has something to do when `CLAUDE_CONFIG_DIR`
+ * points axa's config home somewhere else, so a user coming from Claude Code
+ * would otherwise lose their history and have to log in again. This module
  * copies that state across on demand.
  *
  * Two invariants, both load-bearing:
