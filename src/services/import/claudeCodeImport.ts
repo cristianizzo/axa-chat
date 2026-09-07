@@ -698,11 +698,18 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
     conflicts: [],
   }
 
-  if (CLAUDE_CODE_DIR === destinationDir) {
+  // Co-tenancy means this is now the default case, not just a
+  // `CLAUDE_CONFIG_DIR` override pointed back at Claude Code: comparing raw
+  // strings would go wrong for any homedir() whose Unicode form disagrees
+  // with the NFC form getClaudeConfigHomeDir() normalizes to (macOS can
+  // hand back NFD-decomposed paths for accented usernames), so both sides
+  // are normalized the same way before the comparison that decides whether
+  // there is anything to import at all.
+  if (CLAUDE_CODE_DIR.normalize('NFC') === destinationDir.normalize('NFC')) {
     return {
       ...empty,
       unavailableReason:
-        'CLAUDE_CONFIG_DIR points at the Claude Code directory, so there is nothing to import from.',
+        'This is already your config directory, so there is nothing to import.',
     }
   }
   if (!(await statOrNull(CLAUDE_CODE_DIR))?.isDirectory()) {
