@@ -18,7 +18,7 @@
 
 import { execFileNoThrow } from '../../utils/execFileNoThrow.js'
 import { homedir } from 'os'
-import { dirname, join, relative } from 'path'
+import { dirname, join, relative, resolve } from 'path'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import type { FileHandle } from 'fs/promises'
 import { logForDebugging } from '../../utils/debug.js'
@@ -705,7 +705,15 @@ export async function planClaudeCodeImport(): Promise<ImportPlan> {
   // hand back NFD-decomposed paths for accented usernames), so both sides
   // are normalized the same way before the comparison that decides whether
   // there is anything to import at all.
-  if (CLAUDE_CODE_DIR.normalize('NFC') === destinationDir.normalize('NFC')) {
+  //
+  // resolve() first, because destinationDir follows CLAUDE_CONFIG_DIR and a
+  // user is free to spell it with a trailing separator or as a relative path.
+  // Either spelling defeats the equality and lets the plan run against its own
+  // directory.
+  if (
+    resolve(CLAUDE_CODE_DIR).normalize('NFC') ===
+    resolve(destinationDir).normalize('NFC')
+  ) {
     return {
       ...empty,
       unavailableReason:
