@@ -667,6 +667,35 @@ messages and a 400 `tool_use ids must be unique`. `RemoteIO` subclasses it and
 replaces stdio with a transport, overriding `flushInternalEvents` and
 `internalEventsPending`, which are no-ops in the base.
 
+**The control-protocol schemas are a type source, not a gate — inbound messages
+are never validated.** `entrypoints/sdk/controlSchemas.ts` is ~660 lines of Zod
+describing 21 request subtypes, and it looks like a validation boundary. It is
+not one: `SDKControlRequestSchema` and `SDKControlRequestInnerSchema` have **no
+`.parse`/`.safeParse` caller anywhere in `src/`**. Their only consumer is the
+`z.infer` barrel that produces the `SDKControl*` types. `StructuredIO`'s line
+processor JSON-parses each NDJSON line and applies a bare `as StdinMessage |
+SDKMessage`, so any well-formed JSON with `type: 'control_request'` reaches
+`print.ts`'s dispatch chain whatever its `subtype` says. (Contrast
+`utils/teammateMailbox.ts`, which `safeParse`s every inbound message — the
+pattern is used elsewhere in the tree, so this absence is a choice, not an
+oversight of style.)
+
+> **Read the consequence carefully, because it points the opposite way to
+> intuition.** Schema membership constrains nothing at runtime, so *"this
+> subtype is absent from the schema"* is a statement about the **type**, never
+> about **reachability**. Once the `z.infer` barrel exists, four live handlers in
+> `print.ts` — `end_session`, `channel_enable`, `mcp_authenticate`,
+> `mcp_oauth_callback_url` — start reporting `TS2367` ("no overlap") and read as
+> dead code. They are not. `mcp_authenticate` and `mcp_oauth_callback_url` are
+> two halves of one OAuth handshake coupled through a submitter map; the
+> `mcp_reconnect`/`mcp_toggle` path — whose subtypes *are* in the schema —
+> contains a helper whose only job is repairing client bindings that
+> `handleChannelEnable` created; and `services/mcp/channelAllowlist.ts` documents
+> its own allowlist as *"not a security boundary: `channel_enable` still runs the
+> full gate"*, so deleting that handler is **fail-open**. The producers are
+> out-of-tree SDK hosts and the IDE, which is why nothing in this repo sends
+> them. The fix is to complete the schema, not to delete the branches.
+
 **`cli/transports/` is not CLI code, and the name is why it went unmapped.**
 `src/bridge/` imports `HybridTransport`, `SSETransport` and `CCRClient` from it
 directly. It is the shared network layer for both the headless `--sdk-url` path
