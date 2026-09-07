@@ -325,11 +325,23 @@ export function getRefusalFallbackModel(model: ModelName): ModelName | undefined
   // unlike getDefaultOpusModel there's no 3P-lag branch to take here.
   const strings = getModelStrings()
   if (isSameModel(strings.opus5, model)) {
-    return strings.opus48
+    return carry1mTag(strings.opus48, model)
   }
 
   const sonnet = getDefaultSonnetModel()
-  return isSameModel(sonnet, model) ? undefined : sonnet
+  return isSameModel(sonnet, model) ? undefined : carry1mTag(sonnet, model)
+}
+
+// Carry a refusing model's [1m] tag onto its replacement. The fallback retries
+// the *same* conversation, so a 1M session that dropped to a bare (200k) model
+// would fail on context length instead of answering — turning "we tried another
+// model" into a hard error, and only for the long sessions that most need the
+// retry. Guarded on the target actually supporting 1M, since the tag is a
+// request the target must honour, not a property of the source.
+function carry1mTag(target: ModelName, refusingModel: ModelName): ModelName {
+  return has1mContext(refusingModel) && modelSupports1M(target)
+    ? `${target}[1m]`
+    : target
 }
 
 // @[MODEL LAUNCH]: Update the default Fable model.
