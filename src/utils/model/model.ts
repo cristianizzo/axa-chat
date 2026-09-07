@@ -299,11 +299,12 @@ export function isSameModel(a: ModelName, b: ModelName): boolean {
 // Sonnet complies (empirically ~100% of AUP refusals are Opus, 0 Sonnet).
 //
 // The step is one model at a time, and query.ts re-enters here after each
-// switch, so the returns below form a chain: Opus 5 -> Opus 4.8 -> Sonnet.
-// Trying Opus 4.8 first keeps the capability drop as small as the refusal
-// allows — Opus 4.8 declines a different (narrower) set of prompts than Opus 5,
-// so most refusals never reach the Sonnet step. Returns undefined when there is
-// no distinct fallback left, which lets the refusal surface terminally.
+// switch, so the returns below form a chain — but only for Opus 5, which goes
+// Opus 5 -> Opus 4.8 -> Sonnet. Trying Opus 4.8 first keeps the capability drop
+// as small as the refusal allows: it declines a different (narrower) set of
+// prompts than Opus 5, so most refusals never reach the Sonnet step. Every
+// other Opus is a single hop to Sonnet. Returns undefined when there is no
+// distinct fallback left, which lets the refusal surface terminally.
 export function getRefusalFallbackModel(model: ModelName): ModelName | undefined {
   // Detect Opus on the canonical name, not the raw ID: modelOverrides can map
   // an Opus model to an arbitrary provider string (a Bedrock ARN, say) with no
@@ -313,11 +314,18 @@ export function getRefusalFallbackModel(model: ModelName): ModelName | undefined
     return undefined
   }
 
+  // The intermediate step is gated on Opus 5 specifically, not on the Opus
+  // family: "the version below the one that refused" only names Opus 4.8 for
+  // Opus 5. Testing `model !== opus48` instead would send an Opus 4.1 or 4.6
+  // refusal *up* to 4.8 — a cross-version switch to a model the user did not
+  // pick, and on 3P (where Opus 4.6 is the default) the common case rather
+  // than an edge one. Every other Opus goes straight to Sonnet, as before.
+  //
   // Opus 4.8 is servable on every provider (see CLAUDE_OPUS_4_8_CONFIG), so
   // unlike getDefaultOpusModel there's no 3P-lag branch to take here.
-  const previousOpus = getModelStrings().opus48
-  if (!isSameModel(previousOpus, model)) {
-    return previousOpus
+  const strings = getModelStrings()
+  if (isSameModel(strings.opus5, model)) {
+    return strings.opus48
   }
 
   const sonnet = getDefaultSonnetModel()
