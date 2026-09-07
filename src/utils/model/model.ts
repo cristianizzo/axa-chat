@@ -314,19 +314,12 @@ export function isSameModel(a: ModelName, b: ModelName): boolean {
 // other Opus is a single hop to Sonnet. Returns undefined when there is no
 // distinct fallback left, which lets the refusal surface terminally.
 export function getRefusalFallbackModel(model: ModelName): ModelName | undefined {
-  // Every comparison below runs on the [1m]-stripped ID. resolveOverriddenModel
-  // matches a modelOverrides *value* exactly, so a tagged override — an ARN with
-  // '[1m]' appended — matches nothing and canonicalizes to itself, which would
-  // fail the Opus check below and skip the fallback entirely for the users who
-  // configured an override. carry1mTag re-attaches the tag on the way out, so it
-  // reads the original `model`, not this.
-  const untagged = strip1mTag(model)
-
   // Detect Opus on the canonical name, not the raw ID: modelOverrides can map
   // an Opus model to an arbitrary provider string (a Bedrock ARN, say) with no
   // "opus" in it, and a substring check on the raw ID would skip the fallback
   // for precisely the users who configured an override.
-  if (!getCanonicalName(untagged).includes('opus')) {
+  const canonical = canonicalNameTolerating1mTag(model)
+  if (!canonical.includes('opus')) {
     return undefined
   }
 
@@ -340,7 +333,7 @@ export function getRefusalFallbackModel(model: ModelName): ModelName | undefined
   // Opus 4.8 is servable on every provider (see CLAUDE_OPUS_4_8_CONFIG), so
   // unlike getDefaultOpusModel there's no 3P-lag branch to take here.
   const strings = getModelStrings()
-  if (isSameModel(strings.opus5, untagged)) {
+  if (canonicalNameTolerating1mTag(strings.opus5) === canonical) {
     return carry1mTag(strings.opus48, model)
   }
 
@@ -350,32 +343,46 @@ export function getRefusalFallbackModel(model: ModelName): ModelName | undefined
   // a cycle the chain didn't have before: Opus 5 -> Opus 4.8 -> "Sonnet"
   // (= Opus 5) -> Opus 4.8 -> ... query.ts only declines a switch when the
   // target equals the *current* model, so an alternating pair never trips that
-  // guard and retries forever, one API call per hop. Reject the override in
-  // that case; isSameModel below then terminates as it did before this branch.
+  // guard and retries forever, one API call per hop. The ternary rejects the
+  // override in that case, which is what actually breaks the cycle; the
+  // equality check after it is main's terminal guard, kept as-is so a Sonnet
+  // that somehow resolves to the refusing model still surfaces terminally
+  // rather than being handed back as its own replacement.
   //
   // The replacement is getBuiltInSonnetModel(), not strings.sonnet5, so it
   // respects the same 3P-lag branch getDefaultSonnetModel would have taken —
   // otherwise a Bedrock/Vertex/Foundry session gets handed a Sonnet 5 those
   // providers may not serve yet, swapping a refusal for a 404.
-  //
-  // The strip below and the *unstripped* isSameModel that follows are a
-  // deliberate pair, not an oversight — do not "make them consistent". They
-  // catch the two places a [1m] tag can sit relative to a modelOverrides value,
-  // and resolveOverriddenModel matches that value exactly, so neither spelling
-  // resolves under the other's treatment:
-  //   - tag appended by the user to an override value ('arn:...' + '[1m]') —
-  //     only the stripped form resolves, which is what this guard needs.
-  //   - tag baked into the override value ({"claude-opus-5": "m[1m]"} with
-  //     ANTHROPIC_DEFAULT_SONNET_MODEL=m[1m]) — only the raw form resolves. The
-  //     guard's strip defeats the match and lets it through, so isSameModel is
-  //     the one thing that still sees this is Opus 5 and terminates. Strip
-  //     there too and it returns an Opus 5 as the "Sonnet" step, re-closing the
-  //     retry-forever cycle the paragraph above describes.
   const sonnetOverride = getDefaultSonnetModel()
-  const sonnet = getCanonicalName(strip1mTag(sonnetOverride)).includes('opus')
+  const sonnet = canonicalNameTolerating1mTag(sonnetOverride).includes('opus')
     ? getBuiltInSonnetModel()
     : sonnetOverride
-  return isSameModel(sonnet, untagged) ? undefined : carry1mTag(sonnet, model)
+  return canonicalNameTolerating1mTag(sonnet) === canonical
+    ? undefined
+    : carry1mTag(sonnet, model)
+}
+
+// Canonical name for an ID that may carry a [1m] tag, resolving it whichever
+// side of a modelOverrides value the tag sits on.
+//
+// resolveOverriddenModel matches an override *value* exactly, so the tag can
+// defeat that match from either direction, and stripping unconditionally only
+// trades one failure for the other:
+//   - tag appended by the user to a bare override value ({"claude-opus-5":
+//     "arn:..."} used as 'arn:...[1m]') — resolves only once stripped.
+//   - tag baked into the override value ({"claude-opus-5": "arn:...[1m]"}) —
+//     resolves only while intact. Stripping here is what regressed this case
+//     against main, silently skipping the whole fallback for those users.
+// So try the ID as written, and fall back to the stripped form only when that
+// resolved nothing. getCanonicalName returns its input lowercased when no
+// pattern or override matched, which is what "resolved nothing" tests for.
+function canonicalNameTolerating1mTag(model: ModelName): ModelShortName {
+  const asWritten = getCanonicalName(model)
+  if (asWritten !== model.toLowerCase()) {
+    return asWritten
+  }
+  const untagged = strip1mTag(model)
+  return untagged === model ? asWritten : getCanonicalName(untagged)
 }
 
 function strip1mTag(model: ModelName): ModelName {
