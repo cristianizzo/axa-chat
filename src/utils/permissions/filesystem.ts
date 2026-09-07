@@ -370,11 +370,6 @@ export function isClaudeSettingsPath(filePath: string): boolean {
   // without this arm a foreign project's settings.json is unprotected — and
   // that is the case this arm exists for.
   //
-  // The canonical spelling is the CONFIG_DIR_NAME constant, so it has one
-  // definition. The `.claude` literal alongside it is deliberate too, for an
-  // unrelated reason: see the DANGEROUS_DIRECTORIES entry of the same name in
-  // this file.
-  //
   // Use platform separator so endsWith checks work on both Unix (/) and Windows (\)
   const isSettingsFileUnder = (configDirName: string): boolean =>
     normalizedPath.endsWith(`${sep}${configDirName}${sep}settings.json`) ||
