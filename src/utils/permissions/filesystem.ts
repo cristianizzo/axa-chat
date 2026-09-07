@@ -1460,7 +1460,7 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
   //
   // matchingRuleForInput returns the first match across all sources. If the user
   // also has a broader rule in userSettings for any of the spellings this step
-  // covers — Edit(/.axa/**), Edit(/.claude/**) or Edit(~/.axa/**), e.g. from
+  // covers — Edit(/.claude/**) or Edit(~/.claude/**), e.g. from
   // sandbox write-allow conversion — that rule would be found first and its
   // source check below would fail. Scope the search to session-only rules so the
   // dialog's "allow Claude to edit its own settings for this session" option
@@ -1477,14 +1477,13 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
     'allow',
   )
   if (configFolderAllowRule) {
-    // Check if this rule is scoped under a config folder (project, legacy
-    // project, or global). Accepts both the broad patterns ('/.axa/**',
-    // '/.claude/**', '~/.axa/**') and narrowed ones like
-    // '/.axa/skills/my-skill/**' so users can grant session access to a single
-    // skill without also exposing settings.json or hooks/. The rule already
-    // matched the path via matchingRuleForInput; this is an additional scope
-    // check. Reject '..' to prevent a rule like '/.axa/../**' from leaking
-    // this bypass outside the config folder.
+    // Check if this rule is scoped under a config folder (project or global).
+    // Accepts both the broad patterns ('/.claude/**', '~/.claude/**') and
+    // narrowed ones like '/.claude/skills/my-skill/**' so users can grant
+    // session access to a single skill without also exposing settings.json or
+    // hooks/. The rule already matched the path via matchingRuleForInput; this
+    // is an additional scope check. Reject '..' to prevent a rule like
+    // '/.claude/../**' from leaking this bypass outside the config folder.
     const ruleContent = configFolderAllowRule.ruleValue.ruleContent
     if (
       ruleContent &&
