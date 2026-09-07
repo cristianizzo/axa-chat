@@ -357,6 +357,20 @@ export function getRefusalFallbackModel(model: ModelName): ModelName | undefined
   // respects the same 3P-lag branch getDefaultSonnetModel would have taken —
   // otherwise a Bedrock/Vertex/Foundry session gets handed a Sonnet 5 those
   // providers may not serve yet, swapping a refusal for a 404.
+  //
+  // The strip below and the *unstripped* isSameModel that follows are a
+  // deliberate pair, not an oversight — do not "make them consistent". They
+  // catch the two places a [1m] tag can sit relative to a modelOverrides value,
+  // and resolveOverriddenModel matches that value exactly, so neither spelling
+  // resolves under the other's treatment:
+  //   - tag appended by the user to an override value ('arn:...' + '[1m]') —
+  //     only the stripped form resolves, which is what this guard needs.
+  //   - tag baked into the override value ({"claude-opus-5": "m[1m]"} with
+  //     ANTHROPIC_DEFAULT_SONNET_MODEL=m[1m]) — only the raw form resolves. The
+  //     guard's strip defeats the match and lets it through, so isSameModel is
+  //     the one thing that still sees this is Opus 5 and terminates. Strip
+  //     there too and it returns an Opus 5 as the "Sonnet" step, re-closing the
+  //     retry-forever cycle the paragraph above describes.
   const sonnetOverride = getDefaultSonnetModel()
   const sonnet = getCanonicalName(strip1mTag(sonnetOverride)).includes('opus')
     ? getBuiltInSonnetModel()
