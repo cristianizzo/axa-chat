@@ -1,7 +1,7 @@
 import { realpath } from 'fs/promises'
 import {
   CONFIG_DIR_NAME,
-  LEGACY_CONFIG_DIR_NAME,
+  MANAGED_CONFIG_DIR_NAME,
 } from '../constants/product.js'
 import ignore from 'ignore'
 import memoize from 'lodash-es/memoize.js'
@@ -106,7 +106,7 @@ export function getSkillsPath(
       // than a literal so it does not read as the `.claude` path this repo
       // treats as a defect — the next reader would "fix" it and break
       // managed skills.
-      return join(getManagedFilePath(), LEGACY_CONFIG_DIR_NAME, dir)
+      return join(getManagedFilePath(), MANAGED_CONFIG_DIR_NAME, dir)
     case 'userSettings':
       return join(getClaudeConfigHomeDir(), dir)
     case 'projectSettings':
@@ -665,7 +665,7 @@ export const getSkillDirCommands = memoize(
     const userSkillsDir = join(getClaudeConfigHomeDir(), 'skills')
     const managedSkillsDir = join(
       getManagedFilePath(),
-      LEGACY_CONFIG_DIR_NAME,
+      MANAGED_CONFIG_DIR_NAME,
       'skills',
     )
     const projectSkillsDirs = getProjectDirsUpToHome('skills', cwd)

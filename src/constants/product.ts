@@ -37,6 +37,23 @@ export const PRODUCT_NAME = 'AXA Chat'
 export const CONFIG_DIR_NAME = '.axa'
 
 /**
+ * The administrator-deployed managed location — NOT this fork's config dir.
+ *
+ * An MDM or an IT department installs policy skills, rules and memory into a
+ * system-wide, Claude-branded directory under getManagedFilePath(). We read it
+ * and never write it, and the name belongs to whoever deployed it. It is held
+ * separately from CONFIG_DIR_NAME precisely because the two currently hold the
+ * same string: they are equal by coincidence, not by rule, and a future rename
+ * of our own config dir must not drag these sites along with it.
+ *
+ * Renaming these fails open and reports nothing: the directory stops being
+ * found, managed skills and rules silently stop loading, and no error is
+ * raised. Confirm who owns the name before touching either constant.
+ */
+export const MANAGED_CONFIG_DIR_NAME = '.claude'
+export const MANAGED_MEMORY_FILE_NAME = 'CLAUDE.md'
+
+/**
  * The pre-rename project directory, and the memory filenames that went with it.
  *
  * Read in exactly one place: the startup check that offers to import a Claude

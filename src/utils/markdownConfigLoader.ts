@@ -1,7 +1,7 @@
 import { feature } from 'bun:bundle'
 import {
   CONFIG_DIR_NAME,
-  LEGACY_CONFIG_DIR_NAME,
+  MANAGED_CONFIG_DIR_NAME,
 } from '../constants/product.js'
 import { statSync } from 'fs'
 import { lstat, readdir, readFile, realpath, stat } from 'fs/promises'
@@ -371,7 +371,7 @@ export const loadMarkdownFilesForSubdir = memoize(
     // Managed config is deployed by an administrator into a system-wide,
     // Claude-branded location this fork does not own. Renaming the directory
     // here would just stop reading what they actually deployed.
-    const managedDir = join(getManagedFilePath(), LEGACY_CONFIG_DIR_NAME, subdir)
+    const managedDir = join(getManagedFilePath(), MANAGED_CONFIG_DIR_NAME, subdir)
     const projectDirs = getProjectConfigDirs(subdir, cwd)
 
     const [managedFiles, userFiles, projectFilesNested] = await Promise.all([

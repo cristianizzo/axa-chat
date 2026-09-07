@@ -1,7 +1,8 @@
 import { feature } from 'bun:bundle'
 import {
-  LEGACY_MEMORY_FILE_NAME,
   LOCAL_MEMORY_FILE_NAME,
+  MANAGED_CONFIG_DIR_NAME,
+  MANAGED_MEMORY_FILE_NAME,
   MEMORY_FILE_NAME,
 } from '../constants/product.js'
 import { randomBytes } from 'crypto'
@@ -1921,7 +1922,7 @@ export function getMemoryPath(memoryType: MemoryType): string {
       // Managed settings are deployed by an administrator into a
       // system-wide, Claude-branded location that this fork does not own;
       // renaming the file there would just stop reading what they deployed.
-      return join(getManagedFilePath(), LEGACY_MEMORY_FILE_NAME)
+      return join(getManagedFilePath(), MANAGED_MEMORY_FILE_NAME)
     case 'AutoMem':
       return getAutoMemEntrypoint()
   }
@@ -1933,7 +1934,7 @@ export function getMemoryPath(memoryType: MemoryType): string {
 }
 
 export function getManagedClaudeRulesDir(): string {
-  return join(getManagedFilePath(), '.claude', 'rules')
+  return join(getManagedFilePath(), MANAGED_CONFIG_DIR_NAME, 'rules')
 }
 
 export function getUserClaudeRulesDir(): string {
