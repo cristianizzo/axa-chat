@@ -178,7 +178,6 @@ import exit from './commands/exit/index.js'
 import exportCommand from './commands/export/index.js'
 import projects from './commands/projects/index.js'
 import importConversations from './commands/import-conversations/index.js'
-import importProject from './commands/import-project/index.js'
 import model from './commands/model/index.js'
 import tag from './commands/tag/index.js'
 import outputStyle from './commands/output-style/index.js'
@@ -342,7 +341,6 @@ const COMMANDS = memoize((): Command[] => [
   hooks,
   exportCommand,
   importConversations,
-  importProject,
   projects,
   sandboxToggle,
   ...(!isUsing3PServices() ? [logout, login(), switchAccount] : []),
