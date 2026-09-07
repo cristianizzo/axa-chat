@@ -51,9 +51,15 @@
     `services/import/claudeCodeImport.ts`, `MAX_BACKUP_SETS = 1000`
     (`compact.ts:398`).
     **Later reversed:** `CONFIG_DIR_NAME` is `.claude` again, `LEGACY_CONFIG_DIR_NAME`
-    now names `.axa`, and `configDirMigration.ts` does a one-time move of
+    now names `.axa`, and `configDirMigration.ts` does a one-time merge of
     `~/.axa` into `~/.claude` — see
     `docs/superpowers/specs/2026-09-07-config-dir-back-to-claude-design.md`.
+    The import half was **deleted**, not kept: `/import-conversations` copied a
+    Claude Code install into a separate axa root, and once both products read
+    the same `~/.claude` its source and destination are the same directory, so
+    the command could only ever answer "nothing to import".
+    `commands/import-conversations/` and `services/import/claudeCodeImport.ts`
+    are gone, and with them the last reader of `CLAUDE_CODE_DIR`.
   - [ ] PR 2 — `/projects`: list with real path, conversation count, size on disk,
     last used, and flags for dead paths and orphaned data; open, rename,
     favourite, delete, merge. `project.json` written lazily, only on first
