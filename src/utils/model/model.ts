@@ -276,6 +276,14 @@ export function getDefaultSonnetModel(): ModelName {
   if (process.env.ANTHROPIC_DEFAULT_SONNET_MODEL) {
     return process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
   }
+  return getBuiltInSonnetModel()
+}
+
+// The Sonnet this provider actually serves, ignoring
+// ANTHROPIC_DEFAULT_SONNET_MODEL. Split out so getRefusalFallbackModel can
+// reject a misconfigured override without re-deriving the 3P branch and
+// letting the two copies drift.
+function getBuiltInSonnetModel(): ModelName {
   // Default to Sonnet 4.6 for 3P since they may not have Sonnet 5 yet
   if (getAPIProvider() !== 'firstParty') {
     return getModelStrings().sonnet46
@@ -306,11 +314,19 @@ export function isSameModel(a: ModelName, b: ModelName): boolean {
 // other Opus is a single hop to Sonnet. Returns undefined when there is no
 // distinct fallback left, which lets the refusal surface terminally.
 export function getRefusalFallbackModel(model: ModelName): ModelName | undefined {
+  // Every comparison below runs on the [1m]-stripped ID. resolveOverriddenModel
+  // matches a modelOverrides *value* exactly, so a tagged override — an ARN with
+  // '[1m]' appended — matches nothing and canonicalizes to itself, which would
+  // fail the Opus check below and skip the fallback entirely for the users who
+  // configured an override. carry1mTag re-attaches the tag on the way out, so it
+  // reads the original `model`, not this.
+  const untagged = strip1mTag(model)
+
   // Detect Opus on the canonical name, not the raw ID: modelOverrides can map
   // an Opus model to an arbitrary provider string (a Bedrock ARN, say) with no
   // "opus" in it, and a substring check on the raw ID would skip the fallback
   // for precisely the users who configured an override.
-  if (!getCanonicalName(model).includes('opus')) {
+  if (!getCanonicalName(untagged).includes('opus')) {
     return undefined
   }
 
@@ -324,7 +340,7 @@ export function getRefusalFallbackModel(model: ModelName): ModelName | undefined
   // Opus 4.8 is servable on every provider (see CLAUDE_OPUS_4_8_CONFIG), so
   // unlike getDefaultOpusModel there's no 3P-lag branch to take here.
   const strings = getModelStrings()
-  if (isSameModel(strings.opus5, model)) {
+  if (isSameModel(strings.opus5, untagged)) {
     return carry1mTag(strings.opus48, model)
   }
 
@@ -334,14 +350,22 @@ export function getRefusalFallbackModel(model: ModelName): ModelName | undefined
   // a cycle the chain didn't have before: Opus 5 -> Opus 4.8 -> "Sonnet"
   // (= Opus 5) -> Opus 4.8 -> ... query.ts only declines a switch when the
   // target equals the *current* model, so an alternating pair never trips that
-  // guard and retries forever, one API call per hop. Prefer the real Sonnet
-  // when the override names an Opus; isSameModel below then terminates as it
-  // did before this branch.
+  // guard and retries forever, one API call per hop. Reject the override in
+  // that case; isSameModel below then terminates as it did before this branch.
+  //
+  // The replacement is getBuiltInSonnetModel(), not strings.sonnet5, so it
+  // respects the same 3P-lag branch getDefaultSonnetModel would have taken —
+  // otherwise a Bedrock/Vertex/Foundry session gets handed a Sonnet 5 those
+  // providers may not serve yet, swapping a refusal for a 404.
   const sonnetOverride = getDefaultSonnetModel()
-  const sonnet = getCanonicalName(sonnetOverride).includes('opus')
-    ? strings.sonnet5
+  const sonnet = getCanonicalName(strip1mTag(sonnetOverride)).includes('opus')
+    ? getBuiltInSonnetModel()
     : sonnetOverride
-  return isSameModel(sonnet, model) ? undefined : carry1mTag(sonnet, model)
+  return isSameModel(sonnet, untagged) ? undefined : carry1mTag(sonnet, model)
+}
+
+function strip1mTag(model: ModelName): ModelName {
+  return model.replace(/\[1m\]$/i, '')
 }
 
 // Carry a refusing model's [1m] tag onto its replacement. The fallback retries
@@ -360,7 +384,7 @@ function carry1mTag(target: ModelName, refusingModel: ModelName): ModelName {
   // strip-then-append rather than an early return on has1mContext(target),
   // because has1mContext is false under CLAUDE_CODE_DISABLE_1M_CONTEXT and
   // would leave the literal suffix in place while reporting it absent.
-  return `${target.replace(/\[1m\]$/i, '')}[1m]`
+  return `${strip1mTag(target)}[1m]`
 }
 
 // @[MODEL LAUNCH]: Update the default Fable model.
