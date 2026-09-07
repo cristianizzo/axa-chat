@@ -328,7 +328,19 @@ export function getRefusalFallbackModel(model: ModelName): ModelName | undefined
     return carry1mTag(strings.opus48, model)
   }
 
-  const sonnet = getDefaultSonnetModel()
+  // The Sonnet step has to actually leave the Opus family, and
+  // getDefaultSonnetModel() returns ANTHROPIC_DEFAULT_SONNET_MODEL verbatim —
+  // which a misconfiguration can point at an Opus model. Unchecked, that closes
+  // a cycle the chain didn't have before: Opus 5 -> Opus 4.8 -> "Sonnet"
+  // (= Opus 5) -> Opus 4.8 -> ... query.ts only declines a switch when the
+  // target equals the *current* model, so an alternating pair never trips that
+  // guard and retries forever, one API call per hop. Prefer the real Sonnet
+  // when the override names an Opus; isSameModel below then terminates as it
+  // did before this branch.
+  const sonnetOverride = getDefaultSonnetModel()
+  const sonnet = getCanonicalName(sonnetOverride).includes('opus')
+    ? strings.sonnet5
+    : sonnetOverride
   return isSameModel(sonnet, model) ? undefined : carry1mTag(sonnet, model)
 }
 
@@ -339,9 +351,16 @@ export function getRefusalFallbackModel(model: ModelName): ModelName | undefined
 // retry. Guarded on the target actually supporting 1M, since the tag is a
 // request the target must honour, not a property of the source.
 function carry1mTag(target: ModelName, refusingModel: ModelName): ModelName {
-  return has1mContext(refusingModel) && modelSupports1M(target)
-    ? `${target}[1m]`
-    : target
+  if (!has1mContext(refusingModel) || !modelSupports1M(target)) {
+    return target
+  }
+  // Strip before appending: targets are normally bare, but
+  // getDefaultSonnetModel() returns ANTHROPIC_DEFAULT_SONNET_MODEL verbatim, so
+  // a user who tagged that value would otherwise get 'model[1m][1m]'. Done by
+  // strip-then-append rather than an early return on has1mContext(target),
+  // because has1mContext is false under CLAUDE_CODE_DISABLE_1M_CONTEXT and
+  // would leave the literal suffix in place while reporting it absent.
+  return `${target.replace(/\[1m\]$/i, '')}[1m]`
 }
 
 // @[MODEL LAUNCH]: Update the default Fable model.
