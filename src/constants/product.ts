@@ -8,33 +8,28 @@
  * Claude desktop app) also stay as they are, since they are true and this fork
  * does not replace them.
  *
- * The exceptions are axa's own storage — the config directory at both scopes
+ * Its own storage is no exception any more: the config directory
  * (CONFIG_DIR_NAME) and the project instruction files (MEMORY_FILE_NAME,
- * LOCAL_MEMORY_FILE_NAME). Those are files axa itself reads and writes, so
- * there is no upstream contract to keep: `CLAUDE.md` is *not* one of the names
- * this fork preserves.
+ * LOCAL_MEMORY_FILE_NAME) deliberately keep the upstream names so a single
+ * directory serves both products.
  */
 export const PRODUCT_NAME = 'AXA Chat'
 
 /**
- * The config directory name, used at both scopes: `~/.axa` per user, and
- * `<repo>/.axa` per project.
+ * The config directory name, used at both scopes: `~/.claude` per user, and
+ * `<repo>/.claude` per project.
  *
- * Deliberately *not* `.claude`. axa owns its storage outright: it starts empty
- * on a fresh install and never reads or writes `~/.claude`, so an existing
- * Claude Code install keeps working untouched alongside it. Existing history is
- * pulled across only by an explicit, re-runnable `/import-conversations`.
+ * Shared with a real Claude Code install rather than held apart. The fork
+ * previously owned `.axa` outright so both products could coexist; that is no
+ * longer wanted, and co-tenancy is now the point — one directory, one set of
+ * sessions, one memory file. Data already under `~/.axa` is moved across once
+ * by utils/configDirMigration.ts, which deletes the source only after verifying
+ * every entry landed.
  *
- * The project scope used to keep the upstream `.claude` name, on the grounds
- * that those files are shared with collaborators and read by other tools. That
- * traded one problem for a worse one: the two scopes disagreed, so where a
- * given piece of state landed depended on which code path wrote it, and a fork
- * that refuses to touch `~/.claude` was still writing another product's name
- * into every repo it was used on. One name at both scopes, and an existing
- * `.claude/`, `CLAUDE.md` and `CLAUDE.local.md` are offered across exactly once
- * by a copy-based import — never read from both spellings.
+ * Note this is NOT the managed directory: see MANAGED_CONFIG_DIR_NAME, which
+ * holds the same string today for an entirely different reason.
  */
-export const CONFIG_DIR_NAME = '.axa'
+export const CONFIG_DIR_NAME = '.claude'
 
 /**
  * The administrator-deployed managed location — NOT this fork's config dir.
@@ -67,29 +62,36 @@ export const LEGACY_MEMORY_FILE_NAME = 'CLAUDE.md'
 export const LEGACY_LOCAL_MEMORY_FILE_NAME = 'CLAUDE.local.md'
 
 /**
- * The project instruction files axa reads and writes.
+ * The project instruction files this tool reads and writes.
  *
- * `CLAUDE.md` is an upstream name for an upstream product. Keeping it would
- * mean this fork asking users to put a competitor's filename in their repo,
- * and would leave the tree half-renamed next to `.axa/`.
+ * Upstream's names, deliberately: the whole point of sharing the config
+ * directory is that a repo carries one set of instructions both products read,
+ * rather than two that drift.
  */
-export const MEMORY_FILE_NAME = 'AXA.md'
-export const LOCAL_MEMORY_FILE_NAME = 'AXA.local.md'
+export const MEMORY_FILE_NAME = 'CLAUDE.md'
+export const LOCAL_MEMORY_FILE_NAME = 'CLAUDE.local.md'
 
 /**
  * Base name of the macOS Keychain entry holding credentials.
  *
- * Must differ from Claude Code's `Claude Code` for the same reason
- * CONFIG_DIR_NAME differs from `.claude`, and here the consequence is sharper:
- * the service name only varies by config dir when CLAUDE_CONFIG_DIR is set
- * (see getMacOsKeychainStorageServiceName), so keeping the upstream base would
- * make both installs read and write one credential — and an OAuth refresh from
- * one rotates the token out from under the other, logging it out.
+ * Deliberately the same as Claude Code's, so one Anthropic login serves both.
+ * The service name only varies by config dir when CLAUDE_CONFIG_DIR is set (see
+ * getMacOsKeychainStorageServiceName), so sharing CONFIG_DIR_NAME already means
+ * sharing this entry — spelling it differently here would only produce a second
+ * credential for the same account.
  *
- * Credentials come across through `/import-conversations`, which copies rather
- * than moves, leaving the Claude Code entry intact.
+ * Safe because refresh is serialised: utils/auth.ts takes
+ * lockfile.lock(getClaudeConfigHomeDir()) and re-reads under the lock, so a
+ * concurrent refresh from the other product makes this one adopt the fresh
+ * token rather than rotate it away. Worst case is being logged in as whoever
+ * logged in last, plus a cached token up to KEYCHAIN_CACHE_TTL_MS stale.
+ *
+ * Note this shares the keychain and the directory, but NOT the global config
+ * file: see getGlobalClaudeFile, which keeps it at `~/.claude/config.json` and
+ * never `~/.claude.json`, because the non-Anthropic provider credentials live
+ * in it.
  */
-export const KEYCHAIN_SERVICE_NAME = 'AXA Chat'
+export const KEYCHAIN_SERVICE_NAME = 'Claude Code'
 
 /**
  * The assistant's name in running prose — "Ask axa to …".
