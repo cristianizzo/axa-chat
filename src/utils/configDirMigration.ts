@@ -15,6 +15,7 @@
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   rmSync,
@@ -31,12 +32,19 @@ export function migrateAxaConfigDir(): void {
   // An explicit override names a location that is neither of these.
   if (process.env.CLAUDE_CONFIG_DIR) return
 
-  const source = join(homedir(), OLD_DIR_NAME)
-  const destination = join(homedir(), NEW_DIR_NAME)
-
-  if (!existsSync(source)) return
+  // Resolved inside the try so an environment where homedir() throws is
+  // reported rather than propagated — this function promises never to throw.
+  // The catch reports these bare names if homedir() itself was what failed.
+  let source = OLD_DIR_NAME
+  let destination = NEW_DIR_NAME
 
   try {
+    const home = homedir()
+    source = join(home, OLD_DIR_NAME)
+    destination = join(home, NEW_DIR_NAME)
+
+    if (!existsSync(source)) return
+
     // getGlobalClaudeFile prefers `<configDir>/.config.json` when present, so a
     // Claude Code install carrying one would silently redirect the whole config
     // after the move. Refuse rather than guess.
@@ -81,7 +89,14 @@ export function migrateAxaConfigDir(): void {
     }
 
     // Verify before deleting. cpSync throwing is not the only failure mode.
-    const missing = entries.filter(entry => !existsSync(join(destination, entry)))
+    // existsSync follows links, so an entry copied verbatim as a dangling
+    // symlink would report as missing and wedge the migration forever. lstat
+    // sees the link itself: arriving as a link counts as arrived.
+    const missing = entries.filter(
+      entry =>
+        !existsSync(join(destination, entry)) &&
+        !lstatSync(join(destination, entry), { throwIfNoEntry: false }),
+    )
     if (missing.length > 0) {
       logError(
         new Error(
@@ -93,6 +108,17 @@ export function migrateAxaConfigDir(): void {
 
     const sizeMismatch = entries.filter(entry => {
       try {
+        // Same dangling-link trap as the `missing` check above: statSync
+        // follows links and throws on a dangling one, and the catch below
+        // would read that as a mismatch. A link is copied verbatim, so its
+        // arrival as a link is the check — never its target's size.
+        const aLink = lstatSync(join(source, entry), { throwIfNoEntry: false })
+        const bLink = lstatSync(join(destination, entry), {
+          throwIfNoEntry: false,
+        })
+        if (!aLink || !bLink) return true
+        if (aLink.isSymbolicLink() || bLink.isSymbolicLink()) return false
+
         const a = statSync(join(source, entry))
         const b = statSync(join(destination, entry))
         return a.isFile() && b.isFile() && a.size !== b.size
@@ -104,6 +130,29 @@ export function migrateAxaConfigDir(): void {
       logError(
         new Error(
           `Refusing to remove ${source}: ${sizeMismatch.join(', ')} differ in size at ${destination}.`,
+        ),
+      )
+      return
+    }
+
+    // `entries` is a snapshot taken before the copy, but rmSync removes the
+    // tree as it stands now. An older session still writing into ~/.axa during
+    // the copy would have its new entries deleted having never been copied.
+    // Re-read and refuse on any difference in either direction.
+    const before = new Set(entries)
+    const after = readdirSync(source)
+    const added = after.filter(entry => !before.has(entry))
+    const removed = entries.filter(entry => !after.includes(entry))
+    if (added.length > 0 || removed.length > 0) {
+      const changes = [
+        added.length > 0 ? `appeared: ${added.join(', ')}` : null,
+        removed.length > 0 ? `disappeared: ${removed.join(', ')}` : null,
+      ]
+        .filter(Boolean)
+        .join('; ')
+      logError(
+        new Error(
+          `Refusing to remove ${source}: it changed while migrating (${changes}). ${source} has been kept.`,
         ),
       )
       return
