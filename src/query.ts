@@ -984,7 +984,18 @@ async function* queryLoop(
               // Record the original refusing model so that, if the fallback
               // ALSO refuses, claude.ts can emit the both-models-refused message
               // instead of a generic refusal.
-              refusalFallbackOriginalModel = innerError.originalModel
+              //
+              // `??=`, not `=`: the chain passes through here once per hop, and
+              // innerError.originalModel is whichever model just refused, not
+              // the one the turn started on. A plain assignment made the final
+              // Opus 5 -> Opus 4.8 -> Sonnet message read "Both Opus 4.8 and
+              // Sonnet 5 declined" — naming an intermediate the user never
+              // picked and dropping the model they did. Keeping the first
+              // writer names the two ends of the chain. Same lifetime as
+              // currentModel (both declared per queryLoop call), so there is no
+              // stale value to leak into a later turn; with an explicit
+              // --fallback-model there is only ever one hop and this is a no-op.
+              refusalFallbackOriginalModel ??= innerError.originalModel
               attemptWithFallback = true
 
               // The refusal may have already streamed partial content (e.g. the
