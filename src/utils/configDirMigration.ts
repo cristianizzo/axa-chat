@@ -103,11 +103,17 @@ export function migrateAxaConfigDir(): void {
 
     mkdirSync(destination, { recursive: true })
 
-    const entries = readdirSync(source)
-    // Recursive, and taken before a single byte is copied. The top-level entry
-    // list above cannot see a concurrent session writing into an existing
-    // subdirectory (~/.axa/projects/*.jsonl), which is the realistic racer.
+    // One read, not two. `entries` and the drift baseline must come from the
+    // same observation of the directory: an entry created between two separate
+    // reads would be missing from the copy loop yet present in both drift
+    // snapshots, so it would be deleted uncopied and unlogged. Recursive, and
+    // taken before a single byte is copied — this also catches a concurrent
+    // session writing into an existing subdirectory (~/.axa/projects/*.jsonl),
+    // which is the realistic racer.
     const sourceBefore = snapshotTree(source)
+    const entries = [...sourceBefore.keys()].filter(
+      relativePath => !relativePath.includes('/'),
+    )
     const blocked: string[] = []
 
     for (const entry of entries) {
