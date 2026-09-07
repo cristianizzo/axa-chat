@@ -87,6 +87,19 @@ function summarize(label: string, paths: string[]): string | null {
   return rest > 0 ? `${label}: ${shown} (+${rest} more)` : `${label}: ${shown}`
 }
 
+/**
+ * stderr, not stdout: this runs inside the commander `preAction` hook, ahead of
+ * any command, so stdout may be a `-p` run's machine-readable output and must
+ * not be written to. Never throws — a failed write must not take down startup.
+ */
+function announce(message: string): void {
+  try {
+    process.stderr.write(`${message}\n`)
+  } catch {
+    // A closed or broken stderr is not a reason to abort a migration.
+  }
+}
+
 /** Only regular files and symlinks can be merged entry by entry. Anything else
  *  (fifo, socket, device) is not something to guess about. */
 function isMergeable(stats: Stats): boolean {
@@ -310,6 +323,13 @@ export function migrateAxaConfigDir(): void {
 
     if (blocked.length > 0) {
       const details = summarize('unresolved', blocked)
+      // stderr as well as logError: logError only reaches the console under
+      // HARD_FAIL, and a migration that could not finish is something the user
+      // has to act on — silence here reads as "nothing to do" and the block
+      // then repeats on every launch forever.
+      announce(
+        `${source} could not be fully merged into ${destination} — ${details}. ${source} has been kept; resolve those by hand and restart.`,
+      )
       logError(
         new Error(
           `Merged what it could from ${source} into ${destination}, but ${blocked.length} entr${blocked.length === 1 ? 'y' : 'ies'} could not be resolved — ${details}. ${source} has been kept; resolve these by hand and restart.`,
@@ -419,6 +439,15 @@ export function migrateAxaConfigDir(): void {
     }
 
     rmSync(source, { recursive: true, force: true })
+
+    // The sidecars are inert and nothing else will ever mention them. Said
+    // once, on the single run that creates them, because `source` is gone
+    // afterwards and this function never runs again.
+    if (preserved.size > 0) {
+      announce(
+        `Moved ${source} into ${destination}. ${preserved.size} file${preserved.size === 1 ? '' : 's'} already existed there with different contents; ${destination}'s copy was kept and ${summarize('yours was saved alongside it', [...preserved.keys()].map(name => `${name}${PRESERVED_SUFFIX}`))}.`,
+      )
+    }
   } catch (error) {
     logError(new Error(`Failed to migrate ${source} to ${destination}: ${error}`))
   }
