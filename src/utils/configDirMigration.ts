@@ -6,20 +6,30 @@
  * being moved. There is no version counter here because success deletes the
  * trigger — `~/.axa` no longer existing IS the "already ran" flag.
  *
- * Copy, verify, then delete, and never delete on a partial result. The source
+ * Merge, verify, then delete, and never delete on a partial result. The source
  * holds credentials that cannot be reissued, so a half-migration that removed
  * the original would be unrecoverable. Every failure path leaves `~/.axa`
  * intact and simply retries next launch.
+ *
+ * It is a merge and not a move because co-tenancy with a real Claude Code
+ * install is intended: `~/.claude` is already populated on the mainline case.
+ * The destination always wins a content conflict — that config is live — and
+ * the source version is kept beside it as `<name>.from-axa`, so the delete
+ * still loses nothing.
  */
 
 import {
+  closeSync,
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
+  readSync,
+  readlinkSync,
   rmSync,
-  statSync,
+  type Stats,
 } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -27,6 +37,11 @@ import { logError } from './log.js'
 
 const OLD_DIR_NAME = '.axa'
 const NEW_DIR_NAME = '.claude'
+
+/** Suffix for a source file kept beside a differing destination file. The
+ *  destination always wins a content conflict — it may be a real Claude Code
+ *  install's live config — but nothing from `~/.axa` may be lost either. */
+const PRESERVED_SUFFIX = '.from-axa'
 
 /** Directories are identity-only: their size is filesystem noise, and any
  *  change to their contents shows up as a path of its own. */
@@ -72,6 +87,69 @@ function summarize(label: string, paths: string[]): string | null {
   return rest > 0 ? `${label}: ${shown} (+${rest} more)` : `${label}: ${shown}`
 }
 
+/** Only regular files and symlinks can be merged entry by entry. Anything else
+ *  (fifo, socket, device) is not something to guess about. */
+function isMergeable(stats: Stats): boolean {
+  return stats.isFile() || stats.isSymbolicLink()
+}
+
+function describe(stats: Stats): string {
+  if (stats.isDirectory()) return 'a directory'
+  if (stats.isSymbolicLink()) return 'a symlink'
+  if (stats.isFile()) return 'a file'
+  return 'a special file'
+}
+
+const COMPARE_CHUNK_BYTES = 64 * 1024
+
+/**
+ * Byte comparison, never a size comparison: two `settings.json` of equal length
+ * are routinely different files. Chunked rather than readFileSync so a large
+ * transcript in ~/.axa/projects cannot exhaust memory here.
+ */
+function fileBytesEqual(a: string, b: string): boolean {
+  const fdA = openSync(a, 'r')
+  try {
+    const fdB = openSync(b, 'r')
+    try {
+      const bufferA = Buffer.allocUnsafe(COMPARE_CHUNK_BYTES)
+      const bufferB = Buffer.allocUnsafe(COMPARE_CHUNK_BYTES)
+      for (;;) {
+        const readA = readSync(fdA, bufferA, 0, COMPARE_CHUNK_BYTES, null)
+        const readB = readSync(fdB, bufferB, 0, COMPARE_CHUNK_BYTES, null)
+        if (readA !== readB) return false
+        if (readA === 0) return true
+        if (!bufferA.subarray(0, readA).equals(bufferB.subarray(0, readB))) {
+          return false
+        }
+      }
+    } finally {
+      closeSync(fdB)
+    }
+  } finally {
+    closeSync(fdA)
+  }
+}
+
+/**
+ * Whether the destination entry already holds exactly what the source entry
+ * holds. Callers have established that neither side is a directory and that
+ * their symlink-ness matches.
+ *
+ * A symlink is compared by target, never by following it: the copy is
+ * verbatim, so an identical target is an identical entry even when it dangles.
+ */
+function sameContent(
+  from: string,
+  fromStats: Stats,
+  to: string,
+  toStats: Stats,
+): boolean {
+  if (fromStats.isSymbolicLink()) return readlinkSync(from) === readlinkSync(to)
+  if (fromStats.size !== toStats.size) return false
+  return fileBytesEqual(from, to)
+}
+
 export function migrateAxaConfigDir(): void {
   // An explicit override names a location that is neither of these.
   if (process.env.CLAUDE_CONFIG_DIR) return
@@ -103,28 +181,47 @@ export function migrateAxaConfigDir(): void {
 
     mkdirSync(destination, { recursive: true })
 
-    // One read, not two. `entries` and the drift baseline must come from the
-    // same observation of the directory: an entry created between two separate
-    // reads would be missing from the copy loop yet present in both drift
+    // One read, not two. The merge's work list and the drift baseline must come
+    // from the same observation of the directory: an entry created between two
+    // separate reads would be missing from the merge loop yet present in both drift
     // snapshots, so it would be deleted uncopied and unlogged. Recursive, and
     // taken before a single byte is copied — this also catches a concurrent
     // session writing into an existing subdirectory (~/.axa/projects/*.jsonl),
     // which is the realistic racer.
     const sourceBefore = snapshotTree(source)
-    const entries = [...sourceBefore.keys()].filter(
-      relativePath => !relativePath.includes('/'),
-    )
+
+    // Sorted, so every parent is visited before its children: a path is a
+    // string prefix of everything beneath it, so lexicographic order alone
+    // guarantees it. `settled` below depends on that ordering.
+    const relativePaths = [...sourceBefore.keys()].sort()
+
+    // Co-tenancy with a real Claude Code install is intended, so ~/.claude is
+    // populated on the mainline case and a top-level collision test would
+    // block on nearly every entry. Merge instead: recurse where both sides are
+    // directories, and decide per file. The merge is idempotent — an identical
+    // file is "already migrated", not a conflict — so a run that ends in
+    // `blocked` leaves a resumable state rather than one that re-blocks on its
+    // own output.
     const blocked: string[] = []
 
-    for (const entry of entries) {
-      const from = join(source, entry)
-      const to = join(destination, entry)
-
-      if (existsSync(to)) {
-        blocked.push(entry)
-        continue
+    // Paths whose whole subtree was decided at the path itself: copied
+    // verbatim, or blocked. Their children must not be visited again.
+    const settled = new Set<string>()
+    const hasSettledAncestor = (relativePath: string): boolean => {
+      const parts = relativePath.split('/')
+      let prefix = ''
+      for (let index = 0; index < parts.length - 1; index++) {
+        prefix = prefix ? `${prefix}/${parts[index]}` : parts[index]
+        if (settled.has(prefix)) return true
       }
+      return false
+    }
 
+    // Source entries preserved beside a differing destination entry. The
+    // verification pass must look at these paths, not at the colliding ones.
+    const preserved = new Map<string, string>()
+
+    const copyVerbatim = (from: string, to: string): void => {
       cpSync(from, to, {
         recursive: true,
         force: false,
@@ -133,60 +230,150 @@ export function migrateAxaConfigDir(): void {
       })
     }
 
+    for (const relativePath of relativePaths) {
+      if (hasSettledAncestor(relativePath)) continue
+
+      const from = join(source, relativePath)
+      const to = join(destination, relativePath)
+
+      // lstat, not existsSync: existsSync follows links and reports a dangling
+      // one as absent, which would send a perfectly copyable symlink down the
+      // wrong branch.
+      const fromStats = lstatSync(from, { throwIfNoEntry: false })
+      // Vanished since the snapshot. The drift check refuses the delete.
+      if (!fromStats) continue
+
+      const toStats = lstatSync(to, { throwIfNoEntry: false })
+
+      // Present only in the source: copy it as it stands, subtree and all.
+      if (!toStats) {
+        copyVerbatim(from, to)
+        settled.add(relativePath)
+        continue
+      }
+
+      // Directory on both sides: merge the children, never block the subtree
+      // because the parent name is taken.
+      if (fromStats.isDirectory() && toStats.isDirectory()) continue
+
+      if (fromStats.isDirectory() !== toStats.isDirectory()) {
+        blocked.push(
+          `${relativePath} (${describe(fromStats)} in ${source}, ${describe(toStats)} in ${destination})`,
+        )
+        settled.add(relativePath)
+        continue
+      }
+
+      // A link on one side and a real file on the other is a mismatch, not a
+      // copy, in either direction.
+      if (fromStats.isSymbolicLink() !== toStats.isSymbolicLink()) {
+        blocked.push(
+          `${relativePath} (${describe(fromStats)} in ${source}, ${describe(toStats)} in ${destination})`,
+        )
+        continue
+      }
+
+      if (!isMergeable(fromStats) || !isMergeable(toStats)) {
+        blocked.push(`${relativePath} (${describe(fromStats)}, cannot be merged)`)
+        continue
+      }
+
+      // Already migrated. Not a conflict.
+      if (sameContent(from, fromStats, to, toStats)) continue
+
+      // Both sides hold content and it differs. The destination wins — it may
+      // be a live Claude Code config — but the source copy is kept beside it so
+      // the delete below still loses nothing.
+      const preservedPath = `${to}${PRESERVED_SUFFIX}`
+      const preservedStats = lstatSync(preservedPath, { throwIfNoEntry: false })
+
+      if (!preservedStats) {
+        copyVerbatim(from, preservedPath)
+        preserved.set(relativePath, preservedPath)
+        continue
+      }
+
+      if (
+        isMergeable(preservedStats) &&
+        fromStats.isSymbolicLink() === preservedStats.isSymbolicLink() &&
+        sameContent(from, fromStats, preservedPath, preservedStats)
+      ) {
+        // A previous run already preserved it.
+        preserved.set(relativePath, preservedPath)
+        continue
+      }
+
+      blocked.push(
+        `${relativePath} (differs from ${destination}, and ${relativePath}${PRESERVED_SUFFIX} already exists with other contents)`,
+      )
+    }
+
     if (blocked.length > 0) {
+      const details = summarize('unresolved', blocked)
       logError(
         new Error(
-          `Migrated what it could from ${source}, but these already exist in ${destination} and were left behind: ${blocked.join(', ')}. ${source} has been kept.`,
+          `Merged what it could from ${source} into ${destination}, but ${blocked.length} entr${blocked.length === 1 ? 'y' : 'ies'} could not be resolved — ${details}. ${source} has been kept; resolve these by hand and restart.`,
         ),
       )
       return
     }
 
-    // Verify before deleting. cpSync throwing is not the only failure mode.
-    // existsSync follows links, so an entry copied verbatim as a dangling
-    // symlink would report as missing and wedge the migration forever. lstat
-    // sees the link itself: arriving as a link counts as arrived.
-    const missing = entries.filter(
-      entry =>
-        !existsSync(join(destination, entry)) &&
-        !lstatSync(join(destination, entry), { throwIfNoEntry: false }),
-    )
+    // Verify before deleting, at every depth rather than at the top level:
+    // the merge descends into shared directories, so a top-level check would
+    // now vouch for a directory name and nothing under it. cpSync throwing is
+    // not the only failure mode.
+    //
+    // lstat throughout. existsSync and statSync both follow links and treat a
+    // dangling one as absent or as a throw, and either would report an entry
+    // copied verbatim as a dangling symlink as missing — wedging the migration
+    // forever. A link arriving as a link with the same target is arrival.
+    const missing: string[] = []
+    const mismatched: string[] = []
+
+    for (const relativePath of relativePaths) {
+      const from = join(source, relativePath)
+      const fromStats = lstatSync(from, { throwIfNoEntry: false })
+      // Vanished since the snapshot; the drift check below is what refuses.
+      if (!fromStats) continue
+
+      const to = preserved.get(relativePath) ?? join(destination, relativePath)
+      const toStats = lstatSync(to, { throwIfNoEntry: false })
+      if (!toStats) {
+        missing.push(relativePath)
+        continue
+      }
+
+      if (fromStats.isSymbolicLink() !== toStats.isSymbolicLink()) {
+        mismatched.push(relativePath)
+        continue
+      }
+      if (fromStats.isSymbolicLink()) {
+        if (readlinkSync(from) !== readlinkSync(to)) mismatched.push(relativePath)
+        continue
+      }
+      if (fromStats.isDirectory() !== toStats.isDirectory()) {
+        mismatched.push(relativePath)
+        continue
+      }
+      // Directories carry no bytes of their own; their contents are separate
+      // paths in this same list.
+      if (fromStats.isDirectory()) continue
+      if (fromStats.size !== toStats.size) mismatched.push(relativePath)
+    }
+
     if (missing.length > 0) {
       logError(
         new Error(
-          `Refusing to remove ${source}: ${missing.join(', ')} did not arrive in ${destination}.`,
+          `Refusing to remove ${source}: ${summarize('did not arrive', missing)} in ${destination}.`,
         ),
       )
       return
     }
 
-    const sizeMismatch = entries.filter(entry => {
-      try {
-        // Same dangling-link trap as the `missing` check above: statSync
-        // follows links and throws on a dangling one, and the catch below
-        // would read that as a mismatch. A link is copied verbatim, so its
-        // arrival as a link is the check — never its target's size.
-        const aLink = lstatSync(join(source, entry), { throwIfNoEntry: false })
-        const bLink = lstatSync(join(destination, entry), {
-          throwIfNoEntry: false,
-        })
-        if (!aLink || !bLink) return true
-        // An asymmetry IS a mismatch: a link on one side and a real file on the
-        // other is not a verified copy, in either direction.
-        if (aLink.isSymbolicLink() !== bLink.isSymbolicLink()) return true
-        if (aLink.isSymbolicLink()) return false
-
-        const a = statSync(join(source, entry))
-        const b = statSync(join(destination, entry))
-        return a.isFile() && b.isFile() && a.size !== b.size
-      } catch {
-        return true
-      }
-    })
-    if (sizeMismatch.length > 0) {
+    if (mismatched.length > 0) {
       logError(
         new Error(
-          `Refusing to remove ${source}: ${sizeMismatch.join(', ')} differ in size at ${destination}.`,
+          `Refusing to remove ${source}: ${summarize('differ at', mismatched)} in ${destination}.`,
         ),
       )
       return
