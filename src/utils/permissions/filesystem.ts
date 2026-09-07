@@ -14,7 +14,6 @@ import { isAgentMemoryPath } from 'src/tools/AgentTool/agentMemory.js'
 import {
   FILE_EDIT_TOOL_NAME,
   GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
-  LEGACY_PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
   PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
 } from 'src/tools/FileEditTool/constants.js'
 import type { z } from 'zod/v4'
@@ -121,14 +120,10 @@ export const DANGEROUS_DIRECTORIES = [
 
 /**
  * Every config-folder spelling a session-scoped allow rule may be scoped to,
- * checked by step 1.6 of checkWritePermissionForTool. Three entries, not two:
- * the project scope is `.axa` in this fork, but `.claude` stays in
- * DANGEROUS_DIRECTORIES for projects that predate the rename, so both project
- * spellings need a way through.
+ * checked by step 1.6 of checkWritePermissionForTool.
  */
 const CONFIG_FOLDER_PERMISSION_PATTERNS = [
   PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
-  LEGACY_PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
   GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
 ] as const
 
@@ -380,12 +375,10 @@ export function isClaudeSettingsPath(filePath: string): boolean {
   // without this arm a foreign project's settings.json is unprotected — and
   // that is the case this arm exists for.
   //
-  // `.axa` is built from CONFIG_DIR_NAME so the canonical spelling has one
-  // definition. The legacy spelling stays a literal on purpose: it is not the
-  // config dir this product writes, it is a foreign directory this predicate
-  // still refuses to auto-edit, and LEGACY_CONFIG_DIR_NAME documents itself as
-  // read in exactly one place (the startup import check). Reaching for it here
-  // would make that constant's docblock false to save one string.
+  // The canonical spelling is the CONFIG_DIR_NAME constant, so it has one
+  // definition. The `.claude` literal alongside it is deliberate too, for an
+  // unrelated reason: see the DANGEROUS_DIRECTORIES entry of the same name in
+  // this file.
   //
   // Use platform separator so endsWith checks work on both Unix (/) and Windows (\)
   const isSettingsFileUnder = (configDirName: string): boolean =>

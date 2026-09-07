@@ -2,7 +2,7 @@ import { homedir } from 'os';
 import { basename, join, sep } from 'path';
 import React, { type ReactNode } from 'react';
 import { getOriginalCwd } from '../../../bootstrap/state.js';
-import { ASSISTANT_NAME, CONFIG_DIR_NAME, LEGACY_CONFIG_DIR_NAME } from '../../../constants/product.js';
+import { ASSISTANT_NAME, CONFIG_DIR_NAME } from '../../../constants/product.js';
 import { Text } from '../../../ink.js';
 import { getShortcutDisplay } from '../../../keybindings/shortcutFormat.js';
 import type { ToolPermissionContext } from '../../../Tool.js';
@@ -22,18 +22,13 @@ function isInFolder(filePath: string, folderPath: string): boolean {
 /**
  * Which project-scope config folder a path sits in, if any.
  *
- * Two spellings, because this fork's project config dir is CONFIG_DIR_NAME
- * ('.axa') but LEGACY_CONFIG_DIR_NAME ('.claude') is still protected for
- * projects that predate the rename. The returned scope decides which pattern
- * usePermissionHandler writes, and a rule for the wrong spelling would match
- * nothing — an option that appears to grant access and does not.
+ * The returned scope decides which pattern usePermissionHandler writes, and a
+ * rule for the wrong spelling would match nothing — an option that appears to
+ * grant access and does not.
  */
-export function getProjectConfigFolderScope(filePath: string): 'project-config-folder' | 'legacy-project-config-folder' | null {
+export function getProjectConfigFolderScope(filePath: string): 'project-config-folder' | null {
   if (isInFolder(filePath, expandPath(join(getOriginalCwd(), CONFIG_DIR_NAME)))) {
     return 'project-config-folder';
-  }
-  if (isInFolder(filePath, expandPath(join(getOriginalCwd(), LEGACY_CONFIG_DIR_NAME)))) {
-    return 'legacy-project-config-folder';
   }
   return null;
 }
@@ -50,7 +45,7 @@ export function getProjectConfigFolderScope(filePath: string): 'project-config-f
 export function isInGlobalConfigFolder(filePath: string): boolean {
   return isInFolder(filePath, join(homedir(), CONFIG_DIR_NAME));
 }
-export type ConfigFolderScope = 'project-config-folder' | 'legacy-project-config-folder' | 'global-config-folder';
+export type ConfigFolderScope = 'project-config-folder' | 'global-config-folder';
 export type PermissionOption = {
   type: 'accept-once';
 } | {
@@ -107,13 +102,12 @@ export function getFilePermissionOptions({
   }
   const inAllowedPath = pathInAllowedWorkingPath(filePath, toolPermissionContext);
 
-  // Check if this is a config folder path (project, legacy project, or global)
+  // Check if this is a config folder path (project or global)
   const projectConfigFolderScope = getProjectConfigFolderScope(filePath);
   const inGlobalConfigFolder = isInGlobalConfigFolder(filePath);
 
-  // Option 2: for a config folder — project `.axa`, legacy project `.claude`, or
-  // the global `~/.axa` — offer the config-folder option instead of the generic
-  // session one. The legacy spelling is one of the three cases, not the subject.
+  // Option 2: for a config folder — project `.claude` or the global `~/.claude`
+  // — offer the config-folder option instead of the generic session one.
   // Note: Session-level options are always shown since they only affect in-memory state,
   // not persisted settings. The allowManagedPermissionRulesOnly setting only restricts
   // persisted permission rules.

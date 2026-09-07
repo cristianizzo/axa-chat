@@ -49,19 +49,6 @@ export const MANAGED_CONFIG_DIR_NAME = '.claude'
 export const MANAGED_MEMORY_FILE_NAME = 'CLAUDE.md'
 
 /**
- * The pre-rename project directory, and the memory filenames that went with it.
- *
- * Read in exactly one place: the startup check that offers to import a Claude
- * Code project into axa. Nothing else consults them — axa reads and writes its
- * own names only, so a project that declines the import is simply a project
- * axa has no instructions for, rather than one silently served by another
- * product's files.
- */
-export const LEGACY_CONFIG_DIR_NAME = '.claude'
-export const LEGACY_MEMORY_FILE_NAME = 'CLAUDE.md'
-export const LEGACY_LOCAL_MEMORY_FILE_NAME = 'CLAUDE.local.md'
-
-/**
  * The project instruction files this tool reads and writes.
  *
  * Upstream's names, deliberately: the whole point of sharing the config
