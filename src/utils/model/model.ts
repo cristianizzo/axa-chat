@@ -296,19 +296,32 @@ export function isSameModel(a: ModelName, b: ModelName): boolean {
 // When a model declines a request as a possible Usage Policy violation
 // (stop_reason: "refusal"), retry the turn on a more compliant model. This is
 // internal and needs no --fallback-model flag: Opus-family models refuse where
-// Sonnet complies (empirically ~100% of AUP refusals are Opus, 0 Sonnet), so
-// Opus falls back to Sonnet. Returns undefined when there is no distinct
-// fallback (non-Opus models), which lets the refusal surface terminally.
+// Sonnet complies (empirically ~100% of AUP refusals are Opus, 0 Sonnet).
+//
+// The step is one model at a time, and query.ts re-enters here after each
+// switch, so the returns below form a chain: Opus 5 -> Opus 4.8 -> Sonnet.
+// Trying Opus 4.8 first keeps the capability drop as small as the refusal
+// allows — Opus 4.8 declines a different (narrower) set of prompts than Opus 5,
+// so most refusals never reach the Sonnet step. Returns undefined when there is
+// no distinct fallback left, which lets the refusal surface terminally.
 export function getRefusalFallbackModel(model: ModelName): ModelName | undefined {
   // Detect Opus on the canonical name, not the raw ID: modelOverrides can map
   // an Opus model to an arbitrary provider string (a Bedrock ARN, say) with no
   // "opus" in it, and a substring check on the raw ID would skip the fallback
   // for precisely the users who configured an override.
-  if (getCanonicalName(model).includes('opus')) {
-    const sonnet = getDefaultSonnetModel()
-    return isSameModel(sonnet, model) ? undefined : sonnet
+  if (!getCanonicalName(model).includes('opus')) {
+    return undefined
   }
-  return undefined
+
+  // Opus 4.8 is servable on every provider (see CLAUDE_OPUS_4_8_CONFIG), so
+  // unlike getDefaultOpusModel there's no 3P-lag branch to take here.
+  const previousOpus = getModelStrings().opus48
+  if (!isSameModel(previousOpus, model)) {
+    return previousOpus
+  }
+
+  const sonnet = getDefaultSonnetModel()
+  return isSameModel(sonnet, model) ? undefined : sonnet
 }
 
 // @[MODEL LAUNCH]: Update the default Fable model.

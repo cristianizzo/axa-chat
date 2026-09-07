@@ -972,10 +972,12 @@ async function* queryLoop(
           }
           if (innerError instanceof RefusalFallbackError) {
             // The model declined the request (AUP refusal) and claude.ts chose a
-            // more compliant fallback — internal opus->sonnet (no flag needed)
-            // OR an explicit --fallback-model. Drive the switch off the target
-            // the error carries (innerError.fallbackModel), NOT the --fallback
-            // param, so the internal case works too.
+            // more compliant fallback — the internal chain (no flag needed;
+            // getRefusalFallbackModel steps Opus 5 -> Opus 4.8 -> Sonnet, one
+            // model per pass through this branch) OR an explicit
+            // --fallback-model. Drive the switch off the target the error
+            // carries (innerError.fallbackModel), NOT the --fallback param, so
+            // the internal case works too.
             const target = innerError.fallbackModel
             if (target && target !== currentModel) {
               currentModel = target
