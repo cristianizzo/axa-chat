@@ -1068,8 +1068,9 @@ export function transformStatement(raw: RawStatement): ParsedStatement {
     // and extracting .Redirections) is both simpler and more robust: it catches
     // redirections on any node type, including ones we don't know about yet.
     //
-    // Double-counts redirections already on nested CommandAst commands (those are
-    // extracted at line ~395 into nestedCommands[i].redirections AND found again
+    // Double-counts redirections already on nested CommandAst commands (those
+    // are extracted by the embedded PS1's `function Get-RawRedirections` into
+    // nestedCommands[i].redirections AND found again
     // here). Harmless: step 4.6 only checks fileRedirections.length > 0, not
     // the exact count. No code does arithmetic on redirection counts.
     //
