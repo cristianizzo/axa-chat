@@ -46,137 +46,22 @@ export type PromptResponse = {
   selected: string
 }
 
-// Sync hook response schema
-export const syncHookResponseSchema = lazySchema(() =>
-  z.object({
-    continue: z
-      .boolean()
-      .describe('Whether Claude should continue after hook (default: true)')
-      .optional(),
-    suppressOutput: z
-      .boolean()
-      .describe('Hide stdout from transcript (default: false)')
-      .optional(),
-    stopReason: z
-      .string()
-      .describe('Message shown when continue is false')
-      .optional(),
-    decision: z.enum(['approve', 'block']).optional(),
-    reason: z.string().describe('Explanation for the decision').optional(),
-    systemMessage: z
-      .string()
-      .describe('Warning message shown to the user')
-      .optional(),
-    hookSpecificOutput: z
-      .union([
-        z.object({
-          hookEventName: z.literal('PreToolUse'),
-          permissionDecision: permissionBehaviorSchema().optional(),
-          permissionDecisionReason: z.string().optional(),
-          updatedInput: z.record(z.string(), z.unknown()).optional(),
-          additionalContext: z.string().optional(),
-        }),
-        z.object({
-          hookEventName: z.literal('UserPromptSubmit'),
-          additionalContext: z.string().optional(),
-        }),
-        z.object({
-          hookEventName: z.literal('SessionStart'),
-          additionalContext: z.string().optional(),
-          initialUserMessage: z.string().optional(),
-          watchPaths: z
-            .array(z.string())
-            .describe('Absolute paths to watch for FileChanged hooks')
-            .optional(),
-        }),
-        z.object({
-          hookEventName: z.literal('Setup'),
-          additionalContext: z.string().optional(),
-        }),
-        z.object({
-          hookEventName: z.literal('SubagentStart'),
-          additionalContext: z.string().optional(),
-        }),
-        z.object({
-          hookEventName: z.literal('PostToolUse'),
-          additionalContext: z.string().optional(),
-          updatedMCPToolOutput: z
-            .unknown()
-            .describe('Updates the output for MCP tools')
-            .optional(),
-        }),
-        z.object({
-          hookEventName: z.literal('PostToolUseFailure'),
-          additionalContext: z.string().optional(),
-        }),
-        z.object({
-          hookEventName: z.literal('PermissionDenied'),
-          retry: z.boolean().optional(),
-        }),
-        z.object({
-          hookEventName: z.literal('Notification'),
-          additionalContext: z.string().optional(),
-        }),
-        z.object({
-          hookEventName: z.literal('PermissionRequest'),
-          decision: z.union([
-            z.object({
-              behavior: z.literal('allow'),
-              updatedInput: z.record(z.string(), z.unknown()).optional(),
-              updatedPermissions: z.array(permissionUpdateSchema()).optional(),
-            }),
-            z.object({
-              behavior: z.literal('deny'),
-              message: z.string().optional(),
-              interrupt: z.boolean().optional(),
-            }),
-          ]),
-        }),
-        z.object({
-          hookEventName: z.literal('Elicitation'),
-          action: z.enum(['accept', 'decline', 'cancel']).optional(),
-          content: z.record(z.string(), z.unknown()).optional(),
-        }),
-        z.object({
-          hookEventName: z.literal('ElicitationResult'),
-          action: z.enum(['accept', 'decline', 'cancel']).optional(),
-          content: z.record(z.string(), z.unknown()).optional(),
-        }),
-        z.object({
-          hookEventName: z.literal('CwdChanged'),
-          watchPaths: z
-            .array(z.string())
-            .describe('Absolute paths to watch for FileChanged hooks')
-            .optional(),
-        }),
-        z.object({
-          hookEventName: z.literal('FileChanged'),
-          watchPaths: z
-            .array(z.string())
-            .describe('Absolute paths to watch for FileChanged hooks')
-            .optional(),
-        }),
-        z.object({
-          hookEventName: z.literal('WorktreeCreate'),
-          worktreePath: z.string(),
-        }),
-      ])
-      .optional(),
-  }),
-)
-
-// Zod schema for hook JSON output validation
-export const hookJSONOutputSchema = lazySchema(() => {
-  // Async hook response schema
-  const asyncHookResponseSchema = z.object({
-    async: z.literal(true),
-    asyncTimeout: z.number().optional(),
-  })
-  return z.union([asyncHookResponseSchema, syncHookResponseSchema()])
-})
+/**
+ * Hook JSON output validation schema.
+ *
+ * Re-exported from coreSchemas so there is exactly one definition. This file
+ * previously carried a hand-maintained copy; the two were kept in sync only by
+ * the compile-time assertion below, and a narrowed value from one copy was not
+ * assignable to the other ("two different types with this name exist").
+ */
+export {
+  HookJSONOutputSchema as hookJSONOutputSchema,
+  SyncHookJSONOutputSchema as syncHookResponseSchema,
+} from 'src/entrypoints/sdk/coreSchemas.js'
+import { HookJSONOutputSchema } from 'src/entrypoints/sdk/coreSchemas.js'
 
 // Infer the TypeScript type from the schema
-type SchemaHookJSONOutput = z.infer<ReturnType<typeof hookJSONOutputSchema>>
+type SchemaHookJSONOutput = z.infer<ReturnType<typeof HookJSONOutputSchema>>
 
 // Type guard function to check if response is sync
 export function isSyncHookJSONOutput(

@@ -2573,7 +2573,9 @@ async function* executeHooks({
           return
         }
 
-        if (httpJson) {
+        // Negating `httpJson && isAsyncHookJSONOutput(httpJson)` above does not
+        // narrow, so re-assert the sync shape positively here.
+        if (httpJson && isSyncHookJSONOutput(httpJson)) {
           const processed = processHookJSONOutput({
             json: httpJson,
             command: hook.url,

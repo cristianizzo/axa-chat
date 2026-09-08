@@ -7,6 +7,7 @@
  * SDK consumers should use coreSchemas.ts instead.
  */
 
+import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod/v4'
 import { lazySchema } from '../../utils/lazySchema.js'
 import {
@@ -33,8 +34,16 @@ import {
 // External Type Placeholders
 // ============================================================================
 
-// JSONRPCMessage from @modelcontextprotocol/sdk - treat as unknown
-export const JSONRPCMessagePlaceholder = lazySchema(() => z.unknown())
+/**
+ * JSONRPCMessage from @modelcontextprotocol/sdk.
+ *
+ * `z.custom` accepts anything at runtime (identical to `z.unknown()`; nothing
+ * parses this schema) but reports the real type, so print.ts can hand the
+ * payload straight to `transport.onmessage` without a cast.
+ */
+export const JSONRPCMessagePlaceholder = lazySchema(() =>
+  z.custom<JSONRPCMessage>(),
+)
 
 // ============================================================================
 // Hook Callback Types
