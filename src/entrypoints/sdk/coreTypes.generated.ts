@@ -1,169 +1,133 @@
-export type PermissionMode =
-  | 'default'
-  | 'acceptEdits'
-  | 'bypassPermissions'
-  | 'plan'
+/**
+ * SDK core types, derived from the Zod schemas in `coreSchemas.ts`.
+ *
+ * `coreSchemas.ts` is the single source of truth. Every type below is a
+ * `z.infer` over the corresponding schema, so a schema edit propagates here
+ * automatically and the two can never drift.
+ *
+ * Note the `ReturnType<...>` in every alias: the schemas are wrapped in
+ * `lazySchema()`, so `typeof FooSchema` is `() => ZodType`, not the schema.
+ * A bare `z.infer<typeof FooSchema>` silently resolves to `unknown` and
+ * destroys type safety at every use site — always go through `ReturnType`.
+ */
 
-export type ExitReason =
-  | 'clear'
-  | 'resume'
-  | 'logout'
-  | 'prompt_input_exit'
-  | 'other'
-  | 'bypass_permissions_disabled'
+import type { z } from 'zod/v4'
+import type {
+  AsyncHookJSONOutputSchema,
+  ExitReasonSchema,
+  HookEventSchema,
+  HookInputSchema,
+  HookJSONOutputSchema,
+  ModelUsageSchema,
+  PermissionModeSchema,
+  PermissionResultSchema,
+  SDKAssistantMessageErrorSchema,
+  SDKAssistantMessageSchema,
+  SDKCompactBoundaryMessageSchema,
+  SDKMessageSchema,
+  SDKPartialAssistantMessageSchema,
+  SDKPermissionDenialSchema,
+  SDKRateLimitInfoSchema,
+  SDKResultMessageSchema,
+  SDKSessionInfoSchema,
+  SDKStatusMessageSchema,
+  SDKStatusSchema,
+  SDKSystemMessageSchema,
+  SDKToolProgressMessageSchema,
+  SDKUserMessageReplaySchema,
+  SDKUserMessageSchema,
+  SyncHookJSONOutputSchema,
+} from './coreSchemas.js'
 
-export type HookEvent =
-  | 'PreToolUse'
-  | 'PostToolUse'
-  | 'PostToolUseFailure'
-  | 'Notification'
-  | 'UserPromptSubmit'
-  | 'SessionStart'
-  | 'SessionEnd'
-  | 'Stop'
-  | 'StopFailure'
-  | 'SubagentStart'
-  | 'SubagentStop'
-  | 'PreCompact'
-  | 'PostCompact'
-  | 'PermissionRequest'
-  | 'PermissionDenied'
-  | 'Setup'
-  | 'TeammateIdle'
-  | 'TaskCreated'
-  | 'TaskCompleted'
-  | 'Elicitation'
-  | 'ElicitationResult'
-  | 'ConfigChange'
-  | 'WorktreeCreate'
-  | 'WorktreeRemove'
-  | 'InstructionsLoaded'
-  | 'CwdChanged'
-  | 'FileChanged'
+// ============================================================================
+// Enums
+// ============================================================================
 
-export type ModelUsage = {
-  costUSD?: number
-  inputTokens?: number
-  outputTokens?: number
-  cacheCreationInputTokens?: number
-  cacheReadInputTokens?: number
-  [key: string]: number | undefined
-}
+export type PermissionMode = z.infer<ReturnType<typeof PermissionModeSchema>>
 
-export type SDKStatus = 'compacting' | string | null
+export type ExitReason = z.infer<ReturnType<typeof ExitReasonSchema>>
 
-export type SDKBaseMessage = {
-  type: string
-  subtype?: string
-  uuid?: string
-  session_id?: string
-  [key: string]: unknown
-}
+export type HookEvent = z.infer<ReturnType<typeof HookEventSchema>>
 
-export type SDKAssistantMessage = SDKBaseMessage & {
-  type: 'assistant'
-  message?: { content?: unknown[] }
-}
+// ============================================================================
+// Usage & status
+// ============================================================================
 
-export type SDKAssistantMessageError = SDKBaseMessage & {
-  type: 'assistant_error'
-  message?: string
-}
+export type ModelUsage = z.infer<ReturnType<typeof ModelUsageSchema>>
 
-export type SDKPartialAssistantMessage = SDKBaseMessage & {
-  type: 'assistant_partial'
-  delta?: string
-}
+export type SDKStatus = z.infer<ReturnType<typeof SDKStatusSchema>>
 
-export type SDKResultMessage = SDKBaseMessage & {
-  type: 'result'
-  is_error?: boolean
-  result?: string
-  duration_ms?: number
-  total_cost_usd?: number
-}
+export type SDKRateLimitInfo = z.infer<ReturnType<typeof SDKRateLimitInfoSchema>>
 
-export type SDKStatusMessage = SDKBaseMessage & {
-  type: 'status'
-  status: SDKStatus
-}
+// ============================================================================
+// SDK messages
+// ============================================================================
 
-export type SDKSystemMessage = SDKBaseMessage & {
-  type: 'system'
-  content?: string
-}
+export type SDKAssistantMessage = z.infer<
+  ReturnType<typeof SDKAssistantMessageSchema>
+>
 
-export type SDKCompactBoundaryMessage = SDKSystemMessage & {
-  subtype: 'compact_boundary' | 'microcompact_boundary'
-}
+/**
+ * The *reason* an assistant turn failed, carried on `SDKAssistantMessage.error`
+ * and returned by `categorizeRetryableAPIError`. It is an enum of error codes,
+ * not a message envelope.
+ */
+export type SDKAssistantMessageError = z.infer<
+  ReturnType<typeof SDKAssistantMessageErrorSchema>
+>
 
-export type SDKToolProgressMessage = SDKBaseMessage & {
-  type: 'tool_progress'
-  data?: Record<string, unknown>
-}
+/** Streaming partial assistant output. Its `type` is `'stream_event'`. */
+export type SDKPartialAssistantMessage = z.infer<
+  ReturnType<typeof SDKPartialAssistantMessageSchema>
+>
 
-export type SDKPermissionDenial = SDKBaseMessage & {
-  type: 'permission_denial'
-  mode?: PermissionMode
-  toolName?: string
-}
+export type SDKResultMessage = z.infer<ReturnType<typeof SDKResultMessageSchema>>
 
-export type SDKRateLimitInfo = {
-  remaining?: number
-  resetAt?: string
-}
+export type SDKStatusMessage = z.infer<ReturnType<typeof SDKStatusMessageSchema>>
 
-export type SDKUserMessage = SDKBaseMessage & {
-  type: 'user'
-  message?: { content?: unknown }
-}
+export type SDKSystemMessage = z.infer<ReturnType<typeof SDKSystemMessageSchema>>
 
-export type SDKUserMessageReplay = SDKUserMessage & {
-  isReplay?: boolean
-}
+export type SDKCompactBoundaryMessage = z.infer<
+  ReturnType<typeof SDKCompactBoundaryMessageSchema>
+>
 
-export type SDKSessionInfo = {
-  sessionId: string
-  summary?: string
-  cwd?: string
-  createdAt?: string
-  updatedAt?: string
-}
+export type SDKToolProgressMessage = z.infer<
+  ReturnType<typeof SDKToolProgressMessageSchema>
+>
 
-export type PermissionResult =
-  | { behavior: 'allow'; updatedInput?: Record<string, unknown> }
-  | { behavior: 'deny'; message?: string }
-  | { behavior: 'ask'; updatedInput?: Record<string, unknown>; message?: string }
+/**
+ * A record of a tool call that was denied. Accumulated by QueryEngine and
+ * reported on the result message's `permission_denials`; it is not itself a
+ * message in the `SDKMessage` stream.
+ */
+export type SDKPermissionDenial = z.infer<
+  ReturnType<typeof SDKPermissionDenialSchema>
+>
 
-export type HookInput = {
-  session_id?: string
-  event?: HookEvent
-  [key: string]: unknown
-}
+export type SDKUserMessage = z.infer<ReturnType<typeof SDKUserMessageSchema>>
 
-export type HookJSONOutput = {
-  continue?: boolean
-  stopReason?: string
-  message?: string
-  decision?: 'allow' | 'deny' | 'ask'
-  [key: string]: unknown
-}
+export type SDKUserMessageReplay = z.infer<
+  ReturnType<typeof SDKUserMessageReplaySchema>
+>
 
-export type SyncHookJSONOutput = HookJSONOutput
+export type SDKMessage = z.infer<ReturnType<typeof SDKMessageSchema>>
 
-export type AsyncHookJSONOutput = HookJSONOutput & {
-  waitMs?: number
-}
+// ============================================================================
+// Sessions, permissions & hooks
+// ============================================================================
 
-export type SDKMessage =
-  | SDKAssistantMessage
-  | SDKAssistantMessageError
-  | SDKCompactBoundaryMessage
-  | SDKPartialAssistantMessage
-  | SDKPermissionDenial
-  | SDKResultMessage
-  | SDKStatusMessage
-  | SDKSystemMessage
-  | SDKToolProgressMessage
-  | SDKUserMessage
-  | SDKUserMessageReplay
+export type SDKSessionInfo = z.infer<ReturnType<typeof SDKSessionInfoSchema>>
+
+export type PermissionResult = z.infer<ReturnType<typeof PermissionResultSchema>>
+
+export type HookInput = z.infer<ReturnType<typeof HookInputSchema>>
+
+export type SyncHookJSONOutput = z.infer<
+  ReturnType<typeof SyncHookJSONOutputSchema>
+>
+
+export type AsyncHookJSONOutput = z.infer<
+  ReturnType<typeof AsyncHookJSONOutputSchema>
+>
+
+export type HookJSONOutput = z.infer<ReturnType<typeof HookJSONOutputSchema>>

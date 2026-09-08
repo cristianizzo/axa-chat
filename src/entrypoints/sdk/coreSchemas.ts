@@ -7,6 +7,12 @@
  * @see scripts/generate-sdk-types.ts for type generation
  */
 
+import type {
+  BetaMessage,
+  BetaRawMessageStreamEvent,
+} from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
+import type { MessageParam } from '@anthropic-ai/sdk/resources/messages.mjs'
+import type { UUID } from 'crypto'
 import { z } from 'zod/v4'
 import { CONFIG_DIR_NAME } from '../../constants/product.js'
 import { lazySchema } from '../../utils/lazySchema.js'
@@ -283,7 +289,12 @@ export const PermissionUpdateSchema = lazySchema(() =>
     }),
     z.object({
       type: z.literal('setMode'),
-      mode: z.lazy(() => PermissionModeSchema()),
+      // Direct call, not z.lazy: PermissionModeSchema is itself a lazySchema
+      // thunk, so the forward reference is already deferred. Wrapping it in
+      // z.lazy additionally makes `mode` infer as optional (ZodLazy's output
+      // is not statically known to exclude undefined), which breaks
+      // assignability to types/permissions.ts's PermissionUpdate.
+      mode: PermissionModeSchema(),
       destination: PermissionUpdateDestinationSchema(),
     }),
     z.object({
@@ -1088,10 +1099,23 @@ export const AccountInfoSchema = lazySchema(() =>
       tokenSource: z.string().optional(),
       apiKeySource: z.string().optional(),
       apiProvider: z
-        .enum(['firstParty', 'bedrock', 'vertex', 'foundry'])
+        .enum([
+          'firstParty',
+          'bedrock',
+          'vertex',
+          'foundry',
+          // Fork-only providers. `utils/model/providers.ts` picks these from
+          // the account chosen at /login, so they reach this field the same
+          // way the four upstream backends do.
+          'openai',
+          'ollama',
+          'deepseek',
+          'kimi',
+          'grok',
+        ])
         .optional()
         .describe(
-          'Active API backend. Anthropic OAuth login only applies when "firstParty"; for 3P providers the other fields are absent and auth is external (AWS creds, gcloud ADC, etc.).',
+          'Active API backend. Anthropic OAuth login only applies when "firstParty"; for 3P providers the other fields are absent and auth is external (AWS creds, gcloud ADC, an account-scoped API key, etc.).',
         ),
     })
     .describe("Information about the logged in user's account."),
@@ -1231,21 +1255,53 @@ export const RewindFilesResultSchema = lazySchema(() =>
 // External Type Placeholders
 // ============================================================================
 //
-// These schemas use z.unknown() as placeholders for external types.
-// The generation script uses TypeOverrideMap to output the correct TS type references.
-// This allows us to define SDK message types in Zod while maintaining proper typing.
+// These stand in for types that live outside this file — either in
+// @anthropic-ai/sdk or in node's crypto. They carry no runtime validation
+// (nothing parses these schemas; see the control-protocol note in
+// docs/ARCHITECTURE.md), so `z.custom` is the accurate spelling: it accepts
+// anything at runtime, exactly as the previous `z.unknown()` did, while
+// `z.infer` reports the real type the producing code actually emits.
+//
+// A bare `z.unknown()` here is not neutral: it forces every consumer that
+// reads `.role`, `.id`, `.type`, `.delta` or `.index` off these fields into a
+// cast, which is how the shape drifts unnoticed.
 
-/** Placeholder for APIUserMessage from @anthropic-ai/sdk */
-export const APIUserMessagePlaceholder = lazySchema(() => z.unknown())
+/**
+ * The `message` of an SDKUserMessage: an Anthropic Messages API user turn.
+ * Consumers read `.role` (cli/structuredIO.ts) and `.content`
+ * (cli/print.ts → bridge/inboundAttachments.ts, which types content as
+ * `string | ContentBlockParam[]` — i.e. the non-beta `MessageParam`).
+ */
+export const APIUserMessagePlaceholder = lazySchema(() =>
+  z.custom<MessageParam>(),
+)
 
-/** Placeholder for APIAssistantMessage from @anthropic-ai/sdk */
-export const APIAssistantMessagePlaceholder = lazySchema(() => z.unknown())
+/**
+ * The `message` of an SDKAssistantMessage. The fork's assistant turns carry
+ * beta content blocks throughout (utils/messages/mappers.ts maps them as
+ * `BetaContentBlock`), so this is the beta message, not the GA one.
+ * Consumers read `.id` (cli/transports/ccrClient.ts) and `.content`.
+ */
+export const APIAssistantMessagePlaceholder = lazySchema(() =>
+  z.custom<BetaMessage>(),
+)
 
-/** Placeholder for RawMessageStreamEvent from @anthropic-ai/sdk */
-export const RawMessageStreamEventPlaceholder = lazySchema(() => z.unknown())
+/**
+ * The `event` of an SDKPartialAssistantMessage. services/api/claude.ts streams
+ * `Stream<BetaRawMessageStreamEvent>`, and that is what reaches this field.
+ * cli/transports/ccrClient.ts narrows it on `.type` and reads
+ * `.message.id`, `.index` and `.delta`.
+ */
+export const RawMessageStreamEventPlaceholder = lazySchema(() =>
+  z.custom<BetaRawMessageStreamEvent>(),
+)
 
-/** Placeholder for UUID from crypto */
-export const UUIDPlaceholder = lazySchema(() => z.string())
+/**
+ * A message/session UUID. `crypto.randomUUID()` produces the `UUID` template
+ * literal type, and helpers such as `doesMessageExistInSession` require it, so
+ * a plain `z.string()` here would break every round trip through the schema.
+ */
+export const UUIDPlaceholder = lazySchema(() => z.custom<UUID>())
 
 /** Placeholder for NonNullableUsage (mapped type over Usage) */
 export const NonNullableUsagePlaceholder = lazySchema(() => z.unknown())
