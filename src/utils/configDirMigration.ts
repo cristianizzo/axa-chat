@@ -46,20 +46,31 @@ const NEW_DIR_NAME = CONFIG_DIR_NAME
  *  install's live config — but nothing from `~/.axa` may be lost either. */
 const PRESERVED_SUFFIX = '.from-axa'
 
-/** Directories are identity-only: their size is filesystem noise, and any
- *  change to their contents shows up as a path of its own. */
-const DIRECTORY_SENTINEL = -1
+/** Directories are identity-only: their own size and mtime are filesystem
+ *  noise, and any change to their contents shows up as a path of its own. */
+const DIRECTORY_SIGNATURE = 'd'
 
 /**
- * Every path under `root`, relative to it, mapped to its size. lstat, never
+ * Every path under `root`, relative to it, mapped to a signature. lstat, never
  * stat: a link is a node here, not something to follow, so a dangling or
  * looping link neither throws nor walks out of the tree.
+ *
+ * The signature is type + size + mtime + inode, not size alone. Size alone
+ * misses the case this check exists for: a session rewriting a file in place at
+ * the same length, or retargeting a symlink to a target of the same length,
+ * during the migration. Those bytes were never copied, and a size-keyed
+ * before/after comparison agrees they are unchanged — so the source would be
+ * deleted. mtime catches a rewrite; inode catches a replace-by-rename that
+ * happened to preserve both. Content hashing would be stronger still, but this
+ * walk runs over the whole tree twice and `projects/` holds every transcript
+ * ever recorded — stat is O(1) per entry, and defeating mtime *and* inode
+ * requires a deliberate `utimes`, not an accidental racer.
  *
  * Used for both the before and after snapshots so the two are comparable by
  * construction — a second, separately written walk would be its own bug.
  */
-function snapshotTree(root: string): Map<string, number> {
-  const sizes = new Map<string, number>()
+function snapshotTree(root: string): Map<string, string> {
+  const signatures = new Map<string, string>()
 
   const walk = (dir: string, prefix: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -72,14 +83,22 @@ function snapshotTree(root: string): Map<string, number> {
       const stats = lstatSync(absolutePath, { throwIfNoEntry: false })
       if (!stats) continue
 
-      const isDirectory = stats.isDirectory()
-      sizes.set(relativePath, isDirectory ? DIRECTORY_SENTINEL : stats.size)
-      if (isDirectory) walk(absolutePath, relativePath)
+      if (stats.isDirectory()) {
+        signatures.set(relativePath, DIRECTORY_SIGNATURE)
+        walk(absolutePath, relativePath)
+        continue
+      }
+
+      const kind = stats.isSymbolicLink() ? 'l' : 'f'
+      signatures.set(
+        relativePath,
+        `${kind}:${stats.size}:${stats.mtimeMs}:${stats.ino}`,
+      )
     }
   }
 
   walk(root, '')
-  return sizes
+  return signatures
 }
 
 /** Keeps the abort message readable when the difference is thousands of files. */
@@ -427,18 +446,18 @@ export function migrateAxaConfigDir(): void {
     const disappeared = [...sourceBefore.keys()].filter(
       relativePath => !sourceAfter.has(relativePath),
     )
-    const resized = [...sourceBefore.entries()]
-      .filter(([relativePath, size]) => {
+    const changed = [...sourceBefore.entries()]
+      .filter(([relativePath, signature]) => {
         const now = sourceAfter.get(relativePath)
-        return now !== undefined && now !== size
+        return now !== undefined && now !== signature
       })
       .map(([relativePath]) => relativePath)
 
-    if (appeared.length > 0 || disappeared.length > 0 || resized.length > 0) {
+    if (appeared.length > 0 || disappeared.length > 0 || changed.length > 0) {
       const changes = [
         summarize('appeared', appeared),
         summarize('disappeared', disappeared),
-        summarize('changed size', resized),
+        summarize('changed', changed),
       ]
         .filter(Boolean)
         .join('; ')
@@ -459,6 +478,14 @@ export function migrateAxaConfigDir(): void {
       )
     }
   } catch (error) {
-    logError(new Error(`Failed to migrate ${source} to ${destination}: ${error}`))
+    // stderr as well, like every other failure path here. This one is the most
+    // important to say out loud, not the least: it catches the unanticipated
+    // cases (a permissions error, a full disk, an IO fault), it repeats on every
+    // launch, and `logError` alone only reaches the console under HARD_FAIL.
+    // Silence here is a migration that never happens and never explains itself.
+    const detail = error instanceof Error ? error.message : String(error)
+    const message = `Failed to migrate ${source} to ${destination}: ${detail}. ${source} has been kept.`
+    announce(message)
+    logError(new Error(message, { cause: error }))
   }
 }
