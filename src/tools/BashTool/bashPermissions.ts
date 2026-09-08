@@ -439,8 +439,11 @@ const SAFE_ENV_VARS = new Set([
  * external users. There is no single gate to point at: the restriction is
  * carried by four textually identical copies of
  * `process.env.USER_TYPE === 'ant' && ANT_ONLY_SAFE_ENV_VARS.has(varName)`,
- * one per env-stripping call site. To audit it, grep that string — EVERY
- * `.has(` use of this set must sit inside it, or the stripping ships to
+ * one per env-stripping call site. To audit it, grep that string: it returns
+ * FIVE hits, not four, because this sentence quotes it too. Four call sites
+ * plus this comment is the passing result — four hits means a call site was
+ * deleted, six means one was added. EVERY `.has(` use of this set must sit
+ * inside that expression, or the stripping ships to
  * external users. DOCKER_HOST redirects the Docker
  * daemon endpoint — stripping it defeats prefix-based permission restrictions
  * by hiding the network endpoint from the permission check. KUBECONFIG

@@ -142,8 +142,8 @@ async function extractPrefixFromElement(
   // Bare-root guard: buildPrefix returns 'git' for `git` with no subcommand
   // found (empty args, or only global flags). That's too broad — would
   // auto-allow `git push --force` forever. Bash's extractor doesn't gate this
-  // — its `collapsed.push(longestCommonPrefix(group))` in bash/prefix.ts has
-  // no equivalent check (separate fix). Reject single-word results for
+  // — its `collapsed.push(longestCommonPrefix(group))` in
+  // src/utils/bash/prefix.ts has no equivalent check (separate fix). Reject single-word results for
   // commands whose spec declares subcommands OR that have DEPTH_RULES entries
   // (gcloud, aws, kubectl, etc.) which implies subcommand structure even
   // without a loaded spec. (bug #17)
