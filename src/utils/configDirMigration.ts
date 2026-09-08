@@ -200,11 +200,29 @@ export function migrateAxaConfigDir(): void {
     source = join(home, OLD_DIR_NAME)
     destination = join(home, NEW_DIR_NAME)
 
-    if (!existsSync(source)) return
+    // lstat, not existsSync: everything below assumes the source is a real
+    // directory it can readdir. A regular file or a symlink named `.axa` would
+    // otherwise reach readdirSync and throw ENOTDIR into the top-level catch,
+    // producing a cryptic message on every launch forever. A symlink is refused
+    // rather than followed: readdir would happily walk it, but rmSync at the end
+    // removes the *link*, leaving the real directory orphaned and the migration
+    // reporting success over data it did not move.
+    const sourceStats = lstatSync(source, { throwIfNoEntry: false })
+    if (!sourceStats) return
+    if (!sourceStats.isDirectory()) {
+      const kind = sourceStats.isSymbolicLink() ? 'a symlink' : 'not a directory'
+      const message = `Cannot migrate ${source}: it is ${kind}. Move it aside and restart.`
+      announce(message)
+      logError(new Error(message))
+      return
+    }
 
-    // getGlobalClaudeFile prefers `<configDir>/.config.json` when present, so a
-    // Claude Code install carrying one would silently redirect the whole config
-    // after the move. Refuse rather than guess.
+    // getGlobalClaudeFile prefers `<configDir>/.config.json` over `config.json`
+    // unconditionally (utils/env.ts), so this is not an ordinary file conflict
+    // the merge below could settle: letting the destination's copy win would
+    // leave it still overriding, and every migrated setting in `config.json`
+    // would be silently ignored afterwards. The clash is over which file is read
+    // at all, not over its contents. Refuse rather than guess.
     if (existsSync(join(destination, '.config.json'))) {
       // stderr as well as logError, for the same reason as every other refusal
       // path here: logError only reaches the console under HARD_FAIL, and this
