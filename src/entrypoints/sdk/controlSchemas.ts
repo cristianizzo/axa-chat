@@ -102,6 +102,21 @@ export const SDKControlInterruptRequestSchema = lazySchema(() =>
     .describe('Interrupts the currently running conversation turn.'),
 )
 
+export const SDKControlEndSessionRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('end_session'),
+      reason: z
+        .string()
+        .optional()
+        .describe(
+          'Free-form reason recorded in the CLI debug log. Diagnostic only.',
+        ),
+    })
+    .describe(
+      'Ends the session: aborts the running turn and breaks the stdin read loop so the CLI drains pending output and exits.',
+    ),
+)
 
 export const SDKControlPermissionRequestSchema = lazySchema(() =>
   z
@@ -452,6 +467,133 @@ export const SDKControlMcpToggleRequestSchema = lazySchema(() =>
 )
 
 
+export const SDKControlChannelEnableRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('channel_enable'),
+      serverName: z.string(),
+    })
+    .describe(
+      "Enables an MCP server's `claude/channel` capability. Producers are out-of-tree SDK hosts and the IDE extension; see services/mcp/channelAllowlist.ts — the allowlist is not a security boundary, this request still runs the full gate.",
+    ),
+)
+
+export const SDKControlMcpAuthenticateRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('mcp_authenticate'),
+      serverName: z.string(),
+    })
+    .describe(
+      'Starts an OAuth flow for an sse/http MCP server without opening a browser. Responds with the authorization URL; the caller then returns the redirect via mcp_oauth_callback_url.',
+    ),
+)
+
+export const SDKControlMcpOAuthCallbackUrlRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('mcp_oauth_callback_url'),
+      serverName: z.string(),
+      callbackUrl: z
+        .string()
+        .describe(
+          'Full redirect URL the provider sent the caller to. Must carry a `code` or `error` query parameter.',
+        ),
+    })
+    .describe(
+      'Second half of the mcp_authenticate handshake: hands the OAuth redirect URL back to the in-flight flow for the named server.',
+    ),
+)
+
+export const SDKControlMcpClearAuthRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('mcp_clear_auth'),
+      serverName: z.string(),
+    })
+    .describe(
+      'Revokes the stored OAuth tokens for an sse/http MCP server and reconnects it.',
+    ),
+)
+
+export const SDKControlClaudeAuthenticateRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('claude_authenticate'),
+      loginWithClaudeAi: z
+        .boolean()
+        .optional()
+        .describe(
+          'True (the default) logs in with a Claude subscription; false uses an Anthropic Console account.',
+        ),
+    })
+    .describe(
+      'Starts Anthropic OAuth over the control channel. The CLI is headless here, so it returns both a manual and an automatic URL and waits for the caller to drive the browser.',
+    ),
+)
+
+export const SDKControlClaudeOAuthCallbackRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('claude_oauth_callback'),
+      authorizationCode: z.string(),
+      state: z.string(),
+    })
+    .describe(
+      'Delivers the manually-pasted `code#state` pair from the claude_authenticate success page, then waits for the flow to finish.',
+    ),
+)
+
+export const SDKControlClaudeOAuthWaitForCompletionRequestSchema = lazySchema(
+  () =>
+    z
+      .object({
+        subtype: z.literal('claude_oauth_wait_for_completion'),
+      })
+      .describe(
+        'Waits for an in-flight claude_authenticate flow to complete without supplying a code — used when the localhost listener catches the redirect.',
+      ),
+)
+
+export const SDKControlGenerateSessionTitleRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('generate_session_title'),
+      description: z
+        .string()
+        .describe('Text the title is generated from (usually the first turn).'),
+      persist: z
+        .boolean()
+        .optional()
+        .describe('When true, the generated title is saved to the session.'),
+    })
+    .describe(
+      'Generates a short session title with a fast model. Answered asynchronously so the stdin loop is not blocked on the API round trip.',
+    ),
+)
+
+export const SDKControlSideQuestionRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('side_question'),
+      question: z.string(),
+    })
+    .describe(
+      "Asks a one-shot question on a fork of the main thread's cached prefix, without touching the main conversation. Answered asynchronously.",
+    ),
+)
+
+export const SDKControlRemoteControlRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('remote_control'),
+      enabled: z.boolean(),
+    })
+    .describe(
+      'Enables or disables the Remote Control bridge for this session. Enabling responds with the session, connect and environment identifiers.',
+    ),
+)
+
 export const SDKControlStopTaskRequestSchema = lazySchema(() =>
   z
     .object({
@@ -552,6 +694,7 @@ export const SDKControlElicitationResponseSchema = lazySchema(() =>
 export const SDKControlRequestInnerSchema = lazySchema(() =>
   z.union([
     SDKControlInterruptRequestSchema(),
+    SDKControlEndSessionRequestSchema(),
     SDKControlPermissionRequestSchema(),
     SDKControlInitializeRequestSchema(),
     SDKControlSetPermissionModeRequestSchema(),
@@ -568,6 +711,16 @@ export const SDKControlRequestInnerSchema = lazySchema(() =>
     SDKControlReloadPluginsRequestSchema(),
     SDKControlMcpReconnectRequestSchema(),
     SDKControlMcpToggleRequestSchema(),
+    SDKControlChannelEnableRequestSchema(),
+    SDKControlMcpAuthenticateRequestSchema(),
+    SDKControlMcpOAuthCallbackUrlRequestSchema(),
+    SDKControlMcpClearAuthRequestSchema(),
+    SDKControlClaudeAuthenticateRequestSchema(),
+    SDKControlClaudeOAuthCallbackRequestSchema(),
+    SDKControlClaudeOAuthWaitForCompletionRequestSchema(),
+    SDKControlGenerateSessionTitleRequestSchema(),
+    SDKControlSideQuestionRequestSchema(),
+    SDKControlRemoteControlRequestSchema(),
     SDKControlStopTaskRequestSchema(),
     SDKControlApplyFlagSettingsRequestSchema(),
     SDKControlGetSettingsRequestSchema(),
