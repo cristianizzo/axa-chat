@@ -2,9 +2,13 @@
  * SDK Core Schemas - Zod schemas for serializable SDK data types.
  *
  * These schemas are the single source of truth for SDK data types.
- * TypeScript types are generated from these schemas and committed for IDE support.
  *
- * @see scripts/generate-sdk-types.ts for type generation
+ * Despite its name, `coreTypes.generated.ts` is not produced by a codegen
+ * step — there is no generator script in this repo, and the `@see` that once
+ * pointed at one named a file that does not exist. The types there are hand-
+ * written `z.infer` aliases over the schemas below, which is why they track
+ * this file automatically and why editing them directly is wrong: edit the
+ * schema here instead.
  */
 
 import type {

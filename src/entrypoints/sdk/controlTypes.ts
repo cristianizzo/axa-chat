@@ -13,10 +13,6 @@
  * Keep the `ReturnType`. A bare `z.infer<typeof FooSchema>` compiles without
  * error and resolves to `unknown`, which then accepts anything at every use
  * site — so the mistake costs all type safety here and reports nothing.
- *
- * Note: `coreTypes.generated.ts` also declares an `SDKPartialAssistantMessage`,
- * with `type: 'assistant_partial'`. That declaration is stale — the schema and
- * every live producer use `'stream_event'` — and this file follows the schema.
  */
 
 import type { z } from 'zod/v4'
