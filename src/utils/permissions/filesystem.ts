@@ -2096,7 +2096,8 @@ function getResolvedConfigDirRoots(
  * than "aligned": the separator comparison here lowercases `s` and the fold
  * does not. This is settled by enumeration, not by sampling —
  * ROOT_SEPARATOR_SPELLINGS is `new Set([sep, '/'])`, so it has at most two
- * members, `'/'` and (on win32) `'\'`, and `toLowerCase` is the identity on
+ * members, `'/'` and (on win32) the backslash `sep`, and `toLowerCase` is the
+ * identity on
  * both. The call is a no-op on every input the set can hold. Removing it is
  * safe and pointless; adding it to the fold is equally so.
  */
@@ -3495,8 +3496,9 @@ function decideEditableInternalPath(
   // repo has no test files at all — so the literal here and the one in
   // query/stopHooks.ts are coupled by nothing but the comments naming each
   // other. And `JOB_ENV_KEY`/`jobs/state` is not in the tree either: nothing
-  // under src/ sets CLAUDE_JOB_DIR, only these two files and stopHooks read
-  // it. The name is therefore externally owned in the AXA.md sense — whatever
+  // under src/ sets CLAUDE_JOB_DIR, and the only two readers are this file and
+  // query/stopHooks.ts — the same two the paragraph above names. The name is
+  // therefore externally owned in the CLAUDE.md sense — whatever
   // spawns a job supplies it — so a branding sweep must not rename it.
   if (feature('TEMPLATES')) {
     const jobDir = process.env.CLAUDE_JOB_DIR
