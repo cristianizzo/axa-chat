@@ -660,7 +660,12 @@ function isDangerousFilePathToAutoEdit(path: string): boolean {
       // Exemption, not a guard: skips a config-dir segment followed by
       // `worktrees`, which is where this tool keeps its own. Removing it does
       // not loosen anything — it makes every worktree edit prompt.
-      if (dir === CONFIG_DIR_NAME) {
+      // OLD_CONFIG_DIR_NAME is exempt for the same reason, and it is not
+      // vestigial: worktrees live under the *repo-local* config dir
+      // (`<gitRoot>/<config>/worktrees/`), which the home-directory migration
+      // never touches. Every `.axa/worktrees/<name>` checkout created before
+      // the rename is still on disk and still in use.
+      if (dir === CONFIG_DIR_NAME || dir === OLD_CONFIG_DIR_NAME) {
         const nextSegment = pathSegments[i + 1]
         if (
           nextSegment &&
