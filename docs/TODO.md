@@ -7,8 +7,11 @@
 
 ## P0 — Now
 
-- [ ] **`~/.axa` root, visible projects, permanent backups** (design agreed
-  2026-08-28). Full design: **`docs/STORAGE-REDESIGN.md`**.
+- [ ] **`~/.claude` root, visible projects, permanent backups** (design agreed
+  2026-08-28, `~/.axa` root later reversed — see
+  `docs/superpowers/specs/2026-09-07-config-dir-back-to-claude-design.md`).
+  Full design: **`docs/STORAGE-REDESIGN.md`** (historical; describes the
+  `~/.axa` root before the reversal).
 
   The real problem is not the layout, it is that **none of it is visible or
   manageable**: no list, no sizes, no rename, no delete, no merge. Measured
@@ -47,6 +50,20 @@
     `macOsKeychainHelpers.ts:41`, `commands/import-conversations/` +
     `services/import/claudeCodeImport.ts`, `MAX_BACKUP_SETS = 1000`
     (`compact.ts:398`).
+    **Later reversed:** `CONFIG_DIR_NAME` is `.claude` again, the
+    `LEGACY_CONFIG_DIR_NAME` family was **deleted** and replaced by a single
+    `OLD_CONFIG_DIR_NAME = '.axa'` that nothing reads as a config dir — only
+    `configDirMigration.ts` resolves a path from it, and the permission layer
+    keeps denying auto-edits under it for as long as it can still exist.
+    `configDirMigration.ts` does a one-time merge of
+    `~/.axa` into `~/.claude` — see
+    `docs/superpowers/specs/2026-09-07-config-dir-back-to-claude-design.md`.
+    The import half was **deleted**, not kept: `/import-conversations` copied a
+    Claude Code install into a separate axa root, and once both products read
+    the same `~/.claude` its source and destination are the same directory, so
+    the command could only ever answer "nothing to import".
+    `commands/import-conversations/` and `services/import/claudeCodeImport.ts`
+    are gone, and with them the last reader of `CLAUDE_CODE_DIR`.
   - [ ] PR 2 — `/projects`: list with real path, conversation count, size on disk,
     last used, and flags for dead paths and orphaned data; open, rename,
     favourite, delete, merge. `project.json` written lazily, only on first
@@ -447,7 +464,7 @@ fixed".
 - **`git diff main..<branch>` is not a branch's change.** If the branch's base is
   old, commits added on `main` show up as *deletions by the branch*. Use `git
   diff $(git merge-base main <branch>)..<branch>`. This produced a false
-  "two branches are removing `.axa/` from .gitignore" alarm.
+  "two branches are removing `.claude/` from .gitignore" alarm.
 - **Inline sourcemaps in `src/` are inert, and this was proved on the output
   side.** 548 files carry a `sourceMappingURL`, all of them `.tsx` — 96.6% of the
   567 `.tsx`, and zero of the `.ts` — ~12.4 MB of base64. The split by extension

@@ -150,7 +150,8 @@ Two things worth noting up front:
 flowchart TD
     A["entrypoints/cli.tsx<br/>startCapturingEarlyInput"] --> B["dynamic import main.js"]
     B --> C["commander preAction hook<br/>main.tsx"]
-    C --> C1["init(): configs, env,<br/>mTLS/proxy — init.ts"]
+    C --> C0["migrateAxaConfigDir<br/>~/.axa → ~/.claude, once"]
+    C0 --> C1["init(): configs, env,<br/>mTLS/proxy — init.ts"]
     C1 --> C2["runMigrations<br/>main.tsx"]
     C2 --> C3["managed settings<br/>+ policy limits"]
     C3 --> D["commander parses<br/>~200 options"]
@@ -162,8 +163,7 @@ flowchart TD
     I --> J["showSetupScreens<br/>interactiveHelpers.tsx"]
     J --> J1["onboarding"]
     J1 --> J2["trust dialog"]
-    J2 --> J2a["legacy project import<br/>(fork-only, once per project)"]
-    J2a --> J3[".mcp.json approval"]
+    J2 --> J3[".mcp.json approval"]
     J3 --> J4["memory-file external includes"]
     J4 --> K{"trust<br/>accepted?"}
     K -->|no| L["exit"]
@@ -173,6 +173,24 @@ flowchart TD
     O --> P["launchRepl<br/>replLauncher.tsx"]
     P --> Q["render App > REPL<br/>await waitUntilExit"]
 ```
+
+**Why the config-dir migration is first, and what it will not do.**
+`migrateAxaConfigDir()` (`utils/configDirMigration.ts`) is the first statement
+in the `preAction` hook, ahead of `init()`, because `getClaudeConfigHomeDir()`
+memoizes on its first call and `init()` triggers the first settings read — a
+migration that ran afterwards would move a directory the process had already
+resolved away from. It is also why the step sits in `preAction` rather than
+earlier: `--version` and `--help` do not execute a command, so they do not
+trigger it.
+
+The step is a **merge**, not a move, because co-tenancy with a real Claude Code
+install is intended and `~/.claude` is normally already populated. The
+destination always wins a content conflict — it may be live config — and the
+`~/.axa` version is kept beside it as `<name>.from-axa`. `~/.axa` is removed
+only once every byte of it is recoverable from `~/.claude`; every other
+outcome leaves the source intact and retries on the next launch. The function
+promises never to throw, so failures are reported through `logError` and not
+propagated into startup.
 
 **Why MCP connects late — and the one path where it does not.** In an
 *interactive* session, configs are resolved well before `showSetupScreens`, but
@@ -514,7 +532,7 @@ deny rules become denyRead/denyWrite. Network domains come from
 `sandbox.filesystem.*` paths do **not** use the same resolution semantics as
 permission rules — `resolveSandboxFilesystemPath` versus
 `resolvePathPatternForSandbox`. Two escape-hardening measures are deliberate and
-should not be "simplified away": settings files and `.axa/skills` are
+should not be "simplified away": settings files and `.claude/skills` are
 unconditionally denyWrite, and `scrubBareGitRepoFiles()` deletes bare-repo files
 planted at cwd during a sandboxed command before unsandboxed git can see them.
 

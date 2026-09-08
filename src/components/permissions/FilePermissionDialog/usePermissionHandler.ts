@@ -7,7 +7,6 @@ import type { ToolPermissionContext } from '../../../Tool.js'
 import {
   FILE_EDIT_TOOL_NAME,
   GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
-  LEGACY_PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
   PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
 } from '../../../tools/FileEditTool/constants.js'
 import { env } from '../../../utils/env.js'
@@ -26,8 +25,6 @@ import type {
 
 const CONFIG_FOLDER_SCOPE_PATTERNS: Record<ConfigFolderScope, string> = {
   'project-config-folder': PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
-  'legacy-project-config-folder':
-    LEGACY_PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
   'global-config-folder': GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
 }
 
@@ -112,8 +109,8 @@ function handleAcceptSession(
 
   // For a config-folder scope, grant session-level access to that folder.
   // The pattern has to match the folder the file is actually in: a project
-  // '.axa' file granted '/.claude/**' would produce a rule that matches
-  // nothing, so the same prompt would come back on the next edit.
+  // file granted the global pattern (or vice versa) would produce a rule
+  // that matches nothing, so the same prompt would come back on the next edit.
   const configFolderPattern = options?.scope
     ? CONFIG_FOLDER_SCOPE_PATTERNS[options.scope]
     : undefined

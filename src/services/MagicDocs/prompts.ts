@@ -61,7 +61,7 @@ REMEMBER: Only update if there is substantial new information. The Magic Doc hea
 
 /**
  * Load custom Magic Docs prompt from file if it exists
- * Custom prompts can be placed at ~/.axa/magic-docs/prompt.md — the path below
+ * Custom prompts can be placed at ~/.claude/magic-docs/prompt.md — the path below
  * is built from the config home, so CLAUDE_CONFIG_DIR relocates it too.
  * Use {{variableName}} syntax for variable substitution (e.g., {{docContents}}, {{docPath}}, {{docTitle}})
  */

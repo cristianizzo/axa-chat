@@ -14,7 +14,6 @@ import { isAgentMemoryPath } from 'src/tools/AgentTool/agentMemory.js'
 import {
   FILE_EDIT_TOOL_NAME,
   GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
-  LEGACY_PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
   PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
 } from 'src/tools/FileEditTool/constants.js'
 import type { z } from 'zod/v4'
@@ -24,7 +23,11 @@ import {
   getSessionId,
 } from '../../bootstrap/state.js'
 import { isGlobalConfigFileName } from '../../constants/oauth.js'
-import { CONFIG_DIR_NAME, MEMORY_FILE_NAME } from '../../constants/product.js'
+import {
+  CONFIG_DIR_NAME,
+  MEMORY_FILE_NAME,
+  OLD_CONFIG_DIR_NAME,
+} from '../../constants/product.js'
 import { checkStatsigFeatureGate_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import type { AnyObject, Tool, ToolPermissionContext } from '../../Tool.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
@@ -85,13 +88,16 @@ export const DANGEROUS_FILES = [
   // Nothing in this repo may write this file; for auto-editing, this entry is
   // what enforces that. Matched on basename anywhere in the path, hence bare.
   //
-  // Polarity, because the `.claude` handling in this file runs both ways and
+  // Polarity, because the config-dir handling in this file runs both ways and
   // inspection cannot tell them apart: this is a denylist **entry**, so deleting
   // it *under-blocks* — protection silently gone, no code path breaks, nothing
-  // fails a typecheck. `.claude` in DANGEROUS_DIRECTORIES is an entry too, but
-  // `.claude` in the worktree-path check below is an *exemption from* that
-  // denylist, and deleting that one over-blocks instead. Ask "does removing this
-  // under-block or over-block?", never "is this literal deliberate?".
+  // fails a typecheck. CONFIG_DIR_NAME and OLD_CONFIG_DIR_NAME in
+  // DANGEROUS_DIRECTORIES are entries too, but the CONFIG_DIR_NAME test in the
+  // worktree-path check below is an *exemption from* that denylist, and deleting
+  // that one over-blocks instead. Ask "does removing this under-block or
+  // over-block?", never "is this literal deliberate?". Note the other three are
+  // spelled as constants rather than strings, so a grep for the directory name
+  // finds only this line — the imports are the population, not the literals.
   '.claude.json',
 ] as const
 
@@ -104,11 +110,15 @@ export const DANGEROUS_DIRECTORIES = [
   '.vscode',
   '.idea',
   CONFIG_DIR_NAME,
-  // Legacy, and deliberately still listed. A project that has not been
-  // migrated still keeps live config here, so dropping it would remove this
-  // protection from exactly the projects that predate the rename — the ones
-  // still relying on it.
-  '.claude',
+  // The pre-migration config dir. Still listed because it still exists: the
+  // migration refuses and returns on several paths (a destination
+  // `.config.json`, an unresolvable conflict, a verify mismatch, concurrent
+  // drift), and on every one of them `~/.axa` survives holding credentials and
+  // history. Protecting only the new name would leave the old one silently
+  // auto-editable for exactly as long as it is still the one with the secrets
+  // in it. A denylist **entry**, so deleting it under-blocks. Retire it only
+  // once nothing can create or keep a `.axa` directory.
+  OLD_CONFIG_DIR_NAME,
   // Credential / persistence directories. Writing here grants persistent
   // access or exposes secrets: an edit to ~/.ssh/authorized_keys is a
   // backdoor, and these hold private keys / cloud credentials. Listed as
@@ -121,14 +131,10 @@ export const DANGEROUS_DIRECTORIES = [
 
 /**
  * Every config-folder spelling a session-scoped allow rule may be scoped to,
- * checked by step 1.6 of checkWritePermissionForTool. Three entries, not two:
- * the project scope is `.axa` in this fork, but `.claude` stays in
- * DANGEROUS_DIRECTORIES for projects that predate the rename, so both project
- * spellings need a way through.
+ * checked by step 1.6 of checkWritePermissionForTool.
  */
 const CONFIG_FOLDER_PERMISSION_PATTERNS = [
   PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
-  LEGACY_PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
   GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
 ] as const
 
@@ -314,7 +320,7 @@ export function getClaudeSkillScope(
         // Reject glob metacharacters. skillName is interpolated into a
         // gitignore pattern consumed by ignore().add() in matchingRuleForInput
         // at step 1.6. A directory literally named '*' (valid on POSIX) would
-        // produce '/.axa/skills/*/**' which matches ALL skills. Return null
+        // produce '/.claude/skills/*/**' which matches ALL skills. Return null
         // to fall through to generateSuggestions() instead.
         if (/[*?[\]]/.test(skillName)) return null
         return { skillName, pattern: prefix + skillName + '/**' }
@@ -380,18 +386,18 @@ export function isClaudeSettingsPath(filePath: string): boolean {
   // without this arm a foreign project's settings.json is unprotected — and
   // that is the case this arm exists for.
   //
-  // `.axa` is built from CONFIG_DIR_NAME so the canonical spelling has one
-  // definition. The legacy spelling stays a literal on purpose: it is not the
-  // config dir this product writes, it is a foreign directory this predicate
-  // still refuses to auto-edit, and LEGACY_CONFIG_DIR_NAME documents itself as
-  // read in exactly one place (the startup import check). Reaching for it here
-  // would make that constant's docblock false to save one string.
-  //
   // Use platform separator so endsWith checks work on both Unix (/) and Windows (\)
   const isSettingsFileUnder = (configDirName: string): boolean =>
     normalizedPath.endsWith(`${sep}${configDirName}${sep}settings.json`) ||
     normalizedPath.endsWith(`${sep}${configDirName}${sep}settings.local.json`)
-  if (isSettingsFileUnder(CONFIG_DIR_NAME) || isSettingsFileUnder('.claude')) {
+  if (isSettingsFileUnder(CONFIG_DIR_NAME)) {
+    return true
+  }
+  // The pre-migration name, for as long as it can still exist. Nothing reads
+  // these files any more, but they hold the same secrets they always did until
+  // the migration succeeds — and it has several paths on which it refuses and
+  // leaves them in place. "Unread" is not "safe to auto-edit".
+  if (isSettingsFileUnder(OLD_CONFIG_DIR_NAME)) {
     return true
   }
   // Check for current project's settings files (including managed settings and CLI args)
@@ -650,15 +656,22 @@ function isDangerousFilePathToAutoEdit(path: string): boolean {
       // stores git worktrees), not a user-created dangerous directory. Skip the
       // config segment when it's followed by 'worktrees'. Any nested config
       // directories within the worktree (not followed by 'worktrees') are still
-      // blocked. Both spellings, since an unmigrated project still has its
-      // worktrees under the legacy name.
-      if (dir === CONFIG_DIR_NAME || dir === '.claude') {
+      // blocked.
+      // Exemption, not a guard: skips a config-dir segment followed by
+      // `worktrees`, which is where this tool keeps its own. Removing it does
+      // not loosen anything — it makes every worktree edit prompt.
+      // OLD_CONFIG_DIR_NAME is exempt for the same reason, and it is not
+      // vestigial: worktrees live under the *repo-local* config dir
+      // (`<gitRoot>/<config>/worktrees/`), which the home-directory migration
+      // never touches. Every `.axa/worktrees/<name>` checkout created before
+      // the rename is still on disk and still in use.
+      if (dir === CONFIG_DIR_NAME || dir === OLD_CONFIG_DIR_NAME) {
         const nextSegment = pathSegments[i + 1]
         if (
           nextSegment &&
           normalizeCaseForComparison(nextSegment) === 'worktrees'
         ) {
-          break // Skip this .claude, continue checking other segments
+          break // Skip this config-dir segment, keep checking the rest
         }
       }
 
@@ -1467,7 +1480,7 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
   //
   // matchingRuleForInput returns the first match across all sources. If the user
   // also has a broader rule in userSettings for any of the spellings this step
-  // covers — Edit(/.axa/**), Edit(/.claude/**) or Edit(~/.axa/**), e.g. from
+  // covers — Edit(/.claude/**) or Edit(~/.claude/**), e.g. from
   // sandbox write-allow conversion — that rule would be found first and its
   // source check below would fail. Scope the search to session-only rules so the
   // dialog's "allow Claude to edit its own settings for this session" option
@@ -1484,14 +1497,13 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
     'allow',
   )
   if (configFolderAllowRule) {
-    // Check if this rule is scoped under a config folder (project, legacy
-    // project, or global). Accepts both the broad patterns ('/.axa/**',
-    // '/.claude/**', '~/.axa/**') and narrowed ones like
-    // '/.axa/skills/my-skill/**' so users can grant session access to a single
-    // skill without also exposing settings.json or hooks/. The rule already
-    // matched the path via matchingRuleForInput; this is an additional scope
-    // check. Reject '..' to prevent a rule like '/.axa/../**' from leaking
-    // this bypass outside the config folder.
+    // Check if this rule is scoped under a config folder (project or global).
+    // Accepts both the broad patterns ('/.claude/**', '~/.claude/**') and
+    // narrowed ones like '/.claude/skills/my-skill/**' so users can grant
+    // session access to a single skill without also exposing settings.json or
+    // hooks/. The rule already matched the path via matchingRuleForInput; this
+    // is an additional scope check. Reject '..' to prevent a rule like
+    // '/.claude/../**' from leaking this bypass outside the config folder.
     const ruleContent = configFolderAllowRule.ruleValue.ruleContent
     if (
       ruleContent &&
@@ -1686,10 +1698,10 @@ export function generateSuggestions(
 }
 
 /**
- * How much of a config dir (`~/.axa` and `<project>/.axa`) the harness may
+ * How much of a config dir (`~/.claude` and `<project>/.claude`) the harness may
  * reach without prompting.
  *
- * - `open`      — read and write silently. AXA.md and the agent-authored note
+ * - `open`      — read and write silently. CLAUDE.md and the agent-authored note
  *                 directories: prose the model writes for itself, enumerated in
  *                 CONFIG_DIR_OPEN_DIRS / CONFIG_DIR_OPEN_FILES.
  * - `protected` — readable, but writes fall through to the safety gate and
@@ -1717,7 +1729,7 @@ const CONFIG_DIR_SECRET_DIRS = new Set([
   // is what puts them on the read side of the line. `projects/` holds session
   // transcripts for *every* project on the machine, so a silent read lets an
   // agent working in one repo read another repo's history. Today a read of
-  // ~/.axa/projects/<other>/x.jsonl reaches step 12 of
+  // ~/.claude/projects/<other>/x.jsonl reaches step 12 of
   // checkReadPermissionForTool and asks, because step 6 only covers working
   // directories; classifying these 'protected' would have quietly removed that
   // prompt. `sessions/` is the same data by another name.
@@ -1870,7 +1882,7 @@ const CONFIG_DIR_PROTECTED_DIRS = new Set([
 const CONFIG_DIR_OPEN_DIRS = new Set([
   'agent-memory',
   // The 'local' scope of the same feature: getAgentMemoryDir writes
-  // <cwd>/.axa/agent-memory-local/<agentType>/ (AgentTool/agentMemory.ts).
+  // <cwd>/.claude/agent-memory-local/<agentType>/ (AgentTool/agentMemory.ts).
   // isAgentMemoryPath already allows it earlier, so this changes no behaviour —
   // it is here because the point of listing the earlier carve-outs again is that
   // this classifier be independently correct rather than correct-by-unreachable,
@@ -1982,15 +1994,15 @@ function getResolvedConfigDirRoots(
  *
  * ## Why longest-root-wins, and not the first root in the list
  *
- * The two roots can nest: the project config dir is `<cwd>/.axa`, and nothing
- * stops `cwd` from being inside the config home — `~/.axa/plans` and
- * `~/.axa/rules` are directories this app creates itself, so `cd ~/.axa/plans`
+ * The two roots can nest: the project config dir is `<cwd>/.claude`, and nothing
+ * stops `cwd` from being inside the config home — `~/.claude/plans` and
+ * `~/.claude/rules` are directories this app creates itself, so `cd ~/.claude/plans`
  * and starting a session is ordinary use, not an exotic setup.
  *
  * When they nest, a path under the inner root matches both. This function used
  * to return on the **first** match, and the roots are iterated `[home,
  * project]`, so in that configuration it returned the *outer* root's relative
- * path — `plans/.axa/hooks/h.sh` instead of `hooks/h.sh`.
+ * path — `plans/.claude/hooks/h.sh` instead of `hooks/h.sh`.
  *
  * That is not a cosmetic difference, because `classifyConfigDirRelativePath`
  * reads two things out of the relative path and only one of them survives the
@@ -2012,19 +2024,19 @@ function getResolvedConfigDirRoots(
  * It failed in **both** directions, which is why "the outer root is merely less
  * specific, so this over-blocks" is not a safe reading of it:
  *
- * - **Over-block.** With `cwd` = `<cfg>/proj`, `<cwd>/.axa/rules/note.md` and
- *   `<cwd>/.axa/AXA.md` came back `passthrough` for both read and write, where
+ * - **Over-block.** With `cwd` = `<cfg>/proj`, `<cwd>/.claude/rules/note.md` and
+ *   `<cwd>/.claude/CLAUDE.md` came back `passthrough` for both read and write, where
  *   the identical project sitting outside the config home gets `allow`. The
  *   first segment was `proj`, on none of the lists, so the default applied.
  * - **Fail open.** The five names in CONFIG_DIR_OPEN_DIRS are themselves
  *   directories inside the config home, so `cwd` can *be* one of them. With
  *   `cwd` = `<cfg>/rules`, the first segment became `rules` — an open dir — and
- *   the whole of `<cwd>/.axa` was classified `open`, i.e. silently writable and
- *   silently readable. Measured: `<cwd>/.axa/hooks/h.sh` returned `allow` for
+ *   the whole of `<cwd>/.claude` was classified `open`, i.e. silently writable and
+ *   silently readable. Measured: `<cwd>/.claude/hooks/h.sh` returned `allow` for
  *   **write**. A hook is a shell command executed on the next launch, so that
- *   is a silent write to code that runs. `<cwd>/.axa/projects/s.jsonl`, which
+ *   is a silent write to code that runs. `<cwd>/.claude/projects/s.jsonl`, which
  *   the inner root classifies `secret`, returned `allow` for **read**.
- *   Meanwhile `<cwd>/.axa/settings.json` and `<cwd>/.axa/.credentials.json`
+ *   Meanwhile `<cwd>/.claude/settings.json` and `<cwd>/.claude/.credentials.json`
  *   stayed `passthrough` throughout — the basename half holding, as above.
  *
  * The fix moves each of those to exactly what the same file gets under a
@@ -2036,7 +2048,7 @@ function getResolvedConfigDirRoots(
  * Call it list-order-wins, not shortest-wins. The two coincide only because the
  * home config dir is listed first *and* is the outer one in the reachable
  * nesting. In the opposite nesting — CLAUDE_CONFIG_DIR pointed at a directory
- * inside `<cwd>/.axa` — list order already picks the inner root, and every row
+ * inside `<cwd>/.claude` — list order already picks the inner root, and every row
  * is byte-identical before and after this change. That arm is the control that
  * makes this a targeted fix rather than a behaviour change: it moves the
  * configuration where list order picks the outer root, and nothing else.
@@ -2163,7 +2175,7 @@ function classifyConfigDirRelativePath(
  *
  * Every resolved form of the path — lexical and symlink-chain — must land
  * inside a config dir, and the most restrictive classification across those
- * forms wins. Without that, a symlink placed inside `~/.axa/agents/` pointing
+ * forms wins. Without that, a symlink placed inside `~/.claude/agents/` pointing
  * at `~/.ssh/authorized_keys` would inherit this carve-out. Same guard as the
  * template job directory above.
  */
@@ -2249,7 +2261,7 @@ const CONFIG_DIR_READABLE_DIRS = new Set([
  * always-ask, so without this they override it.
  *
  * Checking every resolved form, not just the literal path, is the point: a
- * symlink at `~/.axa/agent-memory/alias.json` pointing at such a file elsewhere
+ * symlink at `~/.claude/agent-memory/alias.json` pointing at such a file elsewhere
  * under the config dir passes the classifier — every form is still `open` — and
  * a check on the literal path alone would not see what it resolves to.
  *
@@ -2318,7 +2330,7 @@ function resolvesToFlagConfigFile(absolutePath: string): boolean {
  *
  * All forms must qualify, so the strictest wins, for the same reason
  * classifyConfigDirPath checks every form: otherwise a symlink under
- * `~/.axa/agents/` would launder a read of something else.
+ * `~/.claude/agents/` would launder a read of something else.
  *
  * Flag-supplied config files are screened by the caller, which covers the
  * 'open' arm this function is never reached on.
@@ -2769,7 +2781,7 @@ function foldResolvedRootPrefix(form: string, roots: FoldableRoot[]): string {
     for (const rootForm of resolved) {
       // Longest matching root wins, and this is load-bearing rather than
       // defensive — but not for the reason an earlier draft of this comment
-      // gave. That draft justified it with `cwd` ⊃ `cwd/.axa`, a nesting that is
+      // gave. That draft justified it with `cwd` ⊃ `cwd/.claude`, a nesting that is
       // not in the root set at all. The nestings that *are* (plansDir and
       // getAutoMemPath() inside the config home) cannot observe the rule either:
       // there the inner root's lexical spelling is the outer's plus a suffix, so
@@ -3149,7 +3161,7 @@ function decideEditableInternalPath(
 
   // First, ahead of every carve-out below. A flag can aim the active settings
   // or MCP config file at any path, including inside one of these carve-outs —
-  // `--settings <cwd>/.axa/agent-memory/x.json` is allowed by isAgentMemoryPath,
+  // `--settings <cwd>/.claude/agent-memory/x.json` is allowed by isAgentMemoryPath,
   // which matches that whole tree under any filename. Every carve-out here
   // grants a silent write, and none of them inspects what the file *is*, so the
   // screen has to run before all of them rather than beside any one of them.
@@ -3253,13 +3265,13 @@ function decideEditableInternalPath(
     }
   }
 
-  // .axa/launch.json — desktop preview config (dev server command + port).
+  // .claude/launch.json — desktop preview config (dev server command + port).
   // The desktop's preview_start MCP tool instructs Claude to create/update
   // this file as part of the preview workflow. Without this carve-out the
-  // .axa/ DANGEROUS_DIRECTORIES check prompts for it, which in SDK mode
+  // .claude/ DANGEROUS_DIRECTORIES check prompts for it, which in SDK mode
   // cascades: user clicks "Always allow" → setMode:acceptEdits suggestion
   // applied → silent downgrade from auto mode. Matches the project-level
-  // .axa/ only (not ~/.claude/) since launch.json is per-project.
+  // .claude/ only (not ~/.claude/) since launch.json is per-project.
   if (
     normalizeCaseForComparison(normalizedPath) ===
     normalizeCaseForComparison(join(getOriginalCwd(), CONFIG_DIR_NAME, 'launch.json'))
@@ -3274,16 +3286,16 @@ function decideEditableInternalPath(
     }
   }
 
-  // The config dir itself, at both scopes: ~/.axa (or CLAUDE_CONFIG_DIR) and
-  // <project>/.axa. CONFIG_DIR_NAME is in DANGEROUS_DIRECTORIES, so without
+  // The config dir itself, at both scopes: ~/.claude (or CLAUDE_CONFIG_DIR) and
+  // <project>/.claude. CONFIG_DIR_NAME is in DANGEROUS_DIRECTORIES, so without
   // this every edit under a config dir prompts — and there is no way for the
   // user to grant it themselves, because step 1.7 runs before allow rules, so
-  // an `Edit(~/.axa/**)` rule in settings.json is unreachable.
+  // an `Edit(~/.claude/**)` rule in settings.json is unreachable.
   //
   // What this actually opens is narrow, and narrower than the motivating
   // examples: agent definitions, skills and slash commands stay on the prompting
   // side, because those files grant permission rather than merely holding text
-  // (see CONFIG_DIR_PROTECTED_DIRS). What is left is AXA.md and the
+  // (see CONFIG_DIR_PROTECTED_DIRS). What is left is CLAUDE.md and the
   // agent-authored note directories — see CONFIG_DIR_OPEN_DIRS, which is the
   // whole of it, since classifyConfigDirRelativePath defaults to 'protected'.
   //
@@ -3301,8 +3313,8 @@ function decideEditableInternalPath(
   // Do NOT read that as "the earlier carve-outs are not classified 'open'" — an
   // earlier revision of this comment said so and it is false: `agent-memory`,
   // `agent-memory-local` and `plans` are all in CONFIG_DIR_OPEN_DIRS, and
-  // relativeToConfigDirRoot resolves against the project `.axa` as well as the
-  // config home. Only memdir is genuinely elsewhere (`~/.axa/projects/`, which
+  // relativeToConfigDirRoot resolves against the project `.claude` as well as the
+  // config home. Only memdir is genuinely elsewhere (`~/.claude/projects/`, which
   // is 'secret'). The ordering is what protects them, not the classification —
   // and a guard that has to run for those paths too therefore cannot live here.
   // That is why the flag-config screen is at the top of this function.

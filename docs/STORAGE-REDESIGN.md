@@ -1,5 +1,11 @@
 # Storage: `~/.axa`, visible projects, permanent backups
 
+> **Superseded.** The `~/.axa` config-dir root decided below was reversed;
+> config now reads from `~/.claude` again. See
+> `docs/superpowers/specs/2026-09-07-config-dir-back-to-claude-design.md`.
+> This document is left as-is as the historical record of the decision it
+> describes.
+
 **Design agreed 2026-08-28.** Supersedes the 2026-08-27 draft, which proposed a
 workspace/project split, a hierarchical re-layout and gzipped backups. All three
 were dropped — see *Rejected* at the end.

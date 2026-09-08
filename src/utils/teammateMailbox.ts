@@ -51,7 +51,7 @@ export type TeammateMessage = {
 /**
  * Get the path to a teammate's inbox file
  * Structure: {getTeamsDir()}/{team_name}/inboxes/{agent_name}.json
- * (getTeamsDir resolves under CLAUDE_CONFIG_DIR, defaulting to ~/.axa)
+ * (getTeamsDir resolves under CLAUDE_CONFIG_DIR, defaulting to ~/.claude)
  */
 export function getInboxPath(agentName: string, teamName?: string): string {
   const team = teamName || getTeamName() || 'default'
