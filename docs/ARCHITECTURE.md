@@ -88,25 +88,55 @@ The counter-example is in this document's own history: `CCR_V2` and
 `POST_FOR_SESSION_INGRESS_V2` (§7) look like they share a prefix, and they do
 not — the real names are `CLAUDE_CODE_USE_CCR_V2` and
 `CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2`, so guessing `CLAUDE_CODE_USE_` from
-the first gives a name that exists nowhere for the second. Measured over all 33
-distinct `(?<![A-Za-z0-9_])[A-Z][A-Z0-9_]{3,}(?![A-Za-z0-9_])` tokens cited
-**anywhere in this document**: 30 resolve in `src/` on `main`, and the exception
-set has exactly three members — `TS2307` and `TS2367`, both `tsc` diagnostic
-codes, and `FNM_PATHNAME`, a POSIX `fnmatch` flag named in the pathspec
-paragraph above. None is an identifier in this repo, which is the whole reason
-they are the exceptions.
+the first gives a name that exists nowhere for the second. Measured over all 27
+distinct tokens cited **in this document's prose**, fenced code blocks excluded:
+24 resolve in `src/` on `main`, and the exception set has exactly three members
+— `TS2307` and `TS2367`, both `tsc` diagnostic codes, and `FNM_PATHNAME`, a
+POSIX `fnmatch` flag named in the pathspec paragraph above. None is an
+identifier in this repo, which is the whole reason they are the exceptions.
+
+That measurement is two commands, not a description, because a pattern without
+its engine is not re-derivable — the extractor uses lookarounds, which POSIX ERE
+does not have, so `grep -E` cannot run it at all:
+
+```sh
+# Extraction: PCRE lookarounds, so perl (or grep -P) — NOT grep -E.
+# The awk strips fenced blocks, which is what "prose" above means; without it
+# this block's own examples would enter the population it is describing.
+awk '/^```/{f=!f; next} !f' docs/ARCHITECTURE.md \
+  | perl -nle 'print for /(?<![A-Za-z0-9_])[A-Z][A-Z0-9_]{3,}(?![A-Za-z0-9_])/g' \
+  | sort -u
+
+# Resolution: git grep against a ref, never rg or a working-tree grep.
+git grep -q -F "$token" origin/main -- src/
+
+# The obvious ERE workaround for the missing lookarounds is WRONG: it consumes
+# its guard characters, so two qualifying tokens separated by one character
+# yield only the first. This prints AAAA alone, never BBBB.
+printf 'AAAA BBBB\n' \
+  | grep -oE '(^|[^A-Za-z0-9_])[A-Z][A-Z0-9_]{3,}([^A-Za-z0-9_]|$)' \
+  | grep -oE '[A-Z][A-Z0-9_]{3,}'
+```
+
+Neither instrument is incidental. `src/cli` is `.gitignore`d, so `rg` and a
+plain `grep -r` skip it and under-report resolution, while `git grep <ref>`
+reads the ref and is unaffected by the working tree. The consuming workaround
+happens to give the right answer on this document, which is exactly why it is
+named here rather than left for the next person to reinvent — and note that
+resolution is a **substring** test, so it is generous by construction. That is
+the same generosity the next paragraph relies on.
 
 **The word boundaries in that pattern are load-bearing, and so is the scope
 word.** Stated unbounded, as `[A-Z][A-Z0-9_]{3,}`, the extractor cuts mixed-case
 identifiers mid-word and mints tokens nobody cited: on the revision immediately
-before this one it reported **32** against the bounded **27**, the difference
+before this one it reported **26** against the bounded **21**, the difference
 being `CCRC`, `REPLT`, `SDKC`, `SDKM` and `SSET` — the leading characters of
 `CCRClient`, `REPLTool`, `SDKControl*`, `SDKMessage` and `SSETransport`. This is
 the same defect this section warns about for file names, a loose matcher
 inventing members, arriving on the *extraction* side rather than the resolution
 side.
 
-Both patterns now agree at 33 **here**, and only because this paragraph quotes
+Both patterns now agree at 27 **here**, and only because this paragraph quotes
 those five phantoms verbatim in order to name them, which promotes them to
 genuinely-cited tokens. The divergence is observable only on text that does not
 name them, so do not read the agreement as evidence the boundaries are
