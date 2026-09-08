@@ -90,7 +90,7 @@ not — the real names are `CLAUDE_CODE_USE_CCR_V2` and
 `CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2`, so guessing `CLAUDE_CODE_USE_` from
 the first gives a name that exists nowhere for the second. Measured over all 27
 distinct tokens cited **in this document's prose**, fenced code blocks excluded:
-24 resolve in `src/` on `main`, and the exception set has exactly three members
+24 resolve in `src/` on `origin/main`, and the exception set has exactly three members
 — `TS2307` and `TS2367`, both `tsc` diagnostic codes, and `FNM_PATHNAME`, a
 POSIX `fnmatch` flag named in the pathspec paragraph above. None is an
 identifier in this repo, which is the whole reason they are the exceptions.
@@ -102,14 +102,14 @@ does not have, so `grep -E` cannot run it at all:
 ```sh
 # Extraction, piped straight into resolution — copy-paste the whole block, it
 # needs no substitution and produces the exception set directly. The extractor
-# needs PCRE lookarounds, which POSIX ERE does not have, so it has to be perl
-# (GNU grep -P also has them, but -P is a GNU extension and not available on
-# BSD/macOS grep, so it is not the portable choice here). The awk strips fenced
-# blocks, which is what "prose" above means; without it this block's own
-# examples would enter the population it is describing. The final loop is
-# resolution: git grep against a ref, never rg or a working-tree grep, fed one
-# token per line from the extraction above; it prints the misses, and the
-# exception set is exactly what comes out.
+# needs lookarounds, which POSIX ERE does not have, so this uses perl, whose
+# regex engine has them (GNU grep -P also has them, but -P is a GNU extension
+# and not available on BSD/macOS grep, so it is not the portable choice here).
+# The awk strips fenced blocks, which is what "prose" above means; without it
+# this block's own examples would enter the population it is describing. The
+# final loop is resolution: git grep against a ref, never rg or a working-tree
+# grep, fed one token per line from the extraction above; it prints the
+# misses, and the exception set is exactly what comes out.
 awk '/^```/{f=!f; next} !f' docs/ARCHITECTURE.md \
   | perl -nle 'print for /(?<![A-Za-z0-9_])[A-Z][A-Z0-9_]{3,}(?![A-Za-z0-9_])/g' \
   | sort -u \
