@@ -234,10 +234,10 @@ export async function createV2ReplTransport(opts: {
   // CCRClient's constructor wired sse.setOnEvent → reportDelivery('received').
   // remoteIO.ts additionally sends 'processing'/'processed' via
   // setCommandLifecycleListener, which the in-process query loop fires. This
-  // transport's only caller (replBridge/daemonBridge) has no such wiring — the
-  // daemon's agent child is a separate process (ProcessTransport), and its
-  // notifyCommandLifecycle calls fire with listener=null in its own module
-  // scope. So events stay at 'received' forever, and reconnectSession re-queues
+  // transport's callers (replBridge.ts, remoteBridgeCore.ts) have no such
+  // wiring — the daemon's agent child is a separate process
+  // (ProcessTransport), and its notifyCommandLifecycle calls fire with
+  // listener=null in its own module scope. So events stay at 'received' forever, and reconnectSession re-queues
   // them on every daemon restart (observed: 21→24→25 phantom prompts as
   // "user sent a new message while you were working" system-reminders).
   //
