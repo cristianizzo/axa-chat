@@ -3104,24 +3104,45 @@ function foldResolvedRootPrefix(form: string, roots: FoldableRoot[]): string {
       // way — see `endsWithSeparatorSpelling` for the measurement and for why
       // this site's population is narrower: the resolved forms here are stripped
       // afterwards, so only the all-separator root (`/`, or `\` on win32)
-      // reaches this loop with a trailing separator.
+      // reaches this loop with a trailing separator. The emit needs its own
+      // guard because `lexical` is stripped by the same function and so can
+      // also be all-separator: an unlinked `CLAUDE_CONFIG_DIR=/` folds
+      // `/agent-memory/x.md` to `//agent-memory/x.md` without it, a spelling
+      // no carve-out recognises.
       //
-      // The emit needs its own guard because `lexical` is stripped by the same
-      // function and so can also be all-separator. Control, with the guard
-      // hard-wired off: an unlinked `CLAUDE_CONFIG_DIR=/` folds
-      // `/agent-memory/x.md` to `//agent-memory/x.md`, a spelling no carve-out
-      // recognises. With it, that row is a no-op — lexical and resolved are the
-      // same string, so there is nothing to rewrite — and the one row that moves
-      // is a root whose lexical spelling differs from a root-only resolved form:
-      // `CLAUDE_CONFIG_DIR=/link -> /` now folds `/agent-memory/x.md` to
-      // `/link/agent-memory/x.md` instead of leaving it unfolded.
+      // SECURITY: the root-only arm below is gated on the root's own
+      // `lexical` spelling also being root-only — not merely on this
+      // particular `resolved` entry being one. Without that gate, `rootLower`
+      // here can be `/` for reasons that have nothing to do with the root
+      // actually denoting `/`: `getPathsForPermissionCheck` returns `normalize`d
+      // symlink targets, and `normalize` folds `..` lexically rather than
+      // symlink-safely, so a symlink whose target walks up more `../` segments
+      // than its own depth (e.g. `getClaudeTempDir()`'s base, or any other
+      // foldable root, linked through such a target) yields a lexical `/` the
+      // kernel never produced. `/` is then the *shortest possible* root, so it
+      // loses every longest-match comparison above against a legitimate root —
+      // but it wins by default for a candidate form that matches no legitimate
+      // root at all, which is exactly the escape population (`/etc/passwd`
+      // included). Without this gate every such candidate silently folds into
+      // `lexical + rest`, i.e. is rewritten to *look like* it is inside a
+      // config-dir root it never touched, and `allowOnlyIfResolvedFormsAgree`'s
+      // resolved-forms check stops being able to tell the difference.
       //
-      // That direction is **closed**, checked here rather than carried over from
-      // the other site: an unfolded form is re-decided literally, matches no
-      // carve-out, and `allowOnlyIfResolvedFormsAgree` turns the reason mismatch
-      // into `denied`. No allow can be minted either way — that gate only ever
-      // downgrades the written form's decision.
-      if (endsWithSeparatorSpelling(rootForm)) {
+      // Restricting to `lexical === rootLower` only takes this arm when the
+      // root's own configured spelling is itself root-only (a real, if
+      // unusual, `CLAUDE_CONFIG_DIR=/` or a root that resolves straight to
+      // `/`), not when an unrelated symlink elsewhere poisoned this one root's
+      // resolved set with `/`. The cost is narrow and fails in the safe
+      // direction: a deliberately root-only-lexical root that is *also*
+      // linked one hop deeper (`CLAUDE_CONFIG_DIR=/link -> /`) now leaves a
+      // form like `/agent-memory/x.md` unfolded instead of folding it to
+      // `/link/agent-memory/x.md` — re-decided literally, it matches no
+      // carve-out and `allowOnlyIfResolvedFormsAgree` denies, a false deny,
+      // not a fail-open.
+      if (
+        endsWithSeparatorSpelling(rootForm) &&
+        normalizeCaseForComparison(lexical) === rootLower
+      ) {
         if (formLower.startsWith(rootLower)) {
           folded =
             lexical +
