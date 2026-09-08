@@ -88,9 +88,87 @@ The counter-example is in this document's own history: `CCR_V2` and
 `POST_FOR_SESSION_INGRESS_V2` (§7) look like they share a prefix, and they do
 not — the real names are `CLAUDE_CODE_USE_CCR_V2` and
 `CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2`, so guessing `CLAUDE_CODE_USE_` from
-the first gives a name that exists nowhere for the second. Measured over every
-`[A-Z][A-Z0-9_]{3,}` token cited below: all resolve in `src/` on `main` except
-`TS2307`, a `tsc` diagnostic code and not an identifier.
+the first gives a name that exists nowhere for the second. Measured over all 27
+distinct tokens cited **in this document's prose**, fenced code blocks excluded:
+24 resolve in `src/` on `origin/main`, and the exception set has exactly three members
+— `TS2307` and `TS2367`, both `tsc` diagnostic codes, and `FNM_PATHNAME`, a
+POSIX `fnmatch` flag named in the pathspec paragraph above. None is an
+identifier in this repo, which is the whole reason they are the exceptions.
+
+That measurement is two commands, not a description, because a pattern without
+its engine is not re-derivable — the extractor uses lookarounds, which POSIX ERE
+does not have, so `grep -E` cannot run it at all:
+
+```sh
+# Extraction, piped straight into resolution — copy-paste the whole block, it
+# needs no substitution and produces the exception set directly. The extractor
+# needs lookarounds, which POSIX ERE does not have, so this uses perl, whose
+# regex engine has them (GNU grep -P also has them, but -P is a GNU extension
+# and not available on BSD/macOS grep, so it is not the portable choice here).
+# The awk strips fenced blocks, which is what "prose" above means; without it
+# this block's own examples would enter the population it is describing. The
+# final loop is resolution: git grep against a ref, never rg or a working-tree
+# grep, fed one token per line from the extraction above; it prints the
+# misses, and the exception set is exactly what comes out.
+awk '/^```/{f=!f; next} !f' docs/ARCHITECTURE.md \
+  | perl -nle 'print for /(?<![A-Za-z0-9_])[A-Z][A-Z0-9_]{3,}(?![A-Za-z0-9_])/g' \
+  | sort -u \
+  | while read -r token; do
+      git grep -q -F "$token" origin/main -- src/ || echo "$token"
+    done
+
+# The obvious ERE workaround for the missing lookarounds is WRONG: it consumes
+# its guard characters, so two qualifying tokens separated by one character
+# yield only the first. This prints AAAA alone, never BBBB.
+printf 'AAAA BBBB\n' \
+  | grep -oE '(^|[^A-Za-z0-9_])[A-Z][A-Z0-9_]{3,}([^A-Za-z0-9_]|$)' \
+  | grep -oE '[A-Z][A-Z0-9_]{3,}'
+```
+
+Neither instrument is incidental. `git grep <ref>` is required for resolution,
+not merely preferred, because the claim above is about `main`: `rg` and a
+plain `grep -r` search the working tree, so a local edit — an uncommitted
+rename, a token deleted here and not yet pushed — would silently change which
+tokens resolve without changing what the page asserts. `git grep <ref>` reads
+the content of that ref regardless of the working tree's state, which is the
+only way the measurement stays about `main` rather than about whatever this
+checkout happens to hold. The consuming workaround happens to give the right
+answer on this document, which is exactly why it is named here rather than
+left for the next person to reinvent — and note that resolution is a
+**substring** test, so it is generous by construction. That is the same
+generosity the next paragraph relies on.
+
+**The word boundaries in that pattern are load-bearing, and so is the scope
+word.** Stated unbounded, as `[A-Z][A-Z0-9_]{3,}`, the extractor cuts mixed-case
+identifiers mid-word and mints tokens nobody cited: on the revision immediately
+before this one it reported **26** against the bounded **21**, the difference
+being `CCRC`, `REPLT`, `SDKC`, `SDKM` and `SSET` — the leading characters of
+`CCRClient`, `REPLTool`, `SDKControl*`, `SDKMessage` and `SSETransport`. This is
+the same defect this section warns about for file names, a loose matcher
+inventing members, arriving on the *extraction* side rather than the resolution
+side.
+
+Both patterns now agree at 27 **here**, and only because this paragraph quotes
+those five phantoms verbatim in order to name them, which promotes them to
+genuinely-cited tokens. The divergence is observable only on text that does not
+name them, so do not read the agreement as evidence the boundaries are
+unnecessary — re-deriving that requires the previous revision.
+
+**It was invisible from every artefact the page exposes.** A token carved out of
+a longer identifier is by construction a substring of a string present in
+`src/`, so a phantom minted this way is *guaranteed* to land on the resolving
+side and can never disturb the exception list. An unbounded extractor and a
+substring resolver hide each other: the enumeration a reader can check stays
+correct while the totals are wrong.
+
+An earlier revision of this sentence scoped the count with a bare "cited below"
+and named a **one-member** exception set. Both parts had rotted. `TS2367`
+arrived later, with §4's control-protocol paragraph, and nothing re-measured;
+`FNM_PATHNAME` is cited *above* this line, so "below" silently excluded it
+rather than accounting for it. **A one-member exception set is the shape that
+gets silently completed wrong** — state the extraction pattern and the scope as
+well as the resolution instrument, because a count whose population cannot be
+re-derived from the page is unverifiable however carefully it was taken.
 
 Seven numbered sections, zooming in: whole lifecycle → startup → prompt submit →
 the agent turn loop → provider/network resolution → tool execution and
