@@ -107,8 +107,12 @@ awk '/^```/{f=!f; next} !f' docs/ARCHITECTURE.md \
   | perl -nle 'print for /(?<![A-Za-z0-9_])[A-Z][A-Z0-9_]{3,}(?![A-Za-z0-9_])/g' \
   | sort -u
 
-# Resolution: git grep against a ref, never rg or a working-tree grep.
-git grep -q -F "$token" origin/main -- src/
+# Resolution: git grep against a ref, never rg or a working-tree grep. Feed it
+# the tokens the extraction command above printed, one per line, and it prints
+# the misses -- the exception set is exactly what comes out.
+while read -r token; do
+  git grep -q -F "$token" origin/main -- src/ || echo "$token"
+done
 
 # The obvious ERE workaround for the missing lookarounds is WRONG: it consumes
 # its guard characters, so two qualifying tokens separated by one character
