@@ -615,7 +615,7 @@ export function useReplBridge(messages: Message[], setMessages: (action: React.S
           }
         } catch (err) {
           // Never crash the REPL — surface the error in the UI.
-          // Check cancelled first (symmetry with the !handle path at line ~386):
+          // Check cancelled first (symmetry with the `if (!handle_0) {` path):
           // if initReplBridge threw during rapid toggle-off (in-flight network
           // error), don't count that toward the fuse or spam a stale error
           // into the UI. Also fixes pre-existing spurious setAppState/
