@@ -14,7 +14,6 @@ import { isAgentMemoryPath } from 'src/tools/AgentTool/agentMemory.js'
 import {
   FILE_EDIT_TOOL_NAME,
   GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
-  LEGACY_PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
   PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
 } from 'src/tools/FileEditTool/constants.js'
 import type { z } from 'zod/v4'
@@ -24,7 +23,11 @@ import {
   getSessionId,
 } from '../../bootstrap/state.js'
 import { isGlobalConfigFileName } from '../../constants/oauth.js'
-import { CONFIG_DIR_NAME, MEMORY_FILE_NAME } from '../../constants/product.js'
+import {
+  CONFIG_DIR_NAME,
+  MEMORY_FILE_NAME,
+  OLD_CONFIG_DIR_NAME,
+} from '../../constants/product.js'
 import { checkStatsigFeatureGate_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import type { AnyObject, Tool, ToolPermissionContext } from '../../Tool.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
@@ -83,15 +86,25 @@ export const DANGEROUS_FILES = [
   // owns. A write there corrupts that install's session and forces a re-login,
   // and it is just as hazardous on a machine that never had a legacy config dir.
   // Nothing in this repo may write this file; for auto-editing, this entry is
-  // what enforces that. Matched on basename anywhere in the path, hence bare.
+  // what enforces that. Stored bare because the check compares it against the
+  // **last** path segment only (`pathSegments.at(-1)`) — not against every
+  // segment, which an earlier wording of this line ("basename anywhere in the
+  // path") wrongly implied. Nothing is lost by that: the entry names a file, so
+  // the only path it needs to catch is one ending in it. Contrast
+  // DANGEROUS_DIRECTORIES, which really does scan every segment — see the loop
+  // over `pathSegments` in `isDangerousFilePathToAutoEdit`, where both lists are
+  // consumed — because a directory has to be caught with children beneath it.
   //
-  // Polarity, because the `.claude` handling in this file runs both ways and
+  // Polarity, because the config-dir handling in this file runs both ways and
   // inspection cannot tell them apart: this is a denylist **entry**, so deleting
   // it *under-blocks* — protection silently gone, no code path breaks, nothing
-  // fails a typecheck. `.claude` in DANGEROUS_DIRECTORIES is an entry too, but
-  // `.claude` in the worktree-path check below is an *exemption from* that
-  // denylist, and deleting that one over-blocks instead. Ask "does removing this
-  // under-block or over-block?", never "is this literal deliberate?".
+  // fails a typecheck. CONFIG_DIR_NAME and OLD_CONFIG_DIR_NAME in
+  // DANGEROUS_DIRECTORIES are entries too, but the CONFIG_DIR_NAME test in the
+  // worktree-path check below is an *exemption from* that denylist, and deleting
+  // that one over-blocks instead. Ask "does removing this under-block or
+  // over-block?", never "is this literal deliberate?". Note the other three are
+  // spelled as constants rather than strings, so a grep for the directory name
+  // finds only this line — the imports are the population, not the literals.
   '.claude.json',
 ] as const
 
@@ -104,11 +117,15 @@ export const DANGEROUS_DIRECTORIES = [
   '.vscode',
   '.idea',
   CONFIG_DIR_NAME,
-  // Legacy, and deliberately still listed. A project that has not been
-  // migrated still keeps live config here, so dropping it would remove this
-  // protection from exactly the projects that predate the rename — the ones
-  // still relying on it.
-  '.claude',
+  // The pre-migration config dir. Still listed because it still exists: the
+  // migration refuses and returns on several paths (a destination
+  // `.config.json`, an unresolvable conflict, a verify mismatch, concurrent
+  // drift), and on every one of them `~/.axa` survives holding credentials and
+  // history. Protecting only the new name would leave the old one silently
+  // auto-editable for exactly as long as it is still the one with the secrets
+  // in it. A denylist **entry**, so deleting it under-blocks. Retire it only
+  // once nothing can create or keep a `.axa` directory.
+  OLD_CONFIG_DIR_NAME,
   // Credential / persistence directories. Writing here grants persistent
   // access or exposes secrets: an edit to ~/.ssh/authorized_keys is a
   // backdoor, and these hold private keys / cloud credentials. Listed as
@@ -121,14 +138,10 @@ export const DANGEROUS_DIRECTORIES = [
 
 /**
  * Every config-folder spelling a session-scoped allow rule may be scoped to,
- * checked by step 1.6 of checkWritePermissionForTool. Three entries, not two:
- * the project scope is `.axa` in this fork, but `.claude` stays in
- * DANGEROUS_DIRECTORIES for projects that predate the rename, so both project
- * spellings need a way through.
+ * checked by step 1.6 of checkWritePermissionForTool.
  */
 const CONFIG_FOLDER_PERMISSION_PATTERNS = [
   PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
-  LEGACY_PROJECT_CONFIG_FOLDER_PERMISSION_PATTERN,
   GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
 ] as const
 
@@ -156,6 +169,86 @@ const CONFIG_FOLDER_PERMISSION_PATTERNS = [
  * gap and must not be cited as if it had.
  */
 const ROOT_SEPARATOR_SPELLINGS: ReadonlySet<string> = new Set([sep, '/'])
+
+/**
+ * Does `p` already end in one of ROOT_SEPARATOR_SPELLINGS?
+ *
+ * Both root-prefix loops below test `rootLower + s` for each spelling `s`, which
+ * assumes the root form carries no trailing separator. That assumption is false
+ * for exactly one population, and it is one the roots are *deliberately* allowed
+ * to be in: `stripTrailingSeparatorsForWalk` returns a root-only spelling
+ * unchanged, because stripping `C:\` to `C:` changes what the string denotes.
+ * `rootLower + s` is then a doubled separator (`//`, `C:\\`), which no
+ * normalized path can start with, so every path under such a root stops
+ * matching. Hence the branch at both call sites: when the root form already ends
+ * in a separator the component boundary is present, so the prefix test is the
+ * bare root and the remainder starts at `rootForm.length`.
+ *
+ * Measured with `path.posix` / `path.win32` over a 23-root sweep run through the
+ * real pipeline (`stripTrailingSeparatorsForWalk` -> `normalize`, plus the fold
+ * site's further `stripTrailingSeparators`), covering `/`, `C:\`, `C://`,
+ * `\\server\share\`, `\\?\C:\` and their redundant spellings alongside ordinary
+ * `/cfg/` and `C:\cfg\` controls:
+ *
+ *                                              classify        fold
+ *   root forms reaching the loop with a
+ *     trailing separator                       posix 3         posix 3
+ *                                              win32 15        win32 5
+ *   of those, forms that are NOT root-only     0 on both       0 on both
+ *
+ * The second row is what makes the bare-prefix test safe — the trailing
+ * separator *is* the boundary — and the first row is the control that keeps the
+ * zero from being a dead instrument.
+ *
+ * The two loops do not share a population, so do not carry one reachability
+ * sentence across them. `relativeToConfigDirRoot` matches against
+ * `getResolvedConfigDirRoots`, which only normalizes, so it sees drive, share
+ * and extended-length roots as well as `/`. `foldResolvedRootPrefix` matches
+ * against `getFoldableRootsForSession`, which strips its forms afterwards, and
+ * `stripTrailingSeparators` reduces `C:\` to `C:` and `\\server\share\` to
+ * `\\server\share`; only the all-separator root survives its empty-string guard,
+ * so the fold's population is `/` on posix and `\` on win32 and nothing else.
+ *
+ * **Say out loud what the bare prefix test does when the root is `/`, because
+ * the sentence above understates it.** For every other member of this
+ * population the root is a drive, a share or an extended-length prefix and the
+ * bare test still selects a bounded subtree. For `/` it selects *everything*:
+ * `pathLower.startsWith('/')` is true of every absolute POSIX path, so a
+ * session with `CLAUDE_CONFIG_DIR=/` stops returning `null` from
+ * `relativeToConfigDirRoot` for any path at all, and every file on the machine
+ * arrives at `classifyConfigDirRelativePath`. That is a real behaviour change
+ * and it should be read deliberately rather than discovered.
+ *
+ * It grants nothing new, and the reason is worth writing down because "it is
+ * fine" is not checkable and this is:
+ *
+ *  - The **write** grant at the `=== 'open'` call site needs `'open'`, and
+ *    `classifyConfigDirRelativePath` **defaults to `'protected'`**. Reaching
+ *    `'open'` needs the first segment in `CONFIG_DIR_OPEN_DIRS`, so under a `/`
+ *    root the widened population is `/plans`, `/agent-memory`,
+ *    `/agent-memory-local`, `/magic-docs` and `/rules` — not `/etc`, `/usr` or
+ *    `/home`, which take the protected default.
+ *  - The **read** grant needs `'open'`, or `'protected'` *and*
+ *    `isReadableConfigDirPath`, which independently requires the first segment
+ *    in `CONFIG_DIR_READABLE_DIRS`. `/etc/passwd` classifies `'protected'` and
+ *    fails that second test, so it gets neither grant.
+ *  - `/` is not reachable by accident. It is a config *home*, and the only way
+ *    it becomes one is the user setting `CLAUDE_CONFIG_DIR=/` — at which point
+ *    treating `/plans` as their plans directory is the literal meaning of what
+ *    they asked for, not something this branch invented.
+ *
+ * Note the direction: before this branch a `/` root matched **nothing**,
+ * because `rootLower + s` was `//` and no normalized path starts with it. So
+ * the carve-outs a `CLAUDE_CONFIG_DIR=/` user configured silently did not work.
+ * This is a fix for that, not a widening past it — but the two are easy to
+ * confuse from the diff alone, which is why it is stated here.
+ */
+function endsWithSeparatorSpelling(p: string): boolean {
+  for (const s of ROOT_SEPARATOR_SPELLINGS) {
+    if (p.endsWith(s)) return true
+  }
+  return false
+}
 
 /**
  * Normalizes a path for case-insensitive comparison.
@@ -234,7 +327,7 @@ export function getClaudeSkillScope(
         // Reject glob metacharacters. skillName is interpolated into a
         // gitignore pattern consumed by ignore().add() in matchingRuleForInput
         // at step 1.6. A directory literally named '*' (valid on POSIX) would
-        // produce '/.axa/skills/*/**' which matches ALL skills. Return null
+        // produce '/.claude/skills/*/**' which matches ALL skills. Return null
         // to fall through to generateSuggestions() instead.
         if (/[*?[\]]/.test(skillName)) return null
         return { skillName, pattern: prefix + skillName + '/**' }
@@ -300,18 +393,18 @@ export function isClaudeSettingsPath(filePath: string): boolean {
   // without this arm a foreign project's settings.json is unprotected — and
   // that is the case this arm exists for.
   //
-  // `.axa` is built from CONFIG_DIR_NAME so the canonical spelling has one
-  // definition. The legacy spelling stays a literal on purpose: it is not the
-  // config dir this product writes, it is a foreign directory this predicate
-  // still refuses to auto-edit, and LEGACY_CONFIG_DIR_NAME documents itself as
-  // read in exactly one place (the startup import check). Reaching for it here
-  // would make that constant's docblock false to save one string.
-  //
   // Use platform separator so endsWith checks work on both Unix (/) and Windows (\)
   const isSettingsFileUnder = (configDirName: string): boolean =>
     normalizedPath.endsWith(`${sep}${configDirName}${sep}settings.json`) ||
     normalizedPath.endsWith(`${sep}${configDirName}${sep}settings.local.json`)
-  if (isSettingsFileUnder(CONFIG_DIR_NAME) || isSettingsFileUnder('.claude')) {
+  if (isSettingsFileUnder(CONFIG_DIR_NAME)) {
+    return true
+  }
+  // The pre-migration name, for as long as it can still exist. Nothing reads
+  // these files any more, but they hold the same secrets they always did until
+  // the migration succeeds — and it has several paths on which it refuses and
+  // leaves them in place. "Unread" is not "safe to auto-edit".
+  if (isSettingsFileUnder(OLD_CONFIG_DIR_NAME)) {
     return true
   }
   // Check for current project's settings files (including managed settings and CLI args)
@@ -491,8 +584,29 @@ export function getProjectTempDir(): string {
 }
 
 /**
- * Returns the scratchpad directory path for the current session.
- * Path format: /tmp/claude-{uid}/{sanitized-cwd}/{sessionId}/scratchpad/
+ * Returns the scratchpad directory path for the current session, with **no**
+ * trailing separator.
+ * Path format: /tmp/claude-{uid}/{sanitized-cwd}/{sessionId}/scratchpad
+ *
+ * The neighbour above is the trap. `getProjectTempDir` genuinely does end in
+ * `sep` and its docblock correctly says so; this one is built from it, the `/`
+ * was carried down with the rest of the line, and `join` then dropped it. Two
+ * adjacent near-identical docblocks, only one of them true — which is what
+ * makes "make the code match the doc" the natural-looking fix here.
+ *
+ * It is the wrong fix. `isScratchpadPath` below tests
+ * `normalized === scratchpadDir` or `normalized.startsWith(scratchpadDir + sep)`,
+ * and appending a separator here kills both branches for every input that
+ * actually arrives: measured, a trailing-separator root returns false for the
+ * directory itself, for `…/scratchpad/file.txt` and for
+ * `…/scratchpad/sub/file.txt`, all three of which the shipped shape returns
+ * true for. `normalize` does not rescue it, and not for the reason usually
+ * given — it *preserves* a trailing separator rather than stripping one, so
+ * the sole surviving match would be the directory spelled with a trailing
+ * slash, which nothing here produces.
+ *
+ * The failure would be closed and silent: the scratchpad carve-out stops
+ * applying, writes are refused, and there is no error and no log to read.
  */
 export function getScratchpadDir(): string {
   return join(getProjectTempDir(), getSessionId(), 'scratchpad')
@@ -570,15 +684,22 @@ function isDangerousFilePathToAutoEdit(path: string): boolean {
       // stores git worktrees), not a user-created dangerous directory. Skip the
       // config segment when it's followed by 'worktrees'. Any nested config
       // directories within the worktree (not followed by 'worktrees') are still
-      // blocked. Both spellings, since an unmigrated project still has its
-      // worktrees under the legacy name.
-      if (dir === CONFIG_DIR_NAME || dir === '.claude') {
+      // blocked.
+      // Exemption, not a guard: skips a config-dir segment followed by
+      // `worktrees`, which is where this tool keeps its own. Removing it does
+      // not loosen anything — it makes every worktree edit prompt.
+      // OLD_CONFIG_DIR_NAME is exempt for the same reason, and it is not
+      // vestigial: worktrees live under the *repo-local* config dir
+      // (`<gitRoot>/<config>/worktrees/`), which the home-directory migration
+      // never touches. Every `.axa/worktrees/<name>` checkout created before
+      // the rename is still on disk and still in use.
+      if (dir === CONFIG_DIR_NAME || dir === OLD_CONFIG_DIR_NAME) {
         const nextSegment = pathSegments[i + 1]
         if (
           nextSegment &&
           normalizeCaseForComparison(nextSegment) === 'worktrees'
         ) {
-          break // Skip this .claude, continue checking other segments
+          break // Skip this config-dir segment, keep checking the rest
         }
       }
 
@@ -788,12 +909,28 @@ export function allWorkingDirectories(
   ])
 }
 
-// Working directories are session-stable; memoize their resolved forms to
-// avoid repeated existsSync/lstatSync/realpathSync syscalls on every
-// permission check. Keyed by path string — getPathsForPermissionCheck is
-// deterministic for existing directories within a session.
-// Exported for test/preload.ts cache clearing (shard-isolation).
-export const getResolvedWorkingDirPaths = memoize(getPathsForPermissionCheck)
+// Resolved forms of a working directory, recomputed on each permission check.
+//
+// This was `memoize(getPathsForPermissionCheck)`, justified by the claim that
+// "getPathsForPermissionCheck is deterministic for existing directories within
+// a session". It is not: it is a symlink chain walk, so its answer is a
+// property of the filesystem at the moment it runs, not of the string it was
+// handed. Read-only does not imply idempotent, and that inference is what put
+// a cache here — it is the same false step that was made at the config-dir
+// roots, which is why the two were fixed together rather than separately.
+//
+// The stale value was worse here than there: the cache held the walk itself,
+// keyed on an arbitrary path rather than on two known roots, so it had more
+// entries — and a working directory is far likelier to be repointed
+// mid-session than a config dir is.
+//
+// The name is kept rather than inlined because `pathValidation.ts` documents
+// its own cost model as "matching getResolvedWorkingDirPaths", so the identity
+// is referred to from outside this file even though the only call is below.
+// The previous justification for the `export` — clearing the cache from
+// `test/preload.ts` — went with the cache, and that file does not exist in
+// this repo in any case.
+export const getResolvedWorkingDirPaths = getPathsForPermissionCheck
 
 export function pathInAllowedWorkingPath(
   path: string,
@@ -1371,7 +1508,7 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
   //
   // matchingRuleForInput returns the first match across all sources. If the user
   // also has a broader rule in userSettings for any of the spellings this step
-  // covers — Edit(/.axa/**), Edit(/.claude/**) or Edit(~/.axa/**), e.g. from
+  // covers — Edit(/.claude/**) or Edit(~/.claude/**), e.g. from
   // sandbox write-allow conversion — that rule would be found first and its
   // source check below would fail. Scope the search to session-only rules so the
   // dialog's "allow Claude to edit its own settings for this session" option
@@ -1388,14 +1525,13 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
     'allow',
   )
   if (configFolderAllowRule) {
-    // Check if this rule is scoped under a config folder (project, legacy
-    // project, or global). Accepts both the broad patterns ('/.axa/**',
-    // '/.claude/**', '~/.axa/**') and narrowed ones like
-    // '/.axa/skills/my-skill/**' so users can grant session access to a single
-    // skill without also exposing settings.json or hooks/. The rule already
-    // matched the path via matchingRuleForInput; this is an additional scope
-    // check. Reject '..' to prevent a rule like '/.axa/../**' from leaking
-    // this bypass outside the config folder.
+    // Check if this rule is scoped under a config folder (project or global).
+    // Accepts both the broad patterns ('/.claude/**', '~/.claude/**') and
+    // narrowed ones like '/.claude/skills/my-skill/**' so users can grant
+    // session access to a single skill without also exposing settings.json or
+    // hooks/. The rule already matched the path via matchingRuleForInput; this
+    // is an additional scope check. Reject '..' to prevent a rule like
+    // '/.claude/../**' from leaking this bypass outside the config folder.
     const ruleContent = configFolderAllowRule.ruleValue.ruleContent
     if (
       ruleContent &&
@@ -1590,10 +1726,10 @@ export function generateSuggestions(
 }
 
 /**
- * How much of a config dir (`~/.axa` and `<project>/.axa`) the harness may
+ * How much of a config dir (`~/.claude` and `<project>/.claude`) the harness may
  * reach without prompting.
  *
- * - `open`      — read and write silently. AXA.md and the agent-authored note
+ * - `open`      — read and write silently. CLAUDE.md and the agent-authored note
  *                 directories: prose the model writes for itself, enumerated in
  *                 CONFIG_DIR_OPEN_DIRS / CONFIG_DIR_OPEN_FILES.
  * - `protected` — readable, but writes fall through to the safety gate and
@@ -1621,7 +1757,7 @@ const CONFIG_DIR_SECRET_DIRS = new Set([
   // is what puts them on the read side of the line. `projects/` holds session
   // transcripts for *every* project on the machine, so a silent read lets an
   // agent working in one repo read another repo's history. Today a read of
-  // ~/.axa/projects/<other>/x.jsonl reaches step 12 of
+  // ~/.claude/projects/<other>/x.jsonl reaches step 12 of
   // checkReadPermissionForTool and asks, because step 6 only covers working
   // directories; classifying these 'protected' would have quietly removed that
   // prompt. `sessions/` is the same data by another name.
@@ -1774,7 +1910,7 @@ const CONFIG_DIR_PROTECTED_DIRS = new Set([
 const CONFIG_DIR_OPEN_DIRS = new Set([
   'agent-memory',
   // The 'local' scope of the same feature: getAgentMemoryDir writes
-  // <cwd>/.axa/agent-memory-local/<agentType>/ (AgentTool/agentMemory.ts).
+  // <cwd>/.claude/agent-memory-local/<agentType>/ (AgentTool/agentMemory.ts).
   // isAgentMemoryPath already allows it earlier, so this changes no behaviour —
   // it is here because the point of listing the earlier carve-outs again is that
   // this classifier be independently correct rather than correct-by-unreachable,
@@ -1841,42 +1977,180 @@ const CONFIG_DIR_SETTINGS_FILE_PATTERN =
 const CONFIG_DIR_HISTORY_FILE_PATTERN = /^history\.jsonl(\..*)?$/
 
 /**
- * Resolved forms of the two config dir roots. Session-stable, and resolving
- * them costs lstat/realpath syscalls, so memoize on the inputs rather than
- * recomputing on every permission check. Same pattern as
- * getResolvedWorkingDirPaths.
+ * Resolved forms of the two config dir roots.
+ *
+ * Computed once per classification and deliberately **not** memoized for the
+ * session. The previous shape cached this on `${home}\u0000${project}`, and
+ * that key is genuinely session-stable — which is precisely what made it look
+ * safe. The key was never the problem. The *value* is: what a path resolves to
+ * is filesystem state, not a function of the string, so a root that is
+ * relinked mid-session leaves a cache that is wrong in **both** directions at
+ * once. It keeps matching the old target and stops matching the new one.
+ * Validating the input cannot repair a value that was correct when it was
+ * stored, which is why this is a cache-removal and not a guard.
+ *
+ * Do not write one severity sentence for the two consumers — they fail in
+ * opposite directions from the same stale value. In `classifyConfigDirPath` a
+ * root that no longer matches yields `null`, which reads as "not a config-dir
+ * path at all" and skips the classification entirely: **fails open**. In
+ * `isReadableConfigDirPath` the same `null` returns false: **fails closed**.
+ *
+ * The argument is stripped with `stripTrailingSeparatorsForWalk` rather than
+ * passed through, because it is handed to a live chain walk.
+ * `getClaudeConfigHomeDir()` returns `CLAUDE_CONFIG_DIR` verbatim, so a user's
+ * trailing separator — or a bare drive root — arrives here exactly as typed.
+ * Same defect and same fix as the fold site; see that function for why the
+ * strip has to know the difference between a spelling and a denotation.
  */
-const getResolvedConfigDirRoots = memoize(
-  (homeConfigDir: string, projectConfigDir: string): string[][] =>
-    [homeConfigDir, projectConfigDir].map(root =>
-      getPathsForPermissionCheck(root).map(normalize),
+function getResolvedConfigDirRoots(
+  homeConfigDir: string,
+  projectConfigDir: string,
+): string[][] {
+  return [homeConfigDir, projectConfigDir].map(root =>
+    getPathsForPermissionCheck(stripTrailingSeparatorsForWalk(root)).map(
+      normalize,
     ),
-  (homeConfigDir: string, projectConfigDir: string) =>
-    `${homeConfigDir}\u0000${projectConfigDir}`,
-)
+  )
+}
 
 /**
- * The path of `absolutePath` relative to whichever config dir root contains
- * it, or null if no root does. `''` means the root itself.
+ * The path of `normalizedPath` relative to the **innermost** config dir root
+ * that contains it, or null if none does. `''` means the root itself.
+ *
+ * `roots` is passed in rather than fetched here so that a caller looping over
+ * the resolved forms of one path resolves the roots once, not once per form.
+ *
+ * ## Why longest-root-wins, and not the first root in the list
+ *
+ * The two roots can nest: the project config dir is `<cwd>/.claude`, and nothing
+ * stops `cwd` from being inside the config home — `~/.claude/plans` and
+ * `~/.claude/rules` are directories this app creates itself, so `cd ~/.claude/plans`
+ * and starting a session is ordinary use, not an exotic setup.
+ *
+ * When they nest, a path under the inner root matches both. This function used
+ * to return on the **first** match, and the roots are iterated `[home,
+ * project]`, so in that configuration it returned the *outer* root's relative
+ * path — `plans/.claude/hooks/h.sh` instead of `hooks/h.sh`.
+ *
+ * That is not a cosmetic difference, because `classifyConfigDirRelativePath`
+ * reads two things out of the relative path and only one of them survives the
+ * substitution:
+ *
+ * - the **first segment**, against CONFIG_DIR_SECRET_DIRS,
+ *   CONFIG_DIR_PROTECTED_DIRS and CONFIG_DIR_OPEN_DIRS. The outer root replaces
+ *   it with the *project directory's own name*, so every one of these
+ *   classifications is decided by the wrong string.
+ * - the **basename**, against the settings-file shape, the credential and
+ *   history patterns and the global config names. This is root-independent by
+ *   construction and was never affected.
+ *
+ * So the defect is precisely: **first-segment classifications were bypassed,
+ * basename ones were not.** Both halves are measured below, and the basename
+ * rows are what make the account falsifiable rather than a story — if a fix
+ * moved those too, this explanation would be wrong.
+ *
+ * It failed in **both** directions, which is why "the outer root is merely less
+ * specific, so this over-blocks" is not a safe reading of it:
+ *
+ * - **Over-block.** With `cwd` = `<cfg>/proj`, `<cwd>/.claude/rules/note.md` and
+ *   `<cwd>/.claude/CLAUDE.md` came back `passthrough` for both read and write, where
+ *   the identical project sitting outside the config home gets `allow`. The
+ *   first segment was `proj`, on none of the lists, so the default applied.
+ * - **Fail open.** The five names in CONFIG_DIR_OPEN_DIRS are themselves
+ *   directories inside the config home, so `cwd` can *be* one of them. With
+ *   `cwd` = `<cfg>/rules`, the first segment became `rules` — an open dir — and
+ *   the whole of `<cwd>/.claude` was classified `open`, i.e. silently writable and
+ *   silently readable. Measured: `<cwd>/.claude/hooks/h.sh` returned `allow` for
+ *   **write**. A hook is a shell command executed on the next launch, so that
+ *   is a silent write to code that runs. `<cwd>/.claude/projects/s.jsonl`, which
+ *   the inner root classifies `secret`, returned `allow` for **read**.
+ *   Meanwhile `<cwd>/.claude/settings.json` and `<cwd>/.claude/.credentials.json`
+ *   stayed `passthrough` throughout — the basename half holding, as above.
+ *
+ * The fix moves each of those to exactly what the same file gets under a
+ * non-nested project config dir: hooks and agents to `passthrough`/`allow`,
+ * `projects/` to `passthrough`/`passthrough`.
+ *
+ * ## What the ordering actually was
+ *
+ * Call it list-order-wins, not shortest-wins. The two coincide only because the
+ * home config dir is listed first *and* is the outer one in the reachable
+ * nesting. In the opposite nesting — CLAUDE_CONFIG_DIR pointed at a directory
+ * inside `<cwd>/.claude` — list order already picks the inner root, and every row
+ * is byte-identical before and after this change. That arm is the control that
+ * makes this a targeted fix rather than a behaviour change: it moves the
+ * configuration where list order picks the outer root, and nothing else.
+ *
+ * ## Kept in step with foldResolvedRootPrefix
+ *
+ * That function has always resolved this the same way, via `foldedRootLength`,
+ * and the two are otherwise the same walk over the same shape. `<=` sends ties
+ * to the earlier root for the same reason it does there: a tie means two roots
+ * resolve to the same directory, so the relative paths are identical anyway.
+ *
+ * They also now carry the same root-only branch, and that one is not cosmetic:
+ * the two reach it over different root sets, and the fold needs an extra guard
+ * on the side it emits. Both are written up at `endsWithSeparatorSpelling`.
+ *
+ * One remaining difference between them is cosmetic and is left alone rather
+ * than "aligned": the separator comparison here lowercases `s` and the fold
+ * does not. This is settled by enumeration, not by sampling —
+ * ROOT_SEPARATOR_SPELLINGS is `new Set([sep, '/'])`, so it has at most two
+ * members, `'/'` and (on win32) the backslash `sep`, and `toLowerCase` is the
+ * identity on
+ * both. The call is a no-op on every input the set can hold. Removing it is
+ * safe and pointless; adding it to the fold is equally so.
  */
-function relativeToConfigDirRoot(normalizedPath: string): string | null {
-  const roots = getResolvedConfigDirRoots(
-    getClaudeConfigHomeDir(),
-    join(getOriginalCwd(), CONFIG_DIR_NAME),
-  )
+function relativeToConfigDirRoot(
+  normalizedPath: string,
+  roots: string[][],
+): string | null {
   const pathLower = normalizeCaseForComparison(normalizedPath)
+  let relative: string | null = null
+  let matchedRootLength = -1
   for (const rootForms of roots) {
     for (const rootForm of rootForms) {
+      if (rootForm.length <= matchedRootLength) continue
       const rootLower = normalizeCaseForComparison(rootForm)
-      if (pathLower === rootLower) return ''
+      if (pathLower === rootLower) {
+        relative = ''
+        matchedRootLength = rootForm.length
+        continue
+      }
+      // A root form that already ends in a separator is a root-only spelling —
+      // `/`, `C:\`, `\\server\share\`, `\\?\C:\` — preserved that way on
+      // purpose; see `endsWithSeparatorSpelling`. Appending a second separator
+      // to it matches nothing, so match on the bare root and take the remainder
+      // from `rootForm.length`.
+      //
+      // Measured over the four root-only shapes plus `/cfg/` and `C:\cfg\`
+      // controls: 5 of 7 rows move, all of them root-only, e.g. `C:\` with
+      // `C:\a\b.md` goes null -> `a\b.md`, and both controls stay `a/b.md`.
+      // Without the controls "root-only" could be a predicate that is always
+      // true and the separator loop below would be dead.
+      //
+      // The direction is a **fail closed**, not a fail open: a null relative
+      // reads as `'outside'` in `classifyConfigDirPath` and false in
+      // `isReadableConfigDirPath`, and both consumers use those only to withhold
+      // an allow, so today the carve-out silently stops applying and the path
+      // falls through to ordinary permission rules.
+      if (endsWithSeparatorSpelling(rootForm)) {
+        if (pathLower.startsWith(rootLower)) {
+          relative = normalizedPath.slice(rootForm.length)
+          matchedRootLength = rootForm.length
+        }
+        continue
+      }
       for (const s of ROOT_SEPARATOR_SPELLINGS) {
         if (pathLower.startsWith(rootLower + s.toLowerCase())) {
-          return normalizedPath.slice(rootForm.length + s.length)
+          relative = normalizedPath.slice(rootForm.length + s.length)
+          matchedRootLength = rootForm.length
+          break
         }
       }
     }
   }
-  return null
+  return relative
 }
 
 function classifyConfigDirRelativePath(
@@ -1930,14 +2204,18 @@ function classifyConfigDirRelativePath(
  *
  * Every resolved form of the path — lexical and symlink-chain — must land
  * inside a config dir, and the most restrictive classification across those
- * forms wins. Without that, a symlink placed inside `~/.axa/agents/` pointing
+ * forms wins. Without that, a symlink placed inside `~/.claude/agents/` pointing
  * at `~/.ssh/authorized_keys` would inherit this carve-out. Same guard as the
  * template job directory above.
  */
 function classifyConfigDirPath(absolutePath: string): ConfigDirAccess {
+  const roots = getResolvedConfigDirRoots(
+    getClaudeConfigHomeDir(),
+    join(getOriginalCwd(), CONFIG_DIR_NAME),
+  )
   let access: 'open' | 'protected' | 'secret' = 'open'
   for (const form of getPathsForPermissionCheck(absolutePath)) {
-    const relative = relativeToConfigDirRoot(normalize(form))
+    const relative = relativeToConfigDirRoot(normalize(form), roots)
     if (relative === null) return 'outside'
     const formAccess = classifyConfigDirRelativePath(relative)
     if (formAccess === 'secret') return 'secret'
@@ -2012,7 +2290,7 @@ const CONFIG_DIR_READABLE_DIRS = new Set([
  * always-ask, so without this they override it.
  *
  * Checking every resolved form, not just the literal path, is the point: a
- * symlink at `~/.axa/agent-memory/alias.json` pointing at such a file elsewhere
+ * symlink at `~/.claude/agent-memory/alias.json` pointing at such a file elsewhere
  * under the config dir passes the classifier — every form is still `open` — and
  * a check on the literal path alone would not see what it resolves to.
  *
@@ -2081,14 +2359,18 @@ function resolvesToFlagConfigFile(absolutePath: string): boolean {
  *
  * All forms must qualify, so the strictest wins, for the same reason
  * classifyConfigDirPath checks every form: otherwise a symlink under
- * `~/.axa/agents/` would launder a read of something else.
+ * `~/.claude/agents/` would launder a read of something else.
  *
  * Flag-supplied config files are screened by the caller, which covers the
  * 'open' arm this function is never reached on.
  */
 function isReadableConfigDirPath(absolutePath: string): boolean {
+  const roots = getResolvedConfigDirRoots(
+    getClaudeConfigHomeDir(),
+    join(getOriginalCwd(), CONFIG_DIR_NAME),
+  )
   for (const form of getPathsForPermissionCheck(absolutePath)) {
-    const relative = relativeToConfigDirRoot(normalize(form))
+    const relative = relativeToConfigDirRoot(normalize(form), roots)
     if (relative === null) return false
     const segments = relative.split(/[\\/]/).filter(s => s.length > 0)
     if (segments.length === 0) return false
@@ -2183,9 +2465,15 @@ function isReadableConfigDirPath(absolutePath: string): boolean {
  * the roots come from env, settings and session state. That argument is true and
  * insufficient. What the roots *resolve to* is not session state at all; it is
  * filesystem state, and the filesystem is exactly the thing an attacker can
- * change under a running process. `getResolvedConfigDirRoots` caches the same
- * quantity and has the same staleness — measured failing *open* on `d29a5bc` —
- * so it is a second instance of the bug, not a precedent that makes it safe.
+ * change under a running process. `getResolvedConfigDirRoots` cached the same
+ * quantity and had the same staleness — measured failing *open* on `d29a5bc` —
+ * so it was a second instance of the bug rather than a precedent that made it
+ * safe, and it is no longer cached either. Note that the `d29a5bc` measurement
+ * found only one of its two directions: the same stale root fails *open* in
+ * `classifyConfigDirPath`, where a non-matching root reads as "outside the
+ * config dirs", and *closed* in `isReadableConfigDirPath`, where it reads as
+ * "not readable". One mechanism, two polarities, so neither site's severity
+ * sentence can be reused for the other.
  *
  * The cost is real and is paid per *allowed* decision, never on the rejected
  * path. See `allowOnlyIfResolvedFormsAgree`, which skips the written spelling
@@ -2219,9 +2507,49 @@ function isReadableConfigDirPath(absolutePath: string): boolean {
  * those two are the same string unless `CLAUDE_CODE_REMOTE_MEMORY_DIR` is set,
  * so they are two sources but one value at the defaults.
  *
- * Never strips to the empty string. An empty root prefix-matches every absolute
- * path, which would fold the whole filesystem onto one lexical spelling. That
- * guard is narrower than the rule it is an instance of — see
+ * Returns `root` unchanged whenever the strip would empty it, so `''` and a
+ * bare `/` both come back as they arrived. Be precise about what that guard
+ * does, because an earlier version of this sentence was not: it keeps the
+ * function total, it does not close a hole. An empty root is **inert**
+ * downstream. Both root-matching sites normalise before comparing, and
+ * `normalize('')` is `'.'` on posix and win32 alike — a relative spelling,
+ * which cannot prefix-match an absolute candidate.
+ *
+ * Do not strike the claim that was here — that an empty root "prefix-matches
+ * every absolute path" — because half of it is TRUE and it is the only stated
+ * reason this guard exists. Measured over an eight-candidate battery, root `''`
+ * against the **raw** matcher on `path.posix` matches **8 of 8**. What is false
+ * is the consequence for the function as it actually runs, and the normalise
+ * above is what makes it false.
+ *
+ * Do not credit a separator in the matchers with saving this one, and do not
+ * paraphrase those matchers as `root + sep`. Both iterate
+ * `ROOT_SEPARATOR_SPELLINGS`, which is `new Set([sep, '/'])` — one member on
+ * posix, two on win32 — so `/` is tried as a separator on **both** flavours and
+ * `'' + '/'` is `/`, which prefix-matches every candidate here. The empty root
+ * matches **8 of 8** raw on posix *and* on win32. An earlier revision of this
+ * paragraph said **0 of 8** for win32 and called the hazard POSIX-only; that is
+ * the number the `root + sep` paraphrase predicts, not the one the code gives.
+ * The separator covers `''` on neither flavour.
+ *
+ * A root of `/` is a separate case, and no longer the opposite extreme this
+ * paragraph once made it. A root form that already ends in a separator spelling
+ * takes the bare-prefix branch — see `endsWithSeparatorSpelling` — so `/`
+ * matches every candidate, **8 of 8**, raw and as the code runs it, on both
+ * flavours, rather than the **1 of 8** stated here before. That is deliberate
+ * and is argued where the branch lives, not here; `/` only becomes a config-dir
+ * root if the user sets `CLAUDE_CONFIG_DIR=/`, and these carve-outs withhold
+ * allows rather than granting them.
+ *
+ * The safety is therefore real, **unowned, and single** — one undocumented
+ * property of Node's `path`, the upstream `normalize`, which nothing here
+ * names, tests or depends on deliberately. There is no spare: a refactor that
+ * compares before normalising re-opens it at both sites at once, and no test
+ * fails at either. An empty value is wrong for every consumer of
+ * `getClaudeConfigHomeDir`, not just this one, so it belongs rejected at the
+ * producer rather than absorbed here.
+ *
+ * This guard is narrower than the rule it is an instance of — see
  * `stripTrailingSeparatorsForWalk` — so do not reuse this function anywhere the
  * stripped value is resolved rather than concatenated.
  */
@@ -2235,76 +2563,284 @@ function stripTrailingSeparators(root: string): string {
  * the one exception where removing the separator changes what the string
  * *denotes* rather than just how it is spelled.
  *
- * The two sides genuinely want different answers for a root-only path, which is
- * why this is a second function and not a widened guard on the first:
+ * The two sides genuinely want different answers for a path that denotes a
+ * root, which is why this is a second function and not a widened guard on the
+ * first:
  *
  * - The `lexical` side **must** strip. It emits `lexical + sep + rest`, so
  *   `C:\` would produce `C:\\rest`; `C:` produces `C:\rest`, which is right.
- * - This side **must not** strip, because `C:` is drive-*relative* in Windows —
- *   it denotes the current directory on drive C:, not the drive root — so the
- *   chain walk would be handed a different directory entirely, and the root's
- *   resolved set would stop containing the root. Same polarity as the bug this
- *   strip was added to fix: a false deny.
+ * - This side **must not** strip, because the stripped form no longer names the
+ *   same directory. Same polarity as the bug this strip was added to fix: a
+ *   false deny — the chain walk is handed a different directory, so the root's
+ *   resolved set stops containing the root.
  *
- * The denotation test is *"does the stripped form plus one separator spell a
- * root?"*, and it is deliberately not a `/^[A-Za-z]:$/` regex: it also covers
- * POSIX `/`, UNC share roots (`\\server\share\`) and extended-length prefixes
- * (`\\?\C:\`), each of which loses meaning the same way.
+ * Read that second bullet over the whole population, not over `C:\` alone. The
+ * drive root is only the easiest case to state: `C:` is drive-*relative* in
+ * Windows, naming the current directory on drive C: rather than the drive root,
+ * so the substitution is a different directory that still exists — which is
+ * what makes it silent. The UNC and extended-length forms fail the same way for
+ * a different reason: `\\server\share` and `\\?\C:` have lost the separator that
+ * makes them a root at all. Three shapes, one rule — stripping changed what the
+ * string denotes — and a guard written for only the drive case would let the
+ * other two through.
+ *
+ * Two different things get called "root-only" around this function, and keeping
+ * them apart is the whole of the reasoning below:
+ *
+ * - **denotes a root** — a property of the string itself. `C:\`, `C://`,
+ *   `C:\\`, `C:////`, `C:\/`, `\\server\share\`, `\\server\share\\`,
+ *   `\\?\C:\`, `//server/share//` and POSIX `/` all denote filesystem roots.
+ * - **the predicate** — the boolean the last line of this function *tests*:
+ *   *"does the stripped form plus one separator spell a root?"* Not the value
+ *   that line returns, which is a string; the two are easy to conflate because
+ *   one expression contains the other.
+ *
+ * An earlier revision of this paragraph said they agree on every spelling above
+ * except `/`. Restricted to the ten spellings in the first bullet that is true,
+ * and the restriction was doing silent work, because the disagreements live
+ * mostly *outside* that list. Measured over the list plus the inputs it omits,
+ * the two senses disagree on `/`, `//`, `///`, `C:` (and `c:`) and `''` under
+ * `path.win32`, and on `/`, `//`, `///` and `''` under `path.posix`.
+ *
+ * Read `C:` first, because it is not an exotic input: it is the exact value the
+ * *old* predicate produced by stripping `C://`. It denotes no root —
+ * `normalize('C:')` is `C:.` and `isAbsolute('C:')` is false, so it is
+ * drive-relative and resolving against it pulls in the process working
+ * directory — and the predicate calls it a root anyway, because `C:` plus one
+ * separator spells `C:\`. That is the outcome this function wants, reached
+ * through a sense the second bullet does not claim. It is the sharpest reason
+ * not to read the predicate as a test for denotation anywhere else.
+ *
+ * `/` **denotes a root and fails the predicate**, because
+ * `stripTrailingSeparators('/')` returns `/` unchanged through its own
+ * empty-string guard, so the predicate is asked about the stripped form plus a
+ * separator — `/\` under `path.win32`, `//` under `path.posix` — and neither
+ * of those spells a root. The input is returned verbatim either way, by the
+ * sibling's guard rather than by this test. `//` and `///` fail the same way,
+ * and on **both** flavours — they are not a POSIX-only artefact. Worth saying,
+ * because when a claim about this function splits by flavour the reflex is to
+ * assume win32 is the exception, and here it is not.
+ *
+ * They disagree on `''` as well. Do not write that one off as unreachable: a
+ * set-but-empty `CLAUDE_CONFIG_DIR` has reached `getClaudeConfigHomeDir()` and
+ * come back as `''`, because a null-ish fallback treats `export X=` and
+ * `unset X` differently while a shell does not. Whether that is still true when
+ * you read this depends on the guard *there* — check `getClaudeConfigHomeDir`,
+ * not this function, and do not encode the answer here, because a sentence
+ * about someone else's operator is a sentence that rots. What this function can
+ * say for itself is the weaker and durable half: the disagreement is inert
+ * here, since `''` is returned verbatim, which is the answer a plain strip
+ * gives too. It is not inert downstream, which is why the guard lives upstream
+ * of both of us rather than in either.
+ *
+ * Every claim below says which of the two senses it is in, because a sentence
+ * that is true in one of them is not evidence for the other, and the superseded
+ * version of this comment used the single phrase "root-only" for both across
+ * fourteen sites in this file — re-derived at `origin/main`, one occurrence per
+ * line, not inherited. Thirteen is the number you get from a docblock-scoped
+ * pass, and it is wrong: the fourteenth is a `//` comment in
+ * `getFoldableRootsForSession`'s **body**, at the second of the two strips.
+ * Two further clauses are driven by the same equivocation without containing
+ * the phrase, so scope the sweep by meaning and not by string, and expect two
+ * passes rather than one.
+ *
+ * The predicate is deliberately not a `/^[A-Za-z]:$/` regex: it covers UNC
+ * share roots (`\\server\share\`) and extended-length prefixes (`\\?\C:\`) as
+ * well as drive roots, each of which loses meaning the same way. It does not
+ * need to cover POSIX `/`: that one does reach the strip, but the sibling's
+ * guard hands it back unchanged before this test can matter.
  *
  * It is also deliberately **not** `parse(root).root === root`, which is what
  * this function asked until Copilot found the hole. That predicate tests for a
  * *canonically spelled* root, not for a root — so every redundant spelling
  * failed it and fell through to the strip, which is the one outcome this
  * function exists to prevent. `C://`, `C:\\`, `C:////` and `C:\/` all became
- * drive-relative `C:`, and `\\server\share\\` and `\\?\C:\\` lost the root
- * separator. Asking about the stripped form instead moves the question off the
- * spelling, so the input can be returned verbatim.
+ * drive-relative `C:`, and `\\server\share\\`, `\\?\C:\\` and
+ * `//server/share//` lost the root separator — seven spellings, of which the
+ * forward-slash UNC form is the one most easily missed, since every other UNC
+ * spelling here is written with backslashes. Asking about the stripped form
+ * instead moves the question off the spelling, so the input can be returned
+ * verbatim.
  *
  * **Do not simplify this to `normalize(root)`.** It looks equivalent and is
- * not: `normalize` also folds `..` lexically, which is not symlink-safe, and
- * this value is handed straight to a chain walk. `/cfg/../` would become `/` —
- * a root that prefix-matches every absolute path, which is the exact
- * catastrophe `stripTrailingSeparators`' empty-string guard exists to prevent,
- * reached by a new route. It re-spells canonical input too (`c:/` -> `c:\`,
- * and on win32 `/` -> `\`). Over one generated 206-input sweep, `normalize`
- * changes this function's answer on 97 win32 and 5 POSIX inputs where the
- * shipped shape changes 18 and 0.
+ * not: `normalize` folds `..` lexically, which is not symlink-safe, and this
+ * value is handed straight to a chain walk — `/cfg/../` becomes `/`, so a root
+ * the user pointed inside their home silently becomes the filesystem root,
+ * without either `..` hop being checked against what the links actually
+ * resolve to. It re-spells canonical input too (`c:/` -> `c:\`, and on win32
+ * `/` -> `\`), which defeats the whole point of returning root spellings
+ * verbatim.
+ *
+ * The superseded comment justified the sibling's empty-string guard with "an
+ * empty root prefix-matches every absolute path", and the correction is finer
+ * than striking it. Both matchers test `cand === root`, then — for a root form
+ * that already ends in a separator spelling — a bare `cand.startsWith(root)`,
+ * and otherwise `cand.startsWith(root + s)` for every `s` in
+ * `ROOT_SEPARATOR_SPELLINGS`. Do not shorten that to `root + sep`: the set is
+ * `new Set([sep, '/'])`, so it has two members on win32 and one on posix, and
+ * the short form is false on win32 while staying true on posix — the flavour a
+ * darwin/Linux host checks casually is exactly the one that hides the
+ * difference.
+ *
+ * The eight candidates, enumerated so that no number below rests on a battery
+ * the reader cannot rebuild. All are `/`-spelled, which is what both a posix
+ * host and a hand-set `CLAUDE_CONFIG_DIR` produce:
+ *
+ *   /                                        /cfg2
+ *   /cfg                                     /home/u/.axa
+ *   /cfg/agent-memory                        /home/u/.axa/settings.json
+ *   /cfg/agent-memory/axa-tools/MEMORY.md    /tmp
+ *
+ * Measured over them, against the matcher as spelled out above:
+ *
+ * - Root `''`, `path.posix`, raw predicate: **8 of 8**. The sentence is TRUE,
+ *   and it is the only stated reason that guard exists — do not delete it.
+ * - Root `''`, `path.win32`, raw predicate: **8 of 8** as well. An earlier
+ *   revision said **0 of 8** and called the catastrophe POSIX-only, reasoning
+ *   that `'' + sep` is `\` while the candidates are `/`-spelled. That follows
+ *   from the `root + sep` short form; the real matcher also tries the `/`
+ *   member of `ROOT_SEPARATOR_SPELLINGS` on win32, so the POSIX result does
+ *   transfer after all.
+ * - Root `''`, either flavour, as the code actually runs it: **0 of 8**. Both
+ *   sides are normalized — the callers are `relativeToConfigDirRoot(
+ *   normalize(form), roots)` and the parameter is named `normalizedPath`, and
+ *   the fold site matches against `normalizedForm` — and `normalize('')` is
+ *   `'.'` on both flavours, so `./` prefix-matches no absolute path.
+ * - Root `/`, every configuration above: **8 of 8**. An earlier revision said
+ *   **1 of 8**, "itself and nothing else". That was true of the older matcher,
+ *   which appended a second separator to a root already ending in one and so
+ *   tested `//`; the root-only branch matches such a root as a bare prefix
+ *   instead. See `endsWithSeparatorSpelling`.
+ *
+ * Controls for the normalize step, taken in the same run and in the same
+ * both-sides configuration as the row above: root `/cfg//` moves **0 -> 2 of
+ * 8** across it on both flavours, while root `/cfg` stays at **3 of 8**. One
+ * row that moves and one that does not, because a control that always moves
+ * shows only that the instrument is live, not that it discriminates. The
+ * control this paragraph used to cite — `/cfg` on win32, 1 -> 2 of 8 — is inert
+ * against the current matcher, so re-taking it as written would publish a dead
+ * control.
+ *
+ * So `''` and `/` are not the two extremes of this battery any more: both match
+ * every candidate raw, and only the normalize separates them. What holds the
+ * empty root harmless is a **single** undocumented property of *other* code,
+ * that upstream `normalize`. This paragraph previously offered two — "the `+
+ * sep` in the matcher and the upstream `normalize`, either of which alone
+ * suffices" — and the first arm covers `''` on neither flavour. There is no
+ * spare, so a refactor that drops the normalize opens the hole with nothing
+ * failing, and a comment promising a redundancy that is not there is a
+ * fail-open in the documentation. The same shape holds at both matchers,
+ * `relativeToConfigDirRoot` and `foldResolvedRootPrefix`. The guard is what
+ * makes the question moot; the conclusion above survives on its other three
+ * reasons regardless.
  *
  * Measured with `path.win32` — note that `parse` **and** `sep` are both
- * platform-bound, so a host-independent check has to substitute both —
+ * platform-bound, so a host-independent check has to substitute both. The
+ * battery above needs a **third** substitution that this table does not:
+ * `ROOT_SEPARATOR_SPELLINGS` is built from `sep` at module load, so it does not
+ * follow a flavour swapped in afterwards, and a probe that swaps only `parse`
+ * and `sep` measures the host's separator set against the other flavour's
+ * paths —
  *
- *   C:\                  root-only   not stripped
- *   C://                 root-only   not stripped
- *   C:\\                 root-only   not stripped
- *   \\server\share\      root-only   not stripped
- *   \\server\share\\     root-only   not stripped
- *   \\?\C:\              root-only   not stripped
- *   /                    root-only   not stripped
- *   C:\cfg\              control     -> C:\cfg
- *   \\server\share\sub\  control     -> …\sub
- *   /cfg/                control     -> /cfg
+ * The rows below were taken in one run of one instrument, so that no number
+ * here is spliced together from two. They do not exhaust the spellings named
+ * above: `//`, `///`, `C:`, `c:` and `''` are read in the prose after the
+ * table instead, and the paragraph on the `/` row says why the first two are
+ * not folded into it:
  *
- * The controls matter: without them "root-only" could be a predicate that is
- * simply always true, and the whole strip would be dead. Hard-wiring the
- * predicate to false moves 6 of these 10 rows, so it is load-bearing rather
- * than decorative, and no root-only row is re-spelled.
+ *                        denotes root   predicate   result
+ *   C:\                  yes            true        verbatim
+ *   C://                 yes            true        verbatim
+ *   C:\\                 yes            true        verbatim
+ *   C:////               yes            true        verbatim
+ *   C:\/                 yes            true        verbatim
+ *   \\server\share\      yes            true        verbatim
+ *   \\server\share\\     yes            true        verbatim
+ *   \\?\C:\              yes            true        verbatim
+ *   \\?\C:\\             yes            true        verbatim
+ *   //server/share//     yes            true        verbatim
+ *   /                    yes            FALSE       verbatim (via sibling)
+ *   C:\cfg\              no             false       -> C:\cfg
+ *   \\server\share\sub\  no             false       -> …\sub
+ *   /cfg/                no             false       -> /cfg
  *
- * **On POSIX this function is a proven no-op**, and that is worth stating
- * because it bounds what any darwin/Linux fixture can show. `/` is the only
- * root-only POSIX spelling, and `stripTrailingSeparators('/')` already returns
- * `/` unchanged through its empty-string guard. Over the 206-input sweep the
- * two functions differ **0** times under `path.posix` and **27** times under
- * `path.win32`; the 27 is the control that keeps the 0 from being a dead
- * instrument.
+ * The `denotes root` column is measured on `parse(normalize(p)).root ===
+ * normalize(p)` and not on `parse(p).root === p`. That matters, because the
+ * naive form is the discarded predicate from two paragraphs up, and it
+ * disagrees with the canonical one on 7 of these 14 rows — including
+ * `//server/share//`, which it calls "not a root". Measuring denotation with a
+ * spelling-sensitive instrument reproduces the exact bug this function exists
+ * to fix, inside the evidence for the fix.
  *
- * Two counting traps, both of which have already been walked into here. The
- * quantities above are *three different things* — this function versus a plain
+ * Those 7 disagreeing rows are, measured, the same 7 spellings listed as the
+ * defect above, and that is not a coincidence to be re-derived next time: the
+ * naive instrument *is* the old predicate, so the rows it gets wrong are by
+ * construction the rows the old predicate got wrong. If the two sets ever come
+ * apart, one of them was mis-measured.
+ *
+ * The `/` row is the one to read twice: it is the only row *in this table* where
+ * the two columns disagree, and it is the input every wrong sentence this
+ * comment has carried was about. Do not read that as "the only disagreement" —
+ * the table is a sample and the full set is enumerated above, including `C:`,
+ * `c:` and `''`, which disagree the *other* way (denote no root, satisfy the
+ * predicate), and `//` and `///`, which disagree the same way `/` does.
+ *
+ * Those two are deliberately **not** folded into the `/` row as an
+ * "all-separator" family, even though this function treats all three alike:
+ * each denotes a root, fails the predicate, and comes back verbatim through the
+ * sibling's guard. Measured, they part company on the *other* instrument — the
+ * naive `parse(p).root === p` calls `//` and `///` not roots, while it agrees
+ * with the canonical form about `/`. A family row would therefore be
+ * heterogeneous in the `denotes root` column and would move the "7 of these 14"
+ * count above, which is measured over the rows exactly as they are written.
+ *
+ * The controls matter: without them the predicate could be one that is simply
+ * always true, and the whole strip would be dead. Hard-wiring it to false
+ * moves 10 of these 14 rows, so it is load-bearing rather than decorative, and
+ * no row that denotes a root is re-spelled.
+ *
+ * The superseded comment carried the proof of its own equivocation right here,
+ * which is the cheapest way to see why the two senses had to be named apart. Its
+ * table labelled **7** rows `root-only`, and the paragraph two lines below it
+ * said hard-wiring the predicate to false moves **6** of them. Under one meaning
+ * of `root-only` those numbers must match. They differ by exactly `/` — the row
+ * that denotes a root and fails the predicate — so the mismatch *is* the two
+ * senses, sitting four lines apart. The sentence
+ * after it, "no root-only row is re-spelled", is true under both senses; a true
+ * neighbour is what let the inconsistent pair look settled.
+ *
+ * **On POSIX this function is a no-op for every input**, which bounds what any
+ * darwin/Linux fixture can show. That is a property of the predicate and not a
+ * result over a sample, so state it as the argument rather than as a count:
+ * on `path.posix` the predicate can only be true when the stripped form plus
+ * `/` spells a root, i.e. when the stripped form is empty — and
+ * `stripTrailingSeparators` returns the empty string for exactly one input,
+ * the empty string, for which a plain strip gives the same answer anyway.
+ * Every other POSIX input, `/` and `//` included, fails the predicate and is
+ * returned by the sibling's guard or by the strip. So this function and a
+ * plain strip agree everywhere under `path.posix` and diverge only under
+ * `path.win32`.
+ *
+ * Say **10 of the 14** for that win32 divergence, not seven. Seven is the
+ * defect list — the spellings the *old* predicate got wrong — and this is the
+ * different quantity flagged immediately below: against a plain strip the
+ * canonically spelled roots `C:\`, `\\server\share\` and `\\?\C:\` move too,
+ * even though the old predicate already handled them. Every root-denoting row
+ * moves except `/`, which the sibling's guard reaches first.
+ *
+ * Two counting traps, both of which have already been walked into here. There
+ * are *three different quantities* in play — this function versus a plain
  * strip, this function versus its previous shape, and rows moved by disabling
- * the predicate — so a bare "differs N times" is unreadable without its pair.
- * And `/` is root-only yet does **not** differ from a plain strip, because the
- * sibling's guard reaches it first; counting it as a difference is how the
- * superseded version of this comment claimed 4 differences over a battery that
- * had 3.
+ * the predicate — so a bare "differs N times" is unreadable without saying
+ * which pair it compares. And `/` denotes a root yet does **not** differ from
+ * a plain strip, because the sibling's guard reaches it first; counting it as
+ * a difference is how the superseded version of this comment claimed 4
+ * differences over a battery that had 3. That sentence is a trap in the other
+ * direction too: as written above it is a claim about denotation and it is
+ * true, but the same words read in the predicate sense are false, and nothing
+ * in them says which. A true sentence is not a safe sentence to align its
+ * neighbours to — check that it means what they mean before using it as the
+ * anchor.
  *
  * The corollary is that the end-to-end permission effect is **not reproducible
  * on a POSIX host** — the permission battery and the symlink fixtures are
@@ -2313,21 +2849,30 @@ function stripTrailingSeparators(root: string): string {
  * predicate; what is reasoned is the consequence of handing `C:` to a chain
  * walk.
  *
- * The old guard is the POSIX instance of exactly this rule, stated as a symptom
- * ("never strips to the empty string") rather than as the reason; a Windows
- * drive root is the same defect with a non-empty remainder, which is why the
- * symptom-shaped guard did not catch it.
+ * The old guard is not this function's rule restricted to POSIX — it is a
+ * different test that happens to cover the one POSIX case. It fires on exactly
+ * one stripped value, the empty string, which is why `/` survives it; this
+ * function's predicate is false for `/` and contributes nothing there. Both
+ * guards are instances of one underlying rule — do not strip when the strip
+ * changes what the string denotes — but the old one states a symptom ("never
+ * strips to the empty string") rather than the reason; a Windows drive root is
+ * the same defect with a non-empty remainder, which is why the symptom-shaped
+ * guard did not catch it.
  *
  * Reachability is narrow and real: `join(…, CONFIG_DIR_NAME)` and
- * `getClaudeTempDir()` both append a component and so can never be root-only.
+ * `getClaudeTempDir()` both append a component and so can never denote a root.
  * The population is a user pointing `CLAUDE_CONFIG_DIR`,
  * `CLAUDE_CODE_REMOTE_MEMORY_DIR` or the auto-memory dir at a drive or share
  * root, since those reach this function as typed.
  */
 function stripTrailingSeparatorsForWalk(root: string): string {
-  // `stripTrailingSeparators` never returns the empty string, so this always
-  // has something to test, and the POSIX root reaches the strip branch and is
-  // returned unchanged by that guard rather than by the test below.
+  // `stripTrailingSeparators` returns the empty string for one input — the
+  // empty string — and `'' + sep` spells a root, so that input satisfies the
+  // predicate below without denoting a root. It is returned verbatim, which is
+  // the same answer a plain strip gives, so the disagreement is inert here; it
+  // is not inert in the sibling, whose own guard exists for it. The POSIX root
+  // reaches the strip branch and is returned unchanged by that guard rather
+  // than by the test below.
   const stripped = stripTrailingSeparators(root)
   const withOneSeparator = stripped + sep
   return parse(withOneSeparator).root === withOneSeparator ? root : stripped
@@ -2392,8 +2937,9 @@ function getFoldableRootsForSession(): FoldableRoot[] {
       // Both strips are therefore load-bearing and they are not the same call
       // twice: this one decides which forms exist, the one on `lexical` decides
       // what they are folded back to. They are also not the same *function*, and
-      // that is not an oversight — a root-only path is the one input where the
-      // two sides want opposite answers. See `stripTrailingSeparatorsForWalk`.
+      // that is not an oversight — a path that denotes a root is the one input
+      // where the two sides want opposite answers. See
+      // `stripTrailingSeparatorsForWalk`.
       resolved: getPathsForPermissionCheck(
         stripTrailingSeparatorsForWalk(root),
       ).map(form => stripTrailingSeparators(normalize(form))),
@@ -2522,7 +3068,7 @@ function foldResolvedRootPrefix(form: string, roots: FoldableRoot[]): string {
     for (const rootForm of resolved) {
       // Longest matching root wins, and this is load-bearing rather than
       // defensive — but not for the reason an earlier draft of this comment
-      // gave. That draft justified it with `cwd` ⊃ `cwd/.axa`, a nesting that is
+      // gave. That draft justified it with `cwd` ⊃ `cwd/.claude`, a nesting that is
       // not in the root set at all. The nestings that *are* (plansDir and
       // getAutoMemPath() inside the config home) cannot observe the rule either:
       // there the inner root's lexical spelling is the outer's plus a suffix, so
@@ -2541,11 +3087,48 @@ function foldResolvedRootPrefix(form: string, roots: FoldableRoot[]): string {
       // `<=` sends ties to the earlier root in the list above; a tie means two
       // roots resolve to the same directory, so the two folds differ only in
       // which lexical spelling of that one directory comes back.
+      //
+      // `relativeToConfigDirRoot` is the same walk over the same shape and now
+      // resolves overlap the same way. It did not always: it returned on the
+      // first match, and its own docblock records what that cost — the two
+      // functions being out of step here was a live fail-open, not a stylistic
+      // difference. Change one of them and check the other.
       if (rootForm.length <= foldedRootLength) continue
       const rootLower = normalizeCaseForComparison(rootForm)
       if (formLower === rootLower) {
         folded = lexical
         foldedRootLength = rootForm.length
+        continue
+      }
+      // Same doubled-separator hole as `relativeToConfigDirRoot`, fixed the same
+      // way — see `endsWithSeparatorSpelling` for the measurement and for why
+      // this site's population is narrower: the resolved forms here are stripped
+      // afterwards, so only the all-separator root (`/`, or `\` on win32)
+      // reaches this loop with a trailing separator.
+      //
+      // The emit needs its own guard because `lexical` is stripped by the same
+      // function and so can also be all-separator. Control, with the guard
+      // hard-wired off: an unlinked `CLAUDE_CONFIG_DIR=/` folds
+      // `/agent-memory/x.md` to `//agent-memory/x.md`, a spelling no carve-out
+      // recognises. With it, that row is a no-op — lexical and resolved are the
+      // same string, so there is nothing to rewrite — and the one row that moves
+      // is a root whose lexical spelling differs from a root-only resolved form:
+      // `CLAUDE_CONFIG_DIR=/link -> /` now folds `/agent-memory/x.md` to
+      // `/link/agent-memory/x.md` instead of leaving it unfolded.
+      //
+      // That direction is **closed**, checked here rather than carried over from
+      // the other site: an unfolded form is re-decided literally, matches no
+      // carve-out, and `allowOnlyIfResolvedFormsAgree` turns the reason mismatch
+      // into `denied`. No allow can be minted either way — that gate only ever
+      // downgrades the written form's decision.
+      if (endsWithSeparatorSpelling(rootForm)) {
+        if (formLower.startsWith(rootLower)) {
+          folded =
+            lexical +
+            (endsWithSeparatorSpelling(lexical) ? '' : sep) +
+            normalizedForm.slice(rootForm.length)
+          foldedRootLength = rootForm.length
+        }
         continue
       }
       for (const s of ROOT_SEPARATOR_SPELLINGS) {
@@ -2865,7 +3448,7 @@ function decideEditableInternalPath(
 
   // First, ahead of every carve-out below. A flag can aim the active settings
   // or MCP config file at any path, including inside one of these carve-outs —
-  // `--settings <cwd>/.axa/agent-memory/x.json` is allowed by isAgentMemoryPath,
+  // `--settings <cwd>/.claude/agent-memory/x.json` is allowed by isAgentMemoryPath,
   // which matches that whole tree under any filename. Every carve-out here
   // grants a silent write, and none of them inspects what the file *is*, so the
   // screen has to run before all of them rather than beside any one of them.
@@ -2899,22 +3482,50 @@ function decideEditableInternalPath(
 
   // Template job's own directory. Env key hardcoded (vs importing JOB_ENV_KEY
   // from jobs/state) so tree-shaking eliminates the string from external
-  // builds — spawn.test.ts asserts the string matches. Hijack guard: the env
-  // var value must itself resolve under ~/.claude/jobs/. Symlink guard: every
-  // resolved form of the target (lexical + symlink chain) must fall under some
-  // resolved form of the job dir, so a symlink inside the job dir pointing at
-  // e.g. ~/.ssh/authorized_keys does not get a free write. Resolving both
-  // sides handles the macOS /tmp → /private/tmp case where the config dir
-  // lives under a symlinked root.
+  // builds. Hijack guard: the env var value must itself resolve under the
+  // config home's `jobs/` — that is `~/.claude/jobs` by default and whatever
+  // CLAUDE_CONFIG_DIR points at otherwise, so do not re-spell it as a fixed
+  // path. Symlink guard: every resolved form of the target (lexical + symlink
+  // chain) must fall under some resolved form of the job dir, so a symlink
+  // inside the job dir pointing at e.g. ~/.ssh/authorized_keys does not get a
+  // free write. Resolving both sides handles the macOS /tmp → /private/tmp
+  // case where the config dir lives under a symlinked root.
+  //
+  // Two things this comment used to claim, both checked and both false. There
+  // is no `spawn.test.ts` asserting the two hardcoded spellings agree — this
+  // repo has no test files at all — so the literal here and the one in
+  // query/stopHooks.ts are coupled by nothing but the comments naming each
+  // other. And `JOB_ENV_KEY`/`jobs/state` is not in the tree either: nothing
+  // under src/ sets CLAUDE_JOB_DIR, and the only two readers are this file and
+  // query/stopHooks.ts — the same two the paragraph above names. The name is
+  // therefore externally owned in the CLAUDE.md sense — whatever
+  // spawns a job supplies it — so a branding sweep must not rename it.
   if (feature('TEMPLATES')) {
     const jobDir = process.env.CLAUDE_JOB_DIR
     if (jobDir) {
       const jobsRoot = join(getClaudeConfigHomeDir(), 'jobs')
-      const jobDirForms = getPathsForPermissionCheck(jobDir).map(normalize)
+      // Stripped for the same reason as the config roots: this value arrives
+      // as typed, so it can carry a trailing separator or denote a root, and
+      // `getPathsForPermissionCheck` walks it. `jobsRoot` needs no strip —
+      // `join` appends a component, so it can be neither. "Denotes a root" and
+      // not "root-only": that phrase is the equivocation
+      // `stripTrailingSeparatorsForWalk` documents at length, and this is the
+      // sense meant here.
+      const jobDirForms = getPathsForPermissionCheck(
+        stripTrailingSeparatorsForWalk(jobDir),
+      ).map(normalize)
       const jobsRootForms = getPathsForPermissionCheck(jobsRoot).map(normalize)
-      // Hijack guard: every resolved form of the job dir must sit under
-      // some resolved form of the jobs root. Resolving both sides handles
-      // the case where ~/.claude is a symlink (e.g. to /data/claude-config).
+      // Hijack guard: every resolved form of the job dir must sit under some
+      // resolved form of the jobs root. Resolving both sides handles the case
+      // where the config home is itself a symlink (e.g. to /data/axa-config).
+      //
+      // Both `+ sep` tests below use the platform separator only, deliberately,
+      // and are NOT a third place that needs ROOT_SEPARATOR_SPELLINGS. That set
+      // exists for comparisons where one side is a lexical spelling that was
+      // never normalised; here all three operands — the job-dir forms, the
+      // jobs-root forms and each target form — are put through `normalize`
+      // first, and `normalize` rewrites `/` to `\` under win32, so no other
+      // separator spelling can reach either test.
       const isUnderJobsRoot = jobDirForms.every(jd =>
         jobsRootForms.some(jr => jd.startsWith(jr + sep)),
       )
@@ -2969,13 +3580,13 @@ function decideEditableInternalPath(
     }
   }
 
-  // .axa/launch.json — desktop preview config (dev server command + port).
+  // .claude/launch.json — desktop preview config (dev server command + port).
   // The desktop's preview_start MCP tool instructs Claude to create/update
   // this file as part of the preview workflow. Without this carve-out the
-  // .axa/ DANGEROUS_DIRECTORIES check prompts for it, which in SDK mode
+  // .claude/ DANGEROUS_DIRECTORIES check prompts for it, which in SDK mode
   // cascades: user clicks "Always allow" → setMode:acceptEdits suggestion
   // applied → silent downgrade from auto mode. Matches the project-level
-  // .axa/ only (not ~/.claude/) since launch.json is per-project.
+  // .claude/ only (not ~/.claude/) since launch.json is per-project.
   if (
     normalizeCaseForComparison(normalizedPath) ===
     normalizeCaseForComparison(join(getOriginalCwd(), CONFIG_DIR_NAME, 'launch.json'))
@@ -2990,16 +3601,16 @@ function decideEditableInternalPath(
     }
   }
 
-  // The config dir itself, at both scopes: ~/.axa (or CLAUDE_CONFIG_DIR) and
-  // <project>/.axa. CONFIG_DIR_NAME is in DANGEROUS_DIRECTORIES, so without
+  // The config dir itself, at both scopes: ~/.claude (or CLAUDE_CONFIG_DIR) and
+  // <project>/.claude. CONFIG_DIR_NAME is in DANGEROUS_DIRECTORIES, so without
   // this every edit under a config dir prompts — and there is no way for the
   // user to grant it themselves, because step 1.7 runs before allow rules, so
-  // an `Edit(~/.axa/**)` rule in settings.json is unreachable.
+  // an `Edit(~/.claude/**)` rule in settings.json is unreachable.
   //
   // What this actually opens is narrow, and narrower than the motivating
   // examples: agent definitions, skills and slash commands stay on the prompting
   // side, because those files grant permission rather than merely holding text
-  // (see CONFIG_DIR_PROTECTED_DIRS). What is left is AXA.md and the
+  // (see CONFIG_DIR_PROTECTED_DIRS). What is left is CLAUDE.md and the
   // agent-authored note directories — see CONFIG_DIR_OPEN_DIRS, which is the
   // whole of it, since classifyConfigDirRelativePath defaults to 'protected'.
   //
@@ -3017,8 +3628,8 @@ function decideEditableInternalPath(
   // Do NOT read that as "the earlier carve-outs are not classified 'open'" — an
   // earlier revision of this comment said so and it is false: `agent-memory`,
   // `agent-memory-local` and `plans` are all in CONFIG_DIR_OPEN_DIRS, and
-  // relativeToConfigDirRoot resolves against the project `.axa` as well as the
-  // config home. Only memdir is genuinely elsewhere (`~/.axa/projects/`, which
+  // relativeToConfigDirRoot resolves against the project `.claude` as well as the
+  // config home. Only memdir is genuinely elsewhere (`~/.claude/projects/`, which
   // is 'secret'). The ordering is what protects them, not the classification —
   // and a guard that has to run for those paths too therefore cannot live here.
   // That is why the flag-config screen is at the top of this function.

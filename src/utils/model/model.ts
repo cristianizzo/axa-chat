@@ -276,6 +276,14 @@ export function getDefaultSonnetModel(): ModelName {
   if (process.env.ANTHROPIC_DEFAULT_SONNET_MODEL) {
     return process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
   }
+  return getBuiltInSonnetModel()
+}
+
+// The Sonnet this provider actually serves, ignoring
+// ANTHROPIC_DEFAULT_SONNET_MODEL. Split out so getRefusalFallbackModel can
+// reject a misconfigured override without re-deriving the 3P branch and
+// letting the two copies drift.
+function getBuiltInSonnetModel(): ModelName {
   // Default to Sonnet 4.6 for 3P since they may not have Sonnet 5 yet
   if (getAPIProvider() !== 'firstParty') {
     return getModelStrings().sonnet46
@@ -296,19 +304,108 @@ export function isSameModel(a: ModelName, b: ModelName): boolean {
 // When a model declines a request as a possible Usage Policy violation
 // (stop_reason: "refusal"), retry the turn on a more compliant model. This is
 // internal and needs no --fallback-model flag: Opus-family models refuse where
-// Sonnet complies (empirically ~100% of AUP refusals are Opus, 0 Sonnet), so
-// Opus falls back to Sonnet. Returns undefined when there is no distinct
-// fallback (non-Opus models), which lets the refusal surface terminally.
+// Sonnet complies (empirically ~100% of AUP refusals are Opus, 0 Sonnet).
+//
+// The step is one model at a time, and query.ts re-enters here after each
+// switch, so the returns below form a chain — but only for Opus 5, which goes
+// Opus 5 -> Opus 4.8 -> Sonnet. Trying Opus 4.8 first keeps the capability drop
+// as small as the refusal allows: it declines a different (narrower) set of
+// prompts than Opus 5, so most refusals never reach the Sonnet step. Every
+// other Opus is a single hop to Sonnet. Returns undefined when there is no
+// distinct fallback left, which lets the refusal surface terminally.
 export function getRefusalFallbackModel(model: ModelName): ModelName | undefined {
   // Detect Opus on the canonical name, not the raw ID: modelOverrides can map
   // an Opus model to an arbitrary provider string (a Bedrock ARN, say) with no
   // "opus" in it, and a substring check on the raw ID would skip the fallback
   // for precisely the users who configured an override.
-  if (getCanonicalName(model).includes('opus')) {
-    const sonnet = getDefaultSonnetModel()
-    return isSameModel(sonnet, model) ? undefined : sonnet
+  const canonical = canonicalNameTolerating1mTag(model)
+  if (!canonical.includes('opus')) {
+    return undefined
   }
-  return undefined
+
+  // The intermediate step is gated on Opus 5 specifically, not on the Opus
+  // family: "the version below the one that refused" only names Opus 4.8 for
+  // Opus 5. Testing `model !== opus48` instead would send an Opus 4.1 or 4.6
+  // refusal *up* to 4.8 — a cross-version switch to a model the user did not
+  // pick, and on 3P (where Opus 4.6 is the default) the common case rather
+  // than an edge one. Every other Opus goes straight to Sonnet, as before.
+  //
+  // Opus 4.8 is servable on every provider (see CLAUDE_OPUS_4_8_CONFIG), so
+  // unlike getDefaultOpusModel there's no 3P-lag branch to take here.
+  const strings = getModelStrings()
+  if (canonicalNameTolerating1mTag(strings.opus5) === canonical) {
+    return carry1mTag(strings.opus48, model)
+  }
+
+  // The Sonnet step has to actually leave the Opus family, and
+  // getDefaultSonnetModel() returns ANTHROPIC_DEFAULT_SONNET_MODEL verbatim —
+  // which a misconfiguration can point at an Opus model. Unchecked, that closes
+  // a cycle the chain didn't have before: Opus 5 -> Opus 4.8 -> "Sonnet"
+  // (= Opus 5) -> Opus 4.8 -> ... query.ts only declines a switch when the
+  // target equals the *current* model, so an alternating pair never trips that
+  // guard and retries forever, one API call per hop. The ternary rejects the
+  // override in that case, which is what actually breaks the cycle; the
+  // equality check after it is main's terminal guard, kept as-is so a Sonnet
+  // that somehow resolves to the refusing model still surfaces terminally
+  // rather than being handed back as its own replacement.
+  //
+  // The replacement is getBuiltInSonnetModel(), not strings.sonnet5, so it
+  // respects the same 3P-lag branch getDefaultSonnetModel would have taken —
+  // otherwise a Bedrock/Vertex/Foundry session gets handed a Sonnet 5 those
+  // providers may not serve yet, swapping a refusal for a 404.
+  const sonnetOverride = getDefaultSonnetModel()
+  const sonnet = canonicalNameTolerating1mTag(sonnetOverride).includes('opus')
+    ? getBuiltInSonnetModel()
+    : sonnetOverride
+  return canonicalNameTolerating1mTag(sonnet) === canonical
+    ? undefined
+    : carry1mTag(sonnet, model)
+}
+
+// Canonical name for an ID that may carry a [1m] tag, resolving it whichever
+// side of a modelOverrides value the tag sits on.
+//
+// resolveOverriddenModel matches an override *value* exactly, so the tag can
+// defeat that match from either direction, and stripping unconditionally only
+// trades one failure for the other:
+//   - tag appended by the user to a bare override value ({"claude-opus-5":
+//     "arn:..."} used as 'arn:...[1m]') — resolves only once stripped.
+//   - tag baked into the override value ({"claude-opus-5": "arn:...[1m]"}) —
+//     resolves only while intact. Stripping here is what regressed this case
+//     against main, silently skipping the whole fallback for those users.
+// So try the ID as written, and fall back to the stripped form only when that
+// resolved nothing. getCanonicalName returns its input lowercased when no
+// pattern or override matched, which is what "resolved nothing" tests for.
+function canonicalNameTolerating1mTag(model: ModelName): ModelShortName {
+  const asWritten = getCanonicalName(model)
+  if (asWritten !== model.toLowerCase()) {
+    return asWritten
+  }
+  const untagged = strip1mTag(model)
+  return untagged === model ? asWritten : getCanonicalName(untagged)
+}
+
+function strip1mTag(model: ModelName): ModelName {
+  return model.replace(/\[1m\]$/i, '')
+}
+
+// Carry a refusing model's [1m] tag onto its replacement. The fallback retries
+// the *same* conversation, so a 1M session that dropped to a bare (200k) model
+// would fail on context length instead of answering — turning "we tried another
+// model" into a hard error, and only for the long sessions that most need the
+// retry. Guarded on the target actually supporting 1M, since the tag is a
+// request the target must honour, not a property of the source.
+function carry1mTag(target: ModelName, refusingModel: ModelName): ModelName {
+  if (!has1mContext(refusingModel) || !modelSupports1M(target)) {
+    return target
+  }
+  // Strip before appending: targets are normally bare, but
+  // getDefaultSonnetModel() returns ANTHROPIC_DEFAULT_SONNET_MODEL verbatim, so
+  // a user who tagged that value would otherwise get 'model[1m][1m]'. Done by
+  // strip-then-append rather than an early return on has1mContext(target),
+  // because has1mContext is false under CLAUDE_CODE_DISABLE_1M_CONTEXT and
+  // would leave the literal suffix in place while reporting it absent.
+  return `${strip1mTag(target)}[1m]`
 }
 
 // @[MODEL LAUNCH]: Update the default Fable model.

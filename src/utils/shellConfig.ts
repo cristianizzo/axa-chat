@@ -50,7 +50,7 @@ export function getShellConfigPaths(
 /**
  * Filter out installer-created claude aliases from an array of lines
  * Only removes aliases pointing to getLocalClaudePath() — the installer's own
- * target under the config home (.axa/local/, relocatable via CLAUDE_CONFIG_DIR)
+ * target under the config home (.claude/local/, relocatable via CLAUDE_CONFIG_DIR)
  * Preserves custom user aliases that point to other locations
  * Returns the filtered lines and whether our default installer alias was found
  */

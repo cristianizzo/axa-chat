@@ -106,7 +106,7 @@ export async function loadSessionMemoryTemplate(): Promise<string> {
 
 /**
  * Load custom session memory prompt from file if it exists
- * Custom prompts can be placed at ~/.axa/session-memory/config/prompt.md —
+ * Custom prompts can be placed at ~/.claude/session-memory/config/prompt.md —
  * note the `config/` segment, which the previous version of this comment
  * omitted, and that the path is built from the config home, so
  * CLAUDE_CONFIG_DIR relocates it too.

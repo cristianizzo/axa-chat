@@ -1,7 +1,8 @@
 import { feature } from 'bun:bundle'
 import {
-  LEGACY_MEMORY_FILE_NAME,
   LOCAL_MEMORY_FILE_NAME,
+  MANAGED_CONFIG_DIR_NAME,
+  MANAGED_MEMORY_FILE_NAME,
   MEMORY_FILE_NAME,
 } from '../constants/product.js'
 import { randomBytes } from 'crypto'
@@ -117,14 +118,6 @@ export type ProjectConfig = {
   hasTrustDialogAccepted?: boolean
 
   hasCompletedProjectOnboarding?: boolean
-  /**
-   * The user answered the offer to import this project's Claude Code layout.
-   *
-   * Set on accept and on decline alike: someone who keeps using both tools in
-   * one repo means it, and asking again every launch would be nagging rather
-   * than helping.
-   */
-  hasAnsweredLegacyProjectImport?: boolean
   projectOnboardingSeenCount: number
   hasClaudeMdExternalIncludesApproved?: boolean
   hasClaudeMdExternalIncludesWarningShown?: boolean
@@ -261,18 +254,6 @@ export type GlobalConfig = {
     rejected?: string[]
   }
   primaryApiKey?: string // Primary API key for the user when no environment variable is set, set via oauth (TODO: rename)
-  /**
-   * The user declined the legacy-project import offer for every project at once.
-   *
-   * The per-project flag is right for someone with one or two repos, but a repo
-   * set up for Claude Code is the common case, not the exception: answering the
-   * same question once per checkout is the nagging the per-project flag was
-   * meant to prevent. Nothing is lost by saying yes to this — `/import-project`
-   * runs the same import on demand, in any project, ignoring both this flag and
-   * the per-project one. (Not `/import-conversations`, which reads `~/.claude`
-   * for conversations and credentials and never looks at a project's own files.)
-   */
-  hasDeclinedLegacyProjectImportEverywhere?: boolean
   hasAcknowledgedCostThreshold?: boolean
   hasSeenUndercoverAutoNotice?: boolean // ant-only: whether the one-time auto-undercover explainer has been shown
   hasSeenUltraplanTerms?: boolean // ant-only: whether the one-time CCR terms notice has been shown in the ultraplan launch dialog
@@ -1921,7 +1902,7 @@ export function getMemoryPath(memoryType: MemoryType): string {
       // Managed settings are deployed by an administrator into a
       // system-wide, Claude-branded location that this fork does not own;
       // renaming the file there would just stop reading what they deployed.
-      return join(getManagedFilePath(), LEGACY_MEMORY_FILE_NAME)
+      return join(getManagedFilePath(), MANAGED_MEMORY_FILE_NAME)
     case 'AutoMem':
       return getAutoMemEntrypoint()
   }
@@ -1933,7 +1914,7 @@ export function getMemoryPath(memoryType: MemoryType): string {
 }
 
 export function getManagedClaudeRulesDir(): string {
-  return join(getManagedFilePath(), '.claude', 'rules')
+  return join(getManagedFilePath(), MANAGED_CONFIG_DIR_NAME, 'rules')
 }
 
 export function getUserClaudeRulesDir(): string {

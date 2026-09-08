@@ -50,6 +50,7 @@ import { count, uniq } from './utils/array.js';
 import { installAsciicastRecorder } from './utils/asciicast.js';
 import { getSubscriptionType, isClaudeAISubscriber, prefetchAwsCredentialsAndBedRockInfoIfSafe, prefetchGcpCredentialsIfSafe, validateForceLoginOrg } from './utils/auth.js';
 import { checkHasTrustDialogAccepted, getGlobalConfig, getRemoteControlAtStartup, isAutoUpdaterDisabled, saveGlobalConfig } from './utils/config.js';
+import { migrateAxaConfigDir } from './utils/configDirMigration.js';
 import { seedEarlyInput, stopCapturingEarlyInput } from './utils/earlyInput.js';
 import { getInitialEffortSetting, parseEffortValue } from './utils/effort.js';
 import { getInitialFastModeSetting, isFastModeEnabled, prefetchFastModeStatus, resolveFastModeStatusFromCache } from './utils/fastMode.js';
@@ -737,7 +738,7 @@ export async function main() {
       // Forward session-resume + model flags to the remote CLI's initial spawn.
       // --continue/-c and --resume <uuid> operate on the REMOTE session history,
       // which persists in the remote's own config home (CLAUDE_CONFIG_DIR there
-      // when set, else ~/.axa) at the path getProjectDir() builds:
+      // when set, else ~/.claude) at the path getProjectDir() builds:
       // `projects/` + sanitizePath(cwd). That is not the cwd as spelled —
       // every non-alphanumeric becomes `-`, and an over-long name is truncated
       // and suffixed with a hash.
@@ -912,6 +913,11 @@ async function run(): Promise<CommanderCommand> {
   // not when displaying help. This avoids the need for env variable signaling.
   program.hook('preAction', async thisCommand => {
     profileCheckpoint('preAction_start');
+    // Must run before anything below reads config: getClaudeConfigHomeDir()
+    // memoizes on first call, and init() below triggers the first settings
+    // read (applySafeConfigEnvironmentVariables → ... ), so this has to come
+    // first in the hook, not just before runMigrations() later on.
+    migrateAxaConfigDir();
     // Await async subprocess loads started at module evaluation (lines 12-20).
     // Nearly free — subprocesses complete during the ~135ms of imports above.
     // Must resolve before init() which triggers the first settings read
@@ -1013,7 +1019,7 @@ async function run(): Promise<CommanderCommand> {
     profileCheckpoint('action_handler_start');
 
     // --bare = one-switch minimal mode. Sets SIMPLE so all the existing
-    // gates fire (AXA.md, skills, hooks inside executeHooks, agent
+    // gates fire (CLAUDE.md, skills, hooks inside executeHooks, agent
     // dir-walk). Must be set before setup() / any of the gated work runs.
     if ((options as {
       bare?: boolean;
@@ -1036,7 +1042,7 @@ async function run(): Promise<CommanderCommand> {
       });
     }
 
-    // Assistant mode: when .axa/settings.json has assistant: true AND
+    // Assistant mode: when .claude/settings.json has assistant: true AND
     // the tengu_kairos GrowthBook gate is on, force brief on. Permission
     // mode is left to the user — settings defaultMode or --permission-mode
     // apply as normal. REPL-typed messages already default to 'next'
@@ -1046,10 +1052,10 @@ async function run(): Promise<CommanderCommand> {
     // kairosEnabled is computed once here and reused at the
     // getAssistantSystemPromptAddendum() call site further down.
     //
-    // Trust gate: .axa/settings.json is attacker-controllable in an
+    // Trust gate: .claude/settings.json is attacker-controllable in an
     // untrusted clone. We run ~1000 lines before showSetupScreens() shows
     // the trust dialog, and by then we've already appended
-    // .axa/agents/assistant.md to the system prompt. Refuse to activate
+    // .claude/agents/assistant.md to the system prompt. Refuse to activate
     // until the directory has been explicitly trusted.
     let kairosEnabled = false;
     let assistantTeamContext: Awaited<ReturnType<NonNullable<typeof assistantModule>['initializeAssistantTeam']>> | undefined;
@@ -1644,7 +1650,7 @@ async function run(): Promise<CommanderCommand> {
       }
     }
 
-    // Store additional directories for AXA.md loading (controlled by env var)
+    // Store additional directories for CLAUDE.md loading (controlled by env var)
     setAdditionalDirectoriesForClaudeMd(addDir);
 
     // Channel server allowlist from --channels flag — servers whose
@@ -1966,7 +1972,7 @@ async function run(): Promise<CommanderCommand> {
     }
     if (getIsNonInteractiveSession()) {
       // Apply full merged settings env now (including project-scoped
-      // .axa/settings.json PATH/GIT_DIR/GIT_WORK_TREE) so gitExe() and
+      // .claude/settings.json PATH/GIT_DIR/GIT_WORK_TREE) so gitExe() and
       // the git spawn below see it. Trust is implicit in -p mode; the
       // docstring at managedEnv.ts:96-97 says this applies "potentially
       // dangerous environment variables such as LD_PRELOAD, PATH" from all
@@ -1991,7 +1997,7 @@ async function run(): Promise<CommanderCommand> {
       // (same gate as prefetchSystemContextIfSafe).
       void getSystemContext();
       // Kick getUserContext now too — its first await (fs.readFile in
-      // getMemoryFiles) yields naturally, so the AXA.md directory walk
+      // getMemoryFiles) yields naturally, so the CLAUDE.md directory walk
       // runs during the ~280ms overlap window before the context
       // Promise.all join in print.ts. The void getUserContext() in
       // startDeferredPrefetches becomes a memoize cache-hit.
@@ -2548,7 +2554,7 @@ async function run(): Promise<CommanderCommand> {
     void logPermissionContextForAnts(null, 'initialization');
     logManagedSettings();
 
-    // Register PID file for concurrent-session detection (~/.axa/sessions/)
+    // Register PID file for concurrent-session detection (~/.claude/sessions/)
     // and fire multi-clauding telemetry. Lives here (not init.ts) so only the
     // REPL path registers — not subcommands like `axa doctor`. Chained:
     // count must run after register's write completes or it misses our own file.
@@ -3800,7 +3806,7 @@ async function run(): Promise<CommanderCommand> {
       // knows the session originated externally. Linux xdg-open and
       // browsers with "always allow" set dispatch the link with no OS-level
       // confirmation, so this is the only signal the user gets that the
-      // prompt — and the working directory / AXA.md it implies — came
+      // prompt — and the working directory / CLAUDE.md it implies — came
       // from an external source rather than something they typed.
       let deepLinkBanner: ReturnType<typeof createSystemMessage> | null = null;
       if (feature('LODESTONE')) {

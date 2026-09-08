@@ -1,7 +1,7 @@
 import { realpath } from 'fs/promises'
 import {
   CONFIG_DIR_NAME,
-  LEGACY_CONFIG_DIR_NAME,
+  MANAGED_CONFIG_DIR_NAME,
 } from '../constants/product.js'
 import ignore from 'ignore'
 import memoize from 'lodash-es/memoize.js'
@@ -98,15 +98,16 @@ export function getSkillsPath(
 ): string {
   switch (source) {
     case 'policySettings':
-      // Legacy name, and it must stay legacy: the managed directory is
+      // Externally owned name, and it must keep it: the managed directory is
       // deployed by an administrator into a system-wide, Claude-branded
       // location this fork does not own, so renaming it here would stop us
       // reading what was actually installed. markdownConfigLoader makes the
-      // same call for the same reason. Spelled through the constant rather
-      // than a literal so it does not read as the `.claude` path this repo
-      // treats as a defect — the next reader would "fix" it and break
-      // managed skills.
-      return join(getManagedFilePath(), LEGACY_CONFIG_DIR_NAME, dir)
+      // same call for the same reason. MANAGED_CONFIG_DIR_NAME is held
+      // separately from CONFIG_DIR_NAME even when the two hold the same
+      // string, and is spelled through that constant rather than a literal so
+      // it does not read as the `.claude` path this repo treats as a defect —
+      // the next reader would "fix" it and break managed skills.
+      return join(getManagedFilePath(), MANAGED_CONFIG_DIR_NAME, dir)
     case 'userSettings':
       return join(getClaudeConfigHomeDir(), dir)
     case 'projectSettings':
@@ -665,7 +666,7 @@ export const getSkillDirCommands = memoize(
     const userSkillsDir = join(getClaudeConfigHomeDir(), 'skills')
     const managedSkillsDir = join(
       getManagedFilePath(),
-      LEGACY_CONFIG_DIR_NAME,
+      MANAGED_CONFIG_DIR_NAME,
       'skills',
     )
     const projectSkillsDirs = getProjectDirsUpToHome('skills', cwd)

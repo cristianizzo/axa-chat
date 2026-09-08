@@ -1340,7 +1340,8 @@ class Project {
           if (!isAgentSidechain) {
             // messageSet is main-file-authoritative. Sidechain entries go to a
             // separate agent file — adding their UUIDs here causes recordTranscript
-            // to skip them on the main thread (line ~1270), so the message is never
+            // to skip them on the main thread — its dedup check is
+            // `messageSet.has(m.uuid as UUID)` — so the message is never
             // written to the main session file. The next main-thread message then
             // chains its parentUuid to a UUID that only exists in the agent file,
             // and --resume's buildConversationChain terminates at the dangling ref.
@@ -2190,12 +2191,13 @@ export function buildConversationChain(
  * Post-pass for buildConversationChain: recover sibling assistant blocks and
  * tool_results that the single-parent walk orphaned.
  *
- * Streaming (claude.ts:~2024) emits one AssistantMessage per content_block_stop
- * — N parallel tool_uses → N messages, distinct uuid, same message.id. Each
- * tool_result's sourceToolAssistantUUID points to its own one-block assistant,
- * so insertMessageChain's override (line ~894) writes each TR's parentUuid to a
- * DIFFERENT assistant. The topology is a DAG; the walk above is a linked-list
- * traversal and keeps only one branch.
+ * Streaming — the `case 'content_block_stop'` arm in src/services/api/claude.ts
+ * — emits one AssistantMessage per block: N parallel tool_uses → N messages,
+ * distinct uuid, same message.id. Each tool_result's sourceToolAssistantUUID
+ * points to its own one-block assistant, so insertMessageChain's override
+ * `effectiveParentUuid = message.sourceToolAssistantUUID` writes each TR's
+ * parentUuid to a DIFFERENT assistant. The topology is a DAG; the walk above
+ * is a linked-list traversal and keeps only one branch.
  *
  * Two loss modes observed in production (both fixed here):
  *   1. Sibling assistant orphaned: walk goes prev→asstA→TR_A→next, drops asstB
@@ -2227,8 +2229,9 @@ function recoverOrphanedParallelToolResults(
   }
 
   // O(n) precompute: sibling groups and TR index.
-  // TRs indexed by parentUuid — insertMessageChain:~894 already wrote that
-  // as the srcUUID, and --fork-session strips srcUUID but keeps parentUuid.
+  // TRs indexed by parentUuid — insertMessageChain's
+  // `'sourceToolAssistantUUID' in message` branch already wrote that as the
+  // srcUUID, and --fork-session strips srcUUID but keeps parentUuid.
   const siblingsByMsgId = new Map<string, TranscriptMessage[]>()
   const toolResultsByAsst = new Map<UUID, TranscriptMessage[]>()
   for (const m of messages.values()) {

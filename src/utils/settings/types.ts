@@ -206,9 +206,9 @@ export const DeniedMcpServerEntrySchema = lazySchema(() =>
  * ⚠️ BACKWARD COMPATIBILITY NOTICE ⚠️
  *
  * This schema defines the structure of settings files at *every* scope, not just
- * one: userSettings (~/.axa/settings.json, or cowork_settings.json in cowork mode,
- * and rooted at CLAUDE_CONFIG_DIR when that is set), projectSettings (<repo>/.axa/settings.json),
- * localSettings (<repo>/.axa/settings.local.json), policySettings
+ * one: userSettings (~/.claude/settings.json, or cowork_settings.json in cowork mode,
+ * and rooted at CLAUDE_CONFIG_DIR when that is set), projectSettings (<repo>/.claude/settings.json),
+ * localSettings (<repo>/.claude/settings.local.json), policySettings
  * (managed-settings.json) and flagSettings (an arbitrary path from the CLI flag).
  * See getSettingsFilePathForSource() in ./settings.ts for the authoritative mapping.
  *

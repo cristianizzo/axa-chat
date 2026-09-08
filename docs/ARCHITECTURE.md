@@ -150,7 +150,8 @@ Two things worth noting up front:
 flowchart TD
     A["entrypoints/cli.tsx<br/>startCapturingEarlyInput"] --> B["dynamic import main.js"]
     B --> C["commander preAction hook<br/>main.tsx"]
-    C --> C1["init(): configs, env,<br/>mTLS/proxy — init.ts"]
+    C --> C0["migrateAxaConfigDir<br/>~/.axa → ~/.claude, once"]
+    C0 --> C1["init(): configs, env,<br/>mTLS/proxy — init.ts"]
     C1 --> C2["runMigrations<br/>main.tsx"]
     C2 --> C3["managed settings<br/>+ policy limits"]
     C3 --> D["commander parses<br/>~200 options"]
@@ -162,8 +163,7 @@ flowchart TD
     I --> J["showSetupScreens<br/>interactiveHelpers.tsx"]
     J --> J1["onboarding"]
     J1 --> J2["trust dialog"]
-    J2 --> J2a["legacy project import<br/>(fork-only, once per project)"]
-    J2a --> J3[".mcp.json approval"]
+    J2 --> J3[".mcp.json approval"]
     J3 --> J4["memory-file external includes"]
     J4 --> K{"trust<br/>accepted?"}
     K -->|no| L["exit"]
@@ -173,6 +173,24 @@ flowchart TD
     O --> P["launchRepl<br/>replLauncher.tsx"]
     P --> Q["render App > REPL<br/>await waitUntilExit"]
 ```
+
+**Why the config-dir migration is first, and what it will not do.**
+`migrateAxaConfigDir()` (`utils/configDirMigration.ts`) is the first statement
+in the `preAction` hook, ahead of `init()`, because `getClaudeConfigHomeDir()`
+memoizes on its first call and `init()` triggers the first settings read — a
+migration that ran afterwards would move a directory the process had already
+resolved away from. It is also why the step sits in `preAction` rather than
+earlier: `--version` and `--help` do not execute a command, so they do not
+trigger it.
+
+The step is a **merge**, not a move, because co-tenancy with a real Claude Code
+install is intended and `~/.claude` is normally already populated. The
+destination always wins a content conflict — it may be live config — and the
+`~/.axa` version is kept beside it as `<name>.from-axa`. `~/.axa` is removed
+only once every byte of it is recoverable from `~/.claude`; every other
+outcome leaves the source intact and retries on the next launch. The function
+promises never to throw, so failures are reported through `logError` and not
+propagated into startup.
 
 **Why MCP connects late — and the one path where it does not.** In an
 *interactive* session, configs are resolved well before `showSetupScreens`, but
@@ -514,7 +532,7 @@ deny rules become denyRead/denyWrite. Network domains come from
 `sandbox.filesystem.*` paths do **not** use the same resolution semantics as
 permission rules — `resolveSandboxFilesystemPath` versus
 `resolvePathPatternForSandbox`. Two escape-hardening measures are deliberate and
-should not be "simplified away": settings files and `.axa/skills` are
+should not be "simplified away": settings files and `.claude/skills` are
 unconditionally denyWrite, and `scrubBareGitRepoFiles()` deletes bare-repo files
 planted at cwd during a sandboxed command before unsandboxed git can see them.
 
@@ -666,6 +684,37 @@ duplicate `control_response` cannot be re-processed into duplicate assistant
 messages and a 400 `tool_use ids must be unique`. `RemoteIO` subclasses it and
 replaces stdio with a transport, overriding `flushInternalEvents` and
 `internalEventsPending`, which are no-ops in the base.
+
+**The control-protocol schemas are a type source, not a gate — inbound messages
+are never validated.** `entrypoints/sdk/controlSchemas.ts` is ~660 lines of Zod
+describing 21 request subtypes, and it looks like a validation boundary. It is
+not one: `SDKControlRequestSchema` and `SDKControlRequestInnerSchema` have **no
+`.parse`/`.safeParse` caller anywhere in `src/`**. They have no consumer in the
+tree at all: the `z.infer` barrel that would turn them into the `SDKControl*`
+types is `entrypoints/sdk/controlTypes.ts`, which is **missing** — the schemas
+are a type source with the type half unbuilt. `StructuredIO`'s line
+processor JSON-parses each NDJSON line and applies a bare `as StdinMessage |
+SDKMessage`, so any well-formed JSON with `type: 'control_request'` reaches
+`print.ts`'s dispatch chain whatever its `subtype` says. (Contrast
+`utils/teammateMailbox.ts`, which `safeParse`s every inbound message — the
+pattern is used elsewhere in the tree, so this absence is a choice, not an
+oversight of style.)
+
+> **Read the consequence carefully, because it points the opposite way to
+> intuition.** Schema membership constrains nothing at runtime, so *"this
+> subtype is absent from the schema"* is a statement about the **type**, never
+> about **reachability**. Once the `z.infer` barrel exists, four live handlers in
+> `print.ts` — `end_session`, `channel_enable`, `mcp_authenticate`,
+> `mcp_oauth_callback_url` — start reporting `TS2367` ("no overlap") and read as
+> dead code. They are not. `mcp_authenticate` and `mcp_oauth_callback_url` are
+> two halves of one OAuth handshake coupled through a submitter map; the
+> `mcp_reconnect`/`mcp_toggle` path — whose subtypes *are* in the schema —
+> contains a helper whose only job is repairing client bindings that
+> `handleChannelEnable` created; and `services/mcp/channelAllowlist.ts` documents
+> its own allowlist as *"not a security boundary: `channel_enable` still runs the
+> full gate"*, so deleting that handler is **fail-open**. The producers are
+> out-of-tree SDK hosts and the IDE, which is why nothing in this repo sends
+> them. The fix is to complete the schema, not to delete the branches.
 
 **`cli/transports/` is not CLI code, and the name is why it went unmapped.**
 `src/bridge/` imports `HybridTransport`, `SSETransport` and `CCRClient` from it
