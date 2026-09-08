@@ -100,19 +100,22 @@ its engine is not re-derivable — the extractor uses lookarounds, which POSIX E
 does not have, so `grep -E` cannot run it at all:
 
 ```sh
-# Extraction: PCRE lookarounds, so perl (or grep -P) — NOT grep -E.
-# The awk strips fenced blocks, which is what "prose" above means; without it
-# this block's own examples would enter the population it is describing.
+# Extraction, piped straight into resolution — copy-paste the whole block, it
+# needs no substitution and produces the exception set directly. The extractor
+# needs PCRE lookarounds, which POSIX ERE does not have, so it has to be perl
+# (GNU grep -P also has them, but -P is a GNU extension and not available on
+# BSD/macOS grep, so it is not the portable choice here). The awk strips fenced
+# blocks, which is what "prose" above means; without it this block's own
+# examples would enter the population it is describing. The final loop is
+# resolution: git grep against a ref, never rg or a working-tree grep, fed one
+# token per line from the extraction above; it prints the misses, and the
+# exception set is exactly what comes out.
 awk '/^```/{f=!f; next} !f' docs/ARCHITECTURE.md \
   | perl -nle 'print for /(?<![A-Za-z0-9_])[A-Z][A-Z0-9_]{3,}(?![A-Za-z0-9_])/g' \
-  | sort -u
-
-# Resolution: git grep against a ref, never rg or a working-tree grep. Feed it
-# the tokens the extraction command above printed, one per line, and it prints
-# the misses -- the exception set is exactly what comes out.
-while read -r token; do
-  git grep -q -F "$token" origin/main -- src/ || echo "$token"
-done
+  | sort -u \
+  | while read -r token; do
+      git grep -q -F "$token" origin/main -- src/ || echo "$token"
+    done
 
 # The obvious ERE workaround for the missing lookarounds is WRONG: it consumes
 # its guard characters, so two qualifying tokens separated by one character
