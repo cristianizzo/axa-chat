@@ -2134,7 +2134,26 @@ function relativeToConfigDirRoot(
       // `isReadableConfigDirPath`, and both consumers use those only to withhold
       // an allow, so today the carve-out silently stops applying and the path
       // falls through to ordinary permission rules.
-      if (endsWithSeparatorSpelling(rootForm)) {
+      //
+      // SECURITY: same guard as `foldResolvedRootPrefix`, and required for the
+      // same reason. `rootForms[0]` is this root's own configured spelling —
+      // `getResolvedConfigDirRoots` builds each `rootForms` array from
+      // `getPathsForPermissionCheck(root)`, whose result is a `Set` seeded
+      // with `root` itself before any symlink hop is added, so the original
+      // insertion order survives and `rootForms[0]` is always that seed, never
+      // a hop. A *later* entry in `rootForms` can be `/` for reasons that have
+      // nothing to do with this root actually denoting `/`: `normalize` folds
+      // `..` lexically, not symlink-safely, so a symlink target that walks up
+      // more `../` segments than its own depth yields a lexical `/` the kernel
+      // never produced. Gating on `rootForms[0]` rather than on `rootForm`
+      // itself is what stops that poisoned entry from making every absolute
+      // path (`/agent-memory/x.md` included) read as inside this config dir —
+      // without the gate, `classifyConfigDirPath` would call it `open` instead
+      // of `outside`, minting an allow no legitimate root produced.
+      if (
+        endsWithSeparatorSpelling(rootForm) &&
+        normalizeCaseForComparison(rootForms[0] ?? rootForm) === rootLower
+      ) {
         if (pathLower.startsWith(rootLower)) {
           relative = normalizedPath.slice(rootForm.length)
           matchedRootLength = rootForm.length
