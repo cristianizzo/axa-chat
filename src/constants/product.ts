@@ -32,6 +32,19 @@ export const PRODUCT_NAME = 'AXA Chat'
 export const CONFIG_DIR_NAME = '.claude'
 
 /**
+ * The pre-migration config directory name. NOT a config dir this tool reads —
+ * utils/configDirMigration.ts is the only thing that resolves a path from it,
+ * and only to move its contents into CONFIG_DIR_NAME once.
+ *
+ * It is a constant rather than two literals because the permission layer must
+ * keep protecting `~/.axa` for as long as it can exist: the migration refuses
+ * and returns on several paths, and on every one of them the old directory
+ * survives still holding credentials and history. A second spelling of this
+ * string is how the two halves drift apart.
+ */
+export const OLD_CONFIG_DIR_NAME = '.axa'
+
+/**
  * The administrator-deployed managed location — NOT this fork's config dir.
  *
  * An MDM or an IT department installs policy skills, rules and memory into a

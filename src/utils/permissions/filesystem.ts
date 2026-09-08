@@ -23,7 +23,11 @@ import {
   getSessionId,
 } from '../../bootstrap/state.js'
 import { isGlobalConfigFileName } from '../../constants/oauth.js'
-import { CONFIG_DIR_NAME, MEMORY_FILE_NAME } from '../../constants/product.js'
+import {
+  CONFIG_DIR_NAME,
+  MEMORY_FILE_NAME,
+  OLD_CONFIG_DIR_NAME,
+} from '../../constants/product.js'
 import { checkStatsigFeatureGate_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import type { AnyObject, Tool, ToolPermissionContext } from '../../Tool.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
@@ -84,13 +88,16 @@ export const DANGEROUS_FILES = [
   // Nothing in this repo may write this file; for auto-editing, this entry is
   // what enforces that. Matched on basename anywhere in the path, hence bare.
   //
-  // Polarity, because the `.claude` handling in this file runs both ways and
+  // Polarity, because the config-dir handling in this file runs both ways and
   // inspection cannot tell them apart: this is a denylist **entry**, so deleting
   // it *under-blocks* — protection silently gone, no code path breaks, nothing
-  // fails a typecheck. `.claude` in DANGEROUS_DIRECTORIES is an entry too, but
-  // `.claude` in the worktree-path check below is an *exemption from* that
-  // denylist, and deleting that one over-blocks instead. Ask "does removing this
-  // under-block or over-block?", never "is this literal deliberate?".
+  // fails a typecheck. CONFIG_DIR_NAME and OLD_CONFIG_DIR_NAME in
+  // DANGEROUS_DIRECTORIES are entries too, but the CONFIG_DIR_NAME test in the
+  // worktree-path check below is an *exemption from* that denylist, and deleting
+  // that one over-blocks instead. Ask "does removing this under-block or
+  // over-block?", never "is this literal deliberate?". Note the other three are
+  // spelled as constants rather than strings, so a grep for the directory name
+  // finds only this line — the imports are the population, not the literals.
   '.claude.json',
 ] as const
 
@@ -103,6 +110,15 @@ export const DANGEROUS_DIRECTORIES = [
   '.vscode',
   '.idea',
   CONFIG_DIR_NAME,
+  // The pre-migration config dir. Still listed because it still exists: the
+  // migration refuses and returns on several paths (a destination
+  // `.config.json`, an unresolvable conflict, a verify mismatch, concurrent
+  // drift), and on every one of them `~/.axa` survives holding credentials and
+  // history. Protecting only the new name would leave the old one silently
+  // auto-editable for exactly as long as it is still the one with the secrets
+  // in it. A denylist **entry**, so deleting it under-blocks. Retire it only
+  // once nothing can create or keep a `.axa` directory.
+  OLD_CONFIG_DIR_NAME,
   // Credential / persistence directories. Writing here grants persistent
   // access or exposes secrets: an edit to ~/.ssh/authorized_keys is a
   // backdoor, and these hold private keys / cloud credentials. Listed as
@@ -375,6 +391,13 @@ export function isClaudeSettingsPath(filePath: string): boolean {
     normalizedPath.endsWith(`${sep}${configDirName}${sep}settings.json`) ||
     normalizedPath.endsWith(`${sep}${configDirName}${sep}settings.local.json`)
   if (isSettingsFileUnder(CONFIG_DIR_NAME)) {
+    return true
+  }
+  // The pre-migration name, for as long as it can still exist. Nothing reads
+  // these files any more, but they hold the same secrets they always did until
+  // the migration succeeds — and it has several paths on which it refuses and
+  // leaves them in place. "Unread" is not "safe to auto-edit".
+  if (isSettingsFileUnder(OLD_CONFIG_DIR_NAME)) {
     return true
   }
   // Check for current project's settings files (including managed settings and CLI args)

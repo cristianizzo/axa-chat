@@ -50,8 +50,12 @@
     `macOsKeychainHelpers.ts:41`, `commands/import-conversations/` +
     `services/import/claudeCodeImport.ts`, `MAX_BACKUP_SETS = 1000`
     (`compact.ts:398`).
-    **Later reversed:** `CONFIG_DIR_NAME` is `.claude` again, `LEGACY_CONFIG_DIR_NAME`
-    now names `.axa`, and `configDirMigration.ts` does a one-time merge of
+    **Later reversed:** `CONFIG_DIR_NAME` is `.claude` again, the
+    `LEGACY_CONFIG_DIR_NAME` family was **deleted** and replaced by a single
+    `OLD_CONFIG_DIR_NAME = '.axa'` that nothing reads as a config dir — only
+    `configDirMigration.ts` resolves a path from it, and the permission layer
+    keeps denying auto-edits under it for as long as it can still exist.
+    `configDirMigration.ts` does a one-time merge of
     `~/.axa` into `~/.claude` — see
     `docs/superpowers/specs/2026-09-07-config-dir-back-to-claude-design.md`.
     The import half was **deleted**, not kept: `/import-conversations` copied a

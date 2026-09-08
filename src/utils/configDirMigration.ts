@@ -33,10 +33,13 @@ import {
 } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
+import { CONFIG_DIR_NAME, OLD_CONFIG_DIR_NAME } from '../constants/product.js'
 import { logError } from './log.js'
 
-const OLD_DIR_NAME = '.axa'
-const NEW_DIR_NAME = '.claude'
+// Imported, not spelled again: the permission layer protects the same two
+// names, and a second literal here is how the two halves silently drift.
+const OLD_DIR_NAME = OLD_CONFIG_DIR_NAME
+const NEW_DIR_NAME = CONFIG_DIR_NAME
 
 /** Suffix for a source file kept beside a differing destination file. The
  *  destination always wins a content conflict — it may be a real Claude Code
@@ -184,11 +187,13 @@ export function migrateAxaConfigDir(): void {
     // Claude Code install carrying one would silently redirect the whole config
     // after the move. Refuse rather than guess.
     if (existsSync(join(destination, '.config.json'))) {
-      logError(
-        new Error(
-          `Cannot migrate ${source}: ${destination}/.config.json exists and would override the migrated config. Move it aside and restart.`,
-        ),
-      )
+      // stderr as well as logError, for the same reason as every other refusal
+      // path here: logError only reaches the console under HARD_FAIL, and this
+      // check re-fires on every single launch until the user moves the file.
+      // Silence makes a permanently blocked migration look like a completed one.
+      const message = `Cannot migrate ${source}: ${destination}/.config.json exists and would override the migrated config. Move it aside and restart.`
+      announce(message)
+      logError(new Error(message))
       return
     }
 
@@ -378,24 +383,31 @@ export function migrateAxaConfigDir(): void {
       // Directories carry no bytes of their own; their contents are separate
       // paths in this same list.
       if (fromStats.isDirectory()) continue
-      if (fromStats.size !== toStats.size) mismatched.push(relativePath)
+
+      // Content, not size. This is the gate on rmSync, and the invariant it
+      // enforces is "every byte of the source is recoverable from the
+      // destination" — which equal sizes do not establish. A session that
+      // rewrote a file in place during the copy, at the same length, passes a
+      // size check here AND passes the drift check below, which is also
+      // size-keyed: the two would agree on a file whose bytes were never
+      // copied, and the source would be deleted. Two same-length
+      // `settings.json` are the realistic case, not a contrived one.
+      if (!sameContent(from, fromStats, to, toStats)) {
+        mismatched.push(relativePath)
+      }
     }
 
     if (missing.length > 0) {
-      logError(
-        new Error(
-          `Refusing to remove ${source}: ${summarize('did not arrive', missing)} in ${destination}.`,
-        ),
-      )
+      const message = `Refusing to remove ${source}: ${summarize('did not arrive', missing)} in ${destination}. ${source} has been kept.`
+      announce(message)
+      logError(new Error(message))
       return
     }
 
     if (mismatched.length > 0) {
-      logError(
-        new Error(
-          `Refusing to remove ${source}: ${summarize('differ at', mismatched)} in ${destination}.`,
-        ),
-      )
+      const message = `Refusing to remove ${source}: ${summarize('differ at', mismatched)} in ${destination}. ${source} has been kept.`
+      announce(message)
+      logError(new Error(message))
       return
     }
 
@@ -430,11 +442,9 @@ export function migrateAxaConfigDir(): void {
       ]
         .filter(Boolean)
         .join('; ')
-      logError(
-        new Error(
-          `Refusing to remove ${source}: it changed while migrating (${changes}). ${source} has been kept.`,
-        ),
-      )
+      const message = `Refusing to remove ${source}: it changed while migrating (${changes}). ${source} has been kept.`
+      announce(message)
+      logError(new Error(message))
       return
     }
 
