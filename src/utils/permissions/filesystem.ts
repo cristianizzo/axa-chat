@@ -671,7 +671,7 @@ function isDangerousFilePathToAutoEdit(path: string): boolean {
           nextSegment &&
           normalizeCaseForComparison(nextSegment) === 'worktrees'
         ) {
-          break // Skip this .claude, continue checking other segments
+          break // Skip this config-dir segment, keep checking the rest
         }
       }
 
