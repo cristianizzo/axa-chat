@@ -70,7 +70,8 @@ export function getScrollHint(): ScrollHint | null {
 // The ScrollBox DOM node (if any) with pendingScrollDelta left after this
 // frame's drain. renderer.ts calls markDirty(it) post-render so the NEXT
 // frame's root blit check fails and we descend to continue draining.
-// Without this, after the scrollbox's dirty flag is cleared (line ~721),
+// Without this, after the scrollbox's dirty flag is cleared (the
+// `node.dirty = false` under `Cache layout bounds for dirty tracking`),
 // the next frame blits root and never reaches the scrollbox — drain stalls.
 let scrollDrainNode: DOMElement | null = null
 
@@ -423,8 +424,9 @@ function renderNodeToOutput(
           // Drop descendants' cache too — hideInstance's markDirty walks UP
           // only, so descendants' .dirty stays false. Their nodeCache entries
           // survive with pre-hide rects. On unhide, if position didn't shift,
-          // the blit check at line ~432 passes and copies EMPTY cells from
-          // prevScreen (cleared here) → content vanishes.
+          // the blit fast-path guard (`node.pendingScrollDelta === undefined`)
+          // passes and copies EMPTY cells from prevScreen (cleared here) →
+          // content vanishes.
           dropSubtreeCache(node)
           layoutShifted = true
         }
@@ -634,8 +636,8 @@ function renderNodeToOutput(
       // output.get(), so this wins regardless of what's rendered into
       // the region — including blits from prevScreen when the box is
       // clean (the op is emitted on both the dirty-render path here
-      // AND on the blit fast-path at line ~235 since blitRegion copies
-      // the noSelect bitmap alongside cells).
+      // AND on the blit fast-path — `output.blit(prevScreen, fx, fy, fw, fh)`
+      // — since blitRegion copies the noSelect bitmap alongside cells).
       //
       // 'from-left-edge' extends the exclusion from col 0 so any
       // upstream indentation (tool prefix, tree lines) is covered too
@@ -1230,8 +1232,8 @@ function renderNodeToOutput(
 // AFTER a dirty/removed sibling can contain stale overflow in prevScreen.
 // Disable blit for siblings after a dirty child — but still pass prevScreen
 // TO the dirty child itself so its clean descendants can blit. The dirty
-// child's own blit check already fails (node.dirty=true at line 216), so
-// passing prevScreen only benefits its subtree.
+// child's own blit check already fails (the guard's `!node.dirty` conjunct),
+// so passing prevScreen only benefits its subtree.
 // For removed children we don't know their original position, so
 // conservatively disable blit for all.
 //
