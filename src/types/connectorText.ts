@@ -1,6 +1,14 @@
 export type ConnectorTextBlock = {
   type: 'connector_text'
   connector_text: string
+  /**
+   * Set from a `signature_delta` while streaming — see the `signature_delta`
+   * case in `services/api/claude.ts`, which assigns it whenever the open block
+   * is a `connector_text`. Optional because it only exists once that delta has
+   * arrived; a block is a valid `ConnectorTextBlock` before then, which is why
+   * `isConnectorTextBlock` does not check for it.
+   */
+  signature?: string
 }
 
 export type ConnectorTextDelta = {

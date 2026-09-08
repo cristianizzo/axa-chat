@@ -1208,7 +1208,17 @@ async function* queryModel(
       getCachedMCConfig,
     } = await import('../compact/cachedMicrocompact.js')
     const betas = await import('src/constants/betas.js')
-    cacheEditingBetaHeader = betas.CACHE_EDITING_BETA_HEADER
+    // `CACHE_EDITING_BETA_HEADER` is ant-only and is not present in this fork's
+    // `betas.ts`, so the property read below is `undefined` at runtime. The
+    // guard keeps `cacheEditingBetaHeader` a string — assigning `undefined`
+    // would send a literal "undefined" beta header if the value ever reached
+    // the request builder. Absent means "send no cache-editing beta", which is
+    // what the `''` initialiser above already encodes.
+    const header =
+      'CACHE_EDITING_BETA_HEADER' in betas
+        ? betas.CACHE_EDITING_BETA_HEADER
+        : undefined
+    cacheEditingBetaHeader = typeof header === 'string' ? header : ''
     const featureEnabled = isCachedMicrocompactEnabled()
     const modelSupported = isModelSupportedForCacheEditing(options.model)
     cachedMCEnabled = featureEnabled && modelSupported
