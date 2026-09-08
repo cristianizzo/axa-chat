@@ -118,13 +118,18 @@ printf 'AAAA BBBB\n' \
   | grep -oE '[A-Z][A-Z0-9_]{3,}'
 ```
 
-Neither instrument is incidental. `src/cli` is `.gitignore`d, so `rg` and a
-plain `grep -r` skip it and under-report resolution, while `git grep <ref>`
-reads the ref and is unaffected by the working tree. The consuming workaround
-happens to give the right answer on this document, which is exactly why it is
-named here rather than left for the next person to reinvent — and note that
-resolution is a **substring** test, so it is generous by construction. That is
-the same generosity the next paragraph relies on.
+Neither instrument is incidental. `git grep <ref>` is required for resolution,
+not merely preferred, because the claim above is about `main`: `rg` and a
+plain `grep -r` search the working tree, so a local edit — an uncommitted
+rename, a token deleted here and not yet pushed — would silently change which
+tokens resolve without changing what the page asserts. `git grep <ref>` reads
+the content of that ref regardless of the working tree's state, which is the
+only way the measurement stays about `main` rather than about whatever this
+checkout happens to hold. The consuming workaround happens to give the right
+answer on this document, which is exactly why it is named here rather than
+left for the next person to reinvent — and note that resolution is a
+**substring** test, so it is generous by construction. That is the same
+generosity the next paragraph relies on.
 
 **The word boundaries in that pattern are load-bearing, and so is the scope
 word.** Stated unbounded, as `[A-Z][A-Z0-9_]{3,}`, the extractor cuts mixed-case
