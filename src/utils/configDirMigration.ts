@@ -29,6 +29,7 @@ import {
   readSync,
   readlinkSync,
   rmSync,
+  statSync,
   type Stats,
 } from 'fs'
 import { homedir } from 'os'
@@ -234,6 +235,29 @@ export function migrateAxaConfigDir(): void {
       return
     }
 
+    // The same guard as the source, in the other direction. `mkdirSync` with
+    // `recursive: true` is a no-op on an existing directory but throws on an
+    // existing *file*, and that throw lands in the top-level catch as a generic
+    // message that repeats on every launch. A symlink is allowed here, unlike on
+    // the source side: nothing deletes the destination, so there is no link to
+    // orphan, and pointing ~/.claude at a dotfiles checkout is a real setup that
+    // the rest of the config layer already follows. `statSync` follows the link
+    // deliberately — what matters is what it resolves to — while a dangling link
+    // resolves to nothing and is refused.
+    const destinationLink = lstatSync(destination, { throwIfNoEntry: false })
+    if (destinationLink) {
+      const destinationTarget = statSync(destination, { throwIfNoEntry: false })
+      if (!destinationTarget?.isDirectory()) {
+        const kind = destinationTarget
+          ? describe(destinationTarget)
+          : 'a symlink that points nowhere'
+        const message = `Cannot migrate ${source}: ${destination} is ${kind}, not a directory. Move it aside and restart.`
+        announce(message)
+        logError(new Error(message))
+        return
+      }
+    }
+
     mkdirSync(destination, { recursive: true })
 
     // One read, not two. The merge's work list and the drift baseline must come
@@ -276,6 +300,10 @@ export function migrateAxaConfigDir(): void {
     // verification pass must look at these paths, not at the colliding ones.
     const preserved = new Map<string, string>()
 
+    // Sockets, FIFOs and device nodes found in the source: deliberately not
+    // copied, and deliberately not required to arrive.
+    const dropped = new Map<string, string>()
+
     const copyVerbatim = (from: string, to: string): void => {
       cpSync(from, to, {
         recursive: true,
@@ -299,6 +327,21 @@ export function migrateAxaConfigDir(): void {
       if (!fromStats) continue
 
       const toStats = lstatSync(to, { throwIfNoEntry: false })
+
+      // A socket, FIFO or device node. `cpSync` throws on these, and because
+      // this branch is reached before any collision test, one stray socket in
+      // ~/.axa would abort the entire migration from the top-level catch and do
+      // it again on every launch. They are also not data: a socket is a kernel
+      // object owned by a process that is gone, and copying it would produce
+      // nothing a later run could use. Drop them by name rather than by silence,
+      // and exempt them from the recoverability gate below — insisting they
+      // "arrive" would wedge the migration permanently over entries that carry
+      // no bytes to lose.
+      if (!fromStats.isDirectory() && !isMergeable(fromStats)) {
+        dropped.set(relativePath, `${relativePath} (${describe(fromStats)})`)
+        settled.add(relativePath)
+        continue
+      }
 
       // Present only in the source: copy it as it stands, subtree and all.
       if (!toStats) {
@@ -393,6 +436,10 @@ export function migrateAxaConfigDir(): void {
     const mismatched: string[] = []
 
     for (const relativePath of relativePaths) {
+      // Never copied on purpose, and carrying no bytes to recover. Requiring
+      // them here would refuse the delete forever over a dead socket.
+      if (dropped.has(relativePath)) continue
+
       const from = join(source, relativePath)
       const fromStats = lstatSync(from, { throwIfNoEntry: false })
       // Vanished since the snapshot; the drift check below is what refuses.
@@ -486,6 +533,16 @@ export function migrateAxaConfigDir(): void {
     }
 
     rmSync(source, { recursive: true, force: true })
+
+    // Said out loud for the same reason as the sidecars: this is the one run
+    // that could ever mention them. They were not copied and are now gone, and
+    // a user who put something deliberate there deserves to be told rather than
+    // to discover it missing.
+    if (dropped.size > 0) {
+      announce(
+        `Not copied out of ${source} — ${summarize('sockets, pipes and device nodes are runtime state, not data', [...dropped.values()])}.`,
+      )
+    }
 
     // The sidecars are inert and nothing else will ever mention them. Said
     // once, on the single run that creates them, because `source` is gone
