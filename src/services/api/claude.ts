@@ -1212,8 +1212,9 @@ async function* queryModel(
     // `betas.ts`, so the property read below is `undefined` at runtime. The
     // guard keeps `cacheEditingBetaHeader` a string — assigning `undefined`
     // would send a literal "undefined" beta header if the value ever reached
-    // the request builder. Absent means "send no cache-editing beta", which is
-    // what the `''` initialiser above already encodes.
+    // the request builder. `''` is the sentinel for "absent"; the push site
+    // below skips it, so absence sends no cache-editing beta at all rather
+    // than an empty entry.
     const header =
       'CACHE_EDITING_BETA_HEADER' in betas
         ? betas.CACHE_EDITING_BETA_HEADER
@@ -1755,6 +1756,11 @@ async function* queryModel(
       options.querySource === 'repl_main_thread'
     if (
       cacheEditingHeaderLatched &&
+      // Empty means the ant-only `CACHE_EDITING_BETA_HEADER` is absent from
+      // this fork, so there is no beta to send. Without this the latch — gated
+      // on the same `CACHED_MICROCOMPACT` flag that would supply the constant —
+      // would push `''` and put an empty entry in the betas list.
+      cacheEditingBetaHeader !== '' &&
       getAPIProvider() === 'firstParty' &&
       options.querySource === 'repl_main_thread' &&
       !betasParams.includes(cacheEditingBetaHeader)
