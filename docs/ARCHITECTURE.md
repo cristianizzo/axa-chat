@@ -88,9 +88,45 @@ The counter-example is in this document's own history: `CCR_V2` and
 `POST_FOR_SESSION_INGRESS_V2` (§7) look like they share a prefix, and they do
 not — the real names are `CLAUDE_CODE_USE_CCR_V2` and
 `CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2`, so guessing `CLAUDE_CODE_USE_` from
-the first gives a name that exists nowhere for the second. Measured over every
-`[A-Z][A-Z0-9_]{3,}` token cited below: all resolve in `src/` on `main` except
-`TS2307`, a `tsc` diagnostic code and not an identifier.
+the first gives a name that exists nowhere for the second. Measured over all 33
+distinct `(?<![A-Za-z0-9_])[A-Z][A-Z0-9_]{3,}(?![A-Za-z0-9_])` tokens cited
+**anywhere in this document**: 30 resolve in `src/` on `main`, and the exception
+set has exactly three members — `TS2307` and `TS2367`, both `tsc` diagnostic
+codes, and `FNM_PATHNAME`, a POSIX `fnmatch` flag named in the pathspec
+paragraph above. None is an identifier in this repo, which is the whole reason
+they are the exceptions.
+
+**The word boundaries in that pattern are load-bearing, and so is the scope
+word.** Stated unbounded, as `[A-Z][A-Z0-9_]{3,}`, the extractor cuts mixed-case
+identifiers mid-word and mints tokens nobody cited: on the revision immediately
+before this one it reported **32** against the bounded **27**, the difference
+being `CCRC`, `REPLT`, `SDKC`, `SDKM` and `SSET` — the leading characters of
+`CCRClient`, `REPLTool`, `SDKControl*`, `SDKMessage` and `SSETransport`. This is
+the same defect this section warns about for file names, a loose matcher
+inventing members, arriving on the *extraction* side rather than the resolution
+side.
+
+Both patterns now agree at 33 **here**, and only because this paragraph quotes
+those five phantoms verbatim in order to name them, which promotes them to
+genuinely-cited tokens. The divergence is observable only on text that does not
+name them, so do not read the agreement as evidence the boundaries are
+unnecessary — re-deriving that requires the previous revision.
+
+**It was invisible from every artefact the page exposes.** A token carved out of
+a longer identifier is by construction a substring of a string present in
+`src/`, so a phantom minted this way is *guaranteed* to land on the resolving
+side and can never disturb the exception list. An unbounded extractor and a
+substring resolver hide each other: the enumeration a reader can check stays
+correct while the totals are wrong.
+
+An earlier revision of this sentence scoped the count with a bare "cited below"
+and named a **one-member** exception set. Both parts had rotted. `TS2367`
+arrived later, with §4's control-protocol paragraph, and nothing re-measured;
+`FNM_PATHNAME` is cited *above* this line, so "below" silently excluded it
+rather than accounting for it. **A one-member exception set is the shape that
+gets silently completed wrong** — state the extraction pattern and the scope as
+well as the resolution instrument, because a count whose population cannot be
+re-derived from the page is unverifiable however carefully it was taken.
 
 Seven numbered sections, zooming in: whole lifecycle → startup → prompt submit →
 the agent turn loop → provider/network resolution → tool execution and
