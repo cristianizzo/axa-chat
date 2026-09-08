@@ -178,7 +178,12 @@ export async function mcpListHandler(): Promise<void> {
       } else if (server.type === 'claudeai-proxy') {
         // biome-ignore lint/suspicious/noConsole:: intentional console output
         console.log(`${name}: ${server.url} - ${status}`);
-      } else if (!server.type || server.type === 'stdio') {
+        // `type` is optional on stdio configs for backwards compatibility, and
+        // under non-strict TS an optional property's type excludes `undefined`,
+        // so neither `!server.type` nor `server.type === undefined` narrows the
+        // union. `'command' in server` identifies stdio positively and covers
+        // both the explicit-`type` and legacy no-`type` forms.
+      } else if ('command' in server) {
         const args = Array.isArray(server.args) ? server.args : [];
         // biome-ignore lint/suspicious/noConsole:: intentional console output
         console.log(`${name}: ${server.command} ${args.join(' ')} - ${status}`);

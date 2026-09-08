@@ -117,9 +117,11 @@ export function createStreamAccumulator(): StreamAccumulatorState {
   return { byMessage: new Map(), scopeToMessage: new Map() }
 }
 
+// parent_tool_use_id is `.nullable()` in the schema, which infers as an
+// optional property; `?? ''` already covers both null and absent.
 function scopeKey(m: {
   session_id: string
-  parent_tool_use_id: string | null
+  parent_tool_use_id?: string | null
 }): string {
   return `${m.session_id}:${m.parent_tool_use_id ?? ''}`
 }
@@ -211,7 +213,7 @@ export function clearStreamAccumulatorForMessage(
   state: StreamAccumulatorState,
   assistant: {
     session_id: string
-    parent_tool_use_id: string | null
+    parent_tool_use_id?: string | null
     message: { id: string }
   },
 ): void {
@@ -372,7 +374,8 @@ export class CCRClient {
           { worker_epoch: this.workerEpoch, events: batch },
           'client events',
         )
-        if (!result.ok) {
+        // `!result.ok` does not narrow under non-strict TS; compare to false.
+        if (result.ok === false) {
           throw new RetryableError(
             'client event POST failed',
             result.retryAfterMs,
@@ -395,7 +398,8 @@ export class CCRClient {
           { worker_epoch: this.workerEpoch, events: batch },
           'internal events',
         )
-        if (!result.ok) {
+        // `!result.ok` does not narrow under non-strict TS; compare to false.
+        if (result.ok === false) {
           throw new RetryableError(
             'internal event POST failed',
             result.retryAfterMs,
@@ -426,7 +430,8 @@ export class CCRClient {
           },
           'delivery batch',
         )
-        if (!result.ok) {
+        // `!result.ok` does not narrow under non-strict TS; compare to false.
+        if (result.ok === false) {
           throw new RetryableError('delivery POST failed', result.retryAfterMs)
         }
       },
