@@ -3483,7 +3483,7 @@ function decideEditableInternalPath(
   // Template job's own directory. Env key hardcoded (vs importing JOB_ENV_KEY
   // from jobs/state) so tree-shaking eliminates the string from external
   // builds. Hijack guard: the env var value must itself resolve under the
-  // config home's `jobs/` — that is `~/.axa/jobs` by default and whatever
+  // config home's `jobs/` — that is `~/.claude/jobs` by default and whatever
   // CLAUDE_CONFIG_DIR points at otherwise, so do not re-spell it as a fixed
   // path. Symlink guard: every resolved form of the target (lexical + symlink
   // chain) must fall under some resolved form of the job dir, so a symlink
