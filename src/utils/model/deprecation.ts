@@ -21,7 +21,14 @@ type DeprecationInfo = DeprecatedModelInfo | NotDeprecatedInfo
 type DeprecationEntry = {
   /** Human-readable model name */
   modelName: string
-  /** Retirement dates by provider (null = not deprecated for that provider) */
+  /**
+   * Retirement dates by provider (null = not deprecated for that provider).
+   *
+   * The fork-only providers (openai, ollama, deepseek, kimi, grok) never serve
+   * Anthropic models, so they are null in every entry below — but they must
+   * still be listed, because getDeprecatedModelInfo indexes this record with
+   * whatever getAPIProvider() returns.
+   */
   retirementDates: Record<APIProvider, string | null>
 }
 
@@ -38,6 +45,11 @@ const DEPRECATED_MODELS: Record<string, DeprecationEntry> = {
       bedrock: 'January 15, 2026',
       vertex: 'January 5, 2026',
       foundry: 'January 5, 2026',
+      openai: null,
+      ollama: null,
+      deepseek: null,
+      kimi: null,
+      grok: null,
     },
   },
   'claude-3-7-sonnet': {
@@ -47,6 +59,11 @@ const DEPRECATED_MODELS: Record<string, DeprecationEntry> = {
       bedrock: 'April 28, 2026',
       vertex: 'May 11, 2026',
       foundry: 'February 19, 2026',
+      openai: null,
+      ollama: null,
+      deepseek: null,
+      kimi: null,
+      grok: null,
     },
   },
   'claude-3-5-haiku': {
@@ -56,6 +73,11 @@ const DEPRECATED_MODELS: Record<string, DeprecationEntry> = {
       bedrock: null,
       vertex: null,
       foundry: null,
+      openai: null,
+      ollama: null,
+      deepseek: null,
+      kimi: null,
+      grok: null,
     },
   },
 }

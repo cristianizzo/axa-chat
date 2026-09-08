@@ -1,9 +1,9 @@
 // SDK Core Types - Common serializable types used by both SDK consumers and SDK builders.
 //
-// Types are generated from Zod schemas in coreSchemas.ts.
-// To modify types:
-// 1. Edit Zod schemas in coreSchemas.ts
-// 2. Run: bun scripts/generate-sdk-types.ts
+// Types are derived from the Zod schemas in coreSchemas.ts as `z.infer`
+// aliases, not by a codegen step — there is no generator script in this repo.
+// To modify a type, edit its Zod schema in coreSchemas.ts; the alias follows
+// with no build step to run.
 //
 // Schemas are available in coreSchemas.ts for runtime validation but are not
 // part of the public API.
