@@ -211,11 +211,24 @@ export function migrateAxaConfigDir(): void {
     // function — `export CLAUDE_CONFIG_DIR=` and `unset` are one intent.
     // `~` is left unexpanded deliberately: nothing else expands it either, so
     // a literal `~/.claude` really is a third (relative) location here.
+    //
+    // Case-folded on win32 only. There, `c:\Users\me\.claude` and
+    // `C:\Users\me\.claude` are one directory, and `resolve` keeps whatever
+    // case it was given — so a case-exact compare would read the default,
+    // spelled with a lowercase drive letter, as a third location and strand
+    // ~/.axa exactly as before. Not folded on darwin, deliberately: APFS is
+    // case-insensitive only *by default* and can be formatted otherwise, so
+    // folding there risks the opposite and worse error — migrating into
+    // ~/.claude while the user's config home is really ~/.CLAUDE, i.e. moving
+    // credentials somewhere nothing reads. Not folding merely skips, which is
+    // what this code did before the guard was touched at all.
+    const foldCase = (path: string): string =>
+      process.platform === 'win32' ? path.toLowerCase() : path
     const override = process.env.CLAUDE_CONFIG_DIR
     if (
       override &&
-      resolve(override).normalize('NFC') !==
-        resolve(destination).normalize('NFC')
+      foldCase(resolve(override).normalize('NFC')) !==
+        foldCase(resolve(destination).normalize('NFC'))
     ) {
       return
     }
