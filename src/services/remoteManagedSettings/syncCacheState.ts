@@ -79,7 +79,8 @@ export function getRemoteManagedSettingsSyncFromCache(): SettingsJson | null {
     // null). Flush so the next merged read re-merges with this layer visible.
     //
     // Fires at most once: subsequent calls hit `if (sessionCache)` above.
-    // When called from loadSettingsFromDisk() in settings.ts, the merged
+    // When called from loadSettingsFromDisk() in utils/settings/settings.ts,
+    // the merged
     // cache is still null (its caller runs setSessionSettingsCache only after
     // loadSettingsFromDisk returns) — no-op. The async-fetch arm (index.ts
     // setSessionCache + notifyChange) already handles its own reset.
