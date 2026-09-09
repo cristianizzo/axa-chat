@@ -334,8 +334,7 @@ async function detectConfigurationIssues(
   // Managed-settings forwards-compat: the schema preprocess silently drops
   // unknown strictPluginOnlyCustomization surface names so one future enum
   // value doesn't null out the entire policy file (utils/settings/settings.ts
-  // returns
-  // `{ settings: null, errors }` when safeParse fails). But
+  // returns `{ settings: null, errors: [...] }` when safeParse fails). But
   // admins should KNOW — read the raw file and diff. Runs before the
   // development-mode early return: this is config correctness, not an
   // install-path check, and it's useful to see during dev testing.

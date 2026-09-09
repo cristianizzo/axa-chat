@@ -521,9 +521,8 @@ export const SettingsSchema = lazySchema(() =>
         .preprocess(
           // Forwards-compat: drop unknown surface names so a future enum
           // value (e.g. 'commands') doesn't fail safeParse and null out the
-          // ENTIRE managed-settings file — utils/settings/settings.ts
-          // returns
-          // `{ settings: null, errors }` when safeParse fails. ["skills",
+          // ENTIRE managed-settings file — utils/settings/settings.ts returns
+          // `{ settings: null, errors: [...] }` when safeParse fails. ["skills",
           // "commands"] on an old client → ["skills"] → locks what it knows,
           // ignores what it doesn't. Degrades to less-locked, never to
           // everything-unlocked.
