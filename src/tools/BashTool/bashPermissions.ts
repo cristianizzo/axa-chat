@@ -551,7 +551,9 @@ export function stripSafeWrappers(command: string): string {
     /^time[ \t]+(?:--[ \t]+)?/,
     // SECURITY: keep in sync with the wrapper-strip loop at the top of
     // `export function checkSemantics` (src/utils/bash/ast.ts) AND with
-    // stripWrappersFromArgv (pathValidation.ts ~:1260).
+    // stripWrappersFromArgv. NOTE there are TWO of those: the copy exported
+    // from this file and a near-duplicate in BashTool/pathValidation.ts.
+    // Both strip the same wrappers; both need the change.
     // Previously this pattern REQUIRED `-n N`; checkSemantics already handled
     // bare `nice` and legacy `-N`. Asymmetry meant checkSemantics exposed the
     // wrapped command to semantic checks but deny-rule matching and the cd+git
@@ -1683,7 +1685,9 @@ export async function bashToolHasPermission(
   // we need to decide whether splitCommand's output can be trusted.
   //
   // When tree-sitter WASM is unavailable OR the injection check is disabled
-  // via env var, we fall back to the old path (legacy gate at ~1370 runs).
+  // via env var, we fall back to the old path — the
+  // `astResult.kind === 'parse-unavailable'` branch below, which runs
+  // tryParseShellCommand.
   const injectionCheckDisabled = isEnvTruthy(
     process.env.CLAUDE_CODE_DISABLE_COMMAND_INJECTION_CHECK,
   )
@@ -2004,7 +2008,9 @@ export async function bashToolHasPermission(
       // where the backtick is in the redirect target (stripped from segments)
       // Gate on AST: when astSubcommands is non-null, tree-sitter already
       // validated structure (backticks/$() in redirect targets would have
-      // returned too-complex). Matches gating at ~1481, ~1706, ~1755.
+      // returned too-complex). Matches the other `astSubcommands === null`
+      // gates below: the isBashSecurityCheckForMisparsing re-check, the
+      // subcommand fanout cap, and the per-subcommand injection re-check.
       // Avoids FP: `find -exec {} \; | grep x` tripping on backslash-;.
       // bashCommandIsSafe runs the full legacy regex battery (~20 patterns) —
       // only call it when we'll actually use the result.
@@ -2047,7 +2053,8 @@ export async function bashToolHasPermission(
       appState = context.getAppState()
       // SECURITY: Compute compoundCommandHasCd from the full command, NOT
       // hardcode false. The pipe-handling path previously passed `false` here,
-      // disabling the cd+redirect check at pathValidation.ts:821. Appending
+      // disabling the cd+redirect check — BashTool/pathValidation.ts's
+      // `if (compoundCommandHasCd && operationType !== 'read')` ask. Appending
       // `| echo done` to `cd .claude && echo x > settings.json` routed through
       // this path with compoundCommandHasCd=false, letting the redirect write
       // to .claude/settings.json without the cd+redirect block firing.
