@@ -33,7 +33,7 @@ import {
   type Stats,
 } from 'fs'
 import { homedir } from 'os'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { CONFIG_DIR_NAME, OLD_CONFIG_DIR_NAME } from '../constants/product.js'
 import { logError } from './log.js'
 
@@ -187,9 +187,6 @@ function sameContent(
 }
 
 export function migrateAxaConfigDir(): void {
-  // An explicit override names a location that is neither of these.
-  if (process.env.CLAUDE_CONFIG_DIR) return
-
   // Resolved inside the try so an environment where homedir() throws is
   // reported rather than propagated — this function promises never to throw.
   // The catch reports these bare names if homedir() itself was what failed.
@@ -200,6 +197,28 @@ export function migrateAxaConfigDir(): void {
     const home = homedir()
     source = join(home, OLD_DIR_NAME)
     destination = join(home, NEW_DIR_NAME)
+
+    // An explicit override usually names a third location, which is neither
+    // side of this migration and leaves nothing to do. But it may also spell
+    // out the default destination, and `CLAUDE_CONFIG_DIR=~/.claude` means
+    // exactly what leaving it unset means — that config home is the one being
+    // migrated *into*, so returning on the variable's mere presence would
+    // strand ~/.axa forever for a user who only made the default explicit.
+    // Compare the resolved paths instead. NFC on both sides for the same
+    // reason getClaudeConfigHomeDir normalizes (utils/envUtils.ts): an
+    // accented home directory can be spelled two ways and they are one
+    // directory. An empty value is treated as unset, also matching that
+    // function — `export CLAUDE_CONFIG_DIR=` and `unset` are one intent.
+    // `~` is left unexpanded deliberately: nothing else expands it either, so
+    // a literal `~/.claude` really is a third (relative) location here.
+    const override = process.env.CLAUDE_CONFIG_DIR
+    if (
+      override &&
+      resolve(override).normalize('NFC') !==
+        resolve(destination).normalize('NFC')
+    ) {
+      return
+    }
 
     // lstat, not existsSync: everything below assumes the source is a real
     // directory it can readdir. A regular file or a symlink named `.axa` would
