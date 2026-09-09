@@ -183,8 +183,9 @@ async function calculateDepth(
       // Leaf subcommand with NO args declared (git show, git log, git tag):
       // the 3rd word is transient (SHA, ref, tag name) → dead over-specific
       // rule like PowerShell(git show 81210f8:*). NOT the isOptional case —
-      // `git fetch` declares optional remote/branch and `git fetch origin`
-      // is tested (bash/prefix.test.ts:912) as intentional remote scoping.
+      // `git fetch` declares optional remote/branch, and `git fetch origin` is
+      // intentional remote scoping. (Upstream asserts that in its bash prefix
+      // tests; no test suite ships in this fork, so there is nothing to cite.)
       if (!subcommand.args) return 2
       return 3
     }

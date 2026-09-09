@@ -490,12 +490,13 @@ export const PowerShellTool = buildTool({
       // git/gh/glab/curl as external binaries with identical syntax, so the
       // shell-agnostic regex detection in trackGitOperations works as-is.
       // Called before the backgroundTaskId early-return so backgrounded
-      // commands are counted too (matches BashTool.tsx:912).
+      // commands are counted too (matches BashTool's trackGitOperations call).
       //
       // Pre-flight sentinel guard: the two PS pre-flight paths (pwsh-not-found,
       // exec-spawn-catch) return code: 0 + empty stdout + stderr so call() can
       // surface stderr gracefully instead of throwing ShellError. But
-      // gitOperationTracking.ts:48 treats code 0 as success and would
+      // trackGitOperations (gitOperationTracking.ts) treats code 0 as success
+      // — `const success = exitCode === 0` is its first statement — and would
       // regex-match the command, mis-counting a command that never ran.
       // BashTool is safe — its pre-flight goes through createFailedCommand
       // (code: 1) so tracking early-returns. Skip tracking on this sentinel.
@@ -515,7 +516,7 @@ export const PowerShellTool = buildTool({
       // Runs before the backgroundTaskId early-return: a command may change
       // CWD before being backgrounded (e.g. `Set-Location C:\temp;
       // Start-Sleep 60`), and BashTool has no such early return — its
-      // backgrounded results flow through resetCwdIfOutsideProject at :945.
+      // backgrounded results flow through its own resetCwdIfOutsideProject call.
       let stderrForShellReset = '';
       if (isMainThread) {
         const appState = toolUseContext.getAppState();
@@ -556,8 +557,9 @@ export const PowerShellTool = buildTool({
 
       // getErrorParts() in toolErrors.ts already prepends 'Exit code N'
       // from error.code when building the ShellError message. Do not
-      // duplicate it into stdout here (BashTool's append at :939 is dead
-      // code — it throws before stdoutAccumulator.toString() is read).
+      // duplicate it into stdout here (BashTool's `Exit code ${result.code}`
+      // append is dead code — it throws before stdoutAccumulator.toString()
+      // is read).
 
       let stdout = stripEmptyLines(stdoutAccumulator.toString());
 
@@ -576,7 +578,8 @@ export const PowerShellTool = buildTool({
       // preSpawnError means exec() succeeded but the inner shell failed before
       // the command ran (e.g. CWD deleted). createFailedCommand sets code=1,
       // which interpretCommandResult can mistake for grep-no-match / findstr
-      // string-not-found. Throw it directly. Matches BashTool.tsx:957.
+      // string-not-found. Throw it directly. Matches BashTool's own
+      // `if (result.preSpawnError) throw`.
       if (result.preSpawnError) {
         throw new Error(result.preSpawnError);
       }
@@ -870,7 +873,7 @@ async function* runPowerShellCommand({
 
   // Progress loop: wrap in try/finally so stopPolling is called on every exit
   // path — normal completion, timeout/interrupt backgrounding, and Ctrl+B
-  // (matches BashTool pattern; see PR #18887 review thread at :560)
+  // (matches BashTool pattern; see the upstream PR #18887 review thread)
   try {
     while (true) {
       const now = Date.now();
@@ -906,7 +909,8 @@ async function* runPowerShellCommand({
           // Command completed — cleanup stream listeners here. The finally
           // block's guard (!backgroundShellId && status !== 'backgrounded')
           // correctly skips cleanup for *running* backgrounded tasks, but
-          // in this race the process is done. Matches BashTool.tsx:1399.
+          // in this race the process is done. Matches the shellCommand.cleanup()
+          // in BashTool's identical #handleExit-mirror branch.
           shellCommand.cleanup();
           return fixedResult;
         }

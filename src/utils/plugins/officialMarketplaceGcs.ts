@@ -21,7 +21,7 @@ import { errorMessage, getErrnoCode } from '../errors.js'
 type SafeString = AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
 
 // CDN-fronted domain for the public GCS bucket (same bucket the native
-// binary ships from — nativeInstaller/download.ts:24 uses the raw GCS URL).
+// binary ships from — autoUpdater.ts's `GCS_BUCKET_URL` is the raw GCS URL).
 // `{sha}.zip` is content-addressed so CDN can cache it indefinitely;
 // `latest` has Cache-Control: max-age=300 so CDN staleness is bounded.
 // Backend (anthropic#317037) populates this prefix.
@@ -52,8 +52,9 @@ export async function fetchOfficialMarketplaceFromGcs(
   // during the atomic swap. A corrupted known_marketplaces.json (gh-32793 —
   // Windows path read on WSL, literal tilde, manual edit) could point at the
   // user's project. Refuse any path outside the marketplaces cache dir.
-  // Same guard as refreshMarketplace() at marketplaceManager.ts:~2392 but
-  // inside the function so ALL callers are covered.
+  // Same guard as refreshMarketplace()'s `!isLocalMarketplaceSource(source)`
+  // branch in marketplaceManager.ts, but inside the function so ALL callers
+  // are covered.
   const cacheDir = resolve(marketplacesCacheDir)
   const resolvedLoc = resolve(installLocation)
   if (resolvedLoc !== cacheDir && !resolvedLoc.startsWith(cacheDir + sep)) {
@@ -113,7 +114,8 @@ export async function fetchOfficialMarketplaceFromGcs(
     const files = await unzipFile(zipBuf)
     // fflate doesn't surface external_attr, so parse the central directory
     // ourselves to recover exec bits. Without this, hooks/scripts extract as
-    // 0644 and `sh -c "/path/script.sh"` (hooks.ts:~1002) fails with EACCES
+    // 0644 and `sh -c "/path/script.sh"` — the `shell` spawn in
+    // utils/hooks.ts's execCommandHook — fails with EACCES
     // on Unix. Git-clone preserves +x natively; this keeps GCS at parity.
     const modes = parseZipModes(zipBuf)
 
