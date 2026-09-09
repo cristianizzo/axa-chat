@@ -138,7 +138,8 @@ export async function checkMetricsEnabled(): Promise<MetricsStatus> {
   const cached = getGlobalConfig().metricsStatusCache
   if (cached) {
     if (Date.now() - cached.timestamp > DISK_CACHE_TTL_MS) {
-      // saveGlobalConfig's fallback path (config.ts:731) can throw if both
+      // saveGlobalConfig's non-locked fallback path (utils/config.ts) can throw
+      // if both
       // locked and fallback writes fail — catch here so fire-and-forget
       // doesn't become an unhandled rejection.
       void refreshMetricsStatus().catch(logError)

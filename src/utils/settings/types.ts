@@ -234,7 +234,9 @@ export const DeniedMcpServerEntrySchema = lazySchema(() =>
  * 3. When adding new fields, add a test to BACKWARD_COMPATIBILITY_CONFIGS
  *
  * The settings system handles backward compatibility automatically:
- * - When updating settings, invalid fields are preserved in the file (see settings.ts lines 233-249)
+ * - When updating settings, invalid fields are preserved in the file (see
+ *   filterInvalidPermissionRules, called before SettingsSchema().safeParse in
+ *   settings.ts)
  * - Type coercion via z.coerce (e.g., env vars convert numbers to strings)
  * - .passthrough() preserves unknown fields in permissions object
  * - Invalid settings are simply not used, but remain in the file to be fixed by the user
@@ -519,7 +521,8 @@ export const SettingsSchema = lazySchema(() =>
         .preprocess(
           // Forwards-compat: drop unknown surface names so a future enum
           // value (e.g. 'commands') doesn't fail safeParse and null out the
-          // ENTIRE managed-settings file (settings.ts:101). ["skills",
+          // ENTIRE managed-settings file — settings.ts returns
+          // `{ settings: null, errors }` when safeParse fails. ["skills",
           // "commands"] on an old client → ["skills"] → locks what it knows,
           // ignores what it doesn't. Degrades to less-locked, never to
           // everything-unlocked.

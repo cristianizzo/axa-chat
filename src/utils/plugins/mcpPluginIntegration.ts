@@ -605,7 +605,8 @@ export async function getPluginMcpServers(
   // extractMcpServersFromPlugins above: a partial saved channel config
   // (plugin update added a required field) would make
   // substituteUserConfigVariables throw inside resolvePluginMcpEnvironment,
-  // and this function runs inside Promise.all at config.ts:911 — one
+  // and this function runs inside the `Promise.all` over `pluginResult.enabled`
+  // in services/mcp/config.ts — one
   // uncaught throw crashes all plugin MCP loading.
   const resolvedServers: Record<string, McpServerConfig> = {}
   for (const [name, config] of Object.entries(servers)) {

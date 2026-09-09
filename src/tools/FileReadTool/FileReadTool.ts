@@ -406,7 +406,7 @@ export const FileReadTool = buildTool({
   renderToolUseMessage,
   renderToolUseTag,
   renderToolResultMessage,
-  // UI.tsx:140 — ALL types render summary chrome only: "Read N lines",
+  // UI.tsx's renderToolResultMessage — ALL types render summary chrome only: "Read N lines",
   // "Read image (42KB)". Never the content itself. The model-facing
   // serialization (below) sends content + CYBER_RISK_MITIGATION_REMINDER
   // + line prefixes; UI shows none of it. Nothing to index. Caught by

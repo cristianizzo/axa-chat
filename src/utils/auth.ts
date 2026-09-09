@@ -181,7 +181,7 @@ export function getAuthTokenSource() {
     // org-mismatch message doesn't tell the user to unset a variable that
     // doesn't exist. Call sites fall through correctly — the new source is
     // !== 'none' (cli/handlers/auth.ts → oauth_token) and not in the
-    // isEnvVarToken set (auth.ts:1844 → generic re-login message).
+    // isEnvVarToken set below (→ generic re-login message).
     if (process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR) {
       return {
         source: 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR' as const,

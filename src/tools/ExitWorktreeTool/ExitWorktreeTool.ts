@@ -72,8 +72,8 @@ type ChangeSummary = {
  * Null is returned when:
  * - git status or rev-list exit non-zero (lock file, corrupt index, bad ref)
  * - originalHeadCommit is undefined but git status succeeded — this is the
- *   hook-based-worktree-wrapping-git case (worktree.ts:525-532 doesn't set
- *   originalHeadCommit). We can see the working tree is git, but cannot count
+ *   hook-based-worktree-wrapping-git case (worktree.ts's `hookBased: true`
+ *   branch returns without setting originalHeadCommit). We can see the working tree is git, but cannot count
  *   commits without a baseline, so we cannot prove the branch is clean.
  */
 async function countWorktreeChanges(
@@ -243,7 +243,8 @@ export const ExitWorktreeTool: Tool<InputSchema, Output> = buildTool({
 
     // --worktree startup calls setOriginalCwd(getCwd()) and
     // setProjectRoot(getCwd()) back-to-back right after setCwd(worktreePath)
-    // (setup.ts:235/239), so both hold the same realpath'd value and BashTool
+    // (the setOriginalCwd/setProjectRoot pair in setup.ts), so both hold the
+    // same realpath'd value and BashTool
     // cd never touches either. Mid-session EnterWorktreeTool sets originalCwd
     // but NOT projectRoot. (Can't use getCwd() — BashTool mutates it on every
     // cd. Can't use session.worktreePath — it's join()'d, not realpath'd.)

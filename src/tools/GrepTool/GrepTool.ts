@@ -246,7 +246,7 @@ export const GrepTool = buildTool({
   renderToolResultMessage,
   // SearchResultSummary shows content (mode=content) or filenames.join.
   // numFiles/numLines/numMatches are chrome ("Found 3 files") — fine to
-  // skip (under-count, not phantom). Glob reuses this via UI.tsx:65.
+  // skip (under-count, not phantom). Glob reuses this via SearchResultSummary.
   extractSearchText({ mode, content, filenames }) {
     if (mode === 'content' && content) return content
     return filenames.join('\n')
