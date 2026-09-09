@@ -551,9 +551,12 @@ export function stripSafeWrappers(command: string): string {
     /^time[ \t]+(?:--[ \t]+)?/,
     // SECURITY: keep in sync with the wrapper-strip loop at the top of
     // `export function checkSemantics` (src/utils/bash/ast.ts) AND with
-    // stripWrappersFromArgv. NOTE there are TWO of those: the copy exported
-    // from this file and a near-duplicate in BashTool/pathValidation.ts.
-    // Both strip the same wrappers; both need the change.
+    // stripWrappersFromArgv — specifically the CANONICAL one in
+    // BashTool/pathValidation.ts. This file exports an older, narrower copy
+    // of the same name (timeout / `nice -n N` only, no bare `nice`, `stdbuf`
+    // or `env`) which pathValidation.ts documents as dead code retained only
+    // to keep this module above Bun's feature() DCE complexity threshold.
+    // Do NOT "keep it in sync" — it has no prod consumer.
     // Previously this pattern REQUIRED `-n N`; checkSemantics already handled
     // bare `nice` and legacy `-N`. Asymmetry meant checkSemantics exposed the
     // wrapped command to semantic checks but deny-rule matching and the cd+git
@@ -2053,8 +2056,10 @@ export async function bashToolHasPermission(
       appState = context.getAppState()
       // SECURITY: Compute compoundCommandHasCd from the full command, NOT
       // hardcode false. The pipe-handling path previously passed `false` here,
-      // disabling the cd+redirect check — BashTool/pathValidation.ts's
-      // `if (compoundCommandHasCd && operationType !== 'read')` ask. Appending
+      // disabling BashTool/pathValidation.ts's
+      // `if (compoundCommandHasCd && operationType !== 'read')` guard, which
+      // forces manual approval for any write in a cd-bearing compound
+      // command. Appending
       // `| echo done` to `cd .claude && echo x > settings.json` routed through
       // this path with compoundCommandHasCd=false, letting the redirect write
       // to .claude/settings.json without the cd+redirect block firing.
