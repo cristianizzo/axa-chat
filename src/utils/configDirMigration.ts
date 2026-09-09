@@ -200,8 +200,8 @@ export function migrateAxaConfigDir(): void {
 
     // An explicit override usually names a third location, which is neither
     // side of this migration and leaves nothing to do. But it may also spell
-    // out the default destination, and `CLAUDE_CONFIG_DIR=~/.claude` means
-    // exactly what leaving it unset means — that config home is the one being
+    // out the default destination, and `CLAUDE_CONFIG_DIR="$HOME/.claude"`
+    // means exactly what leaving it unset means — that config home is the one
     // migrated *into*, so returning on the variable's mere presence would
     // strand ~/.axa forever for a user who only made the default explicit.
     // Compare the resolved paths instead. NFC on both sides for the same
