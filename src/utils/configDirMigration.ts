@@ -33,7 +33,7 @@ import {
   type Stats,
 } from 'fs'
 import { homedir } from 'os'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { CONFIG_DIR_NAME, OLD_CONFIG_DIR_NAME } from '../constants/product.js'
 import { logError } from './log.js'
 
@@ -187,9 +187,6 @@ function sameContent(
 }
 
 export function migrateAxaConfigDir(): void {
-  // An explicit override names a location that is neither of these.
-  if (process.env.CLAUDE_CONFIG_DIR) return
-
   // Resolved inside the try so an environment where homedir() throws is
   // reported rather than propagated — this function promises never to throw.
   // The catch reports these bare names if homedir() itself was what failed.
@@ -200,6 +197,41 @@ export function migrateAxaConfigDir(): void {
     const home = homedir()
     source = join(home, OLD_DIR_NAME)
     destination = join(home, NEW_DIR_NAME)
+
+    // An explicit override usually names a third location, which is neither
+    // side of this migration and leaves nothing to do. But it may also spell
+    // out the default destination, and `CLAUDE_CONFIG_DIR="$HOME/.claude"`
+    // means exactly what leaving it unset means — that config home is the one
+    // migrated *into*, so returning on the variable's mere presence would
+    // strand ~/.axa forever for a user who only made the default explicit.
+    // Compare the resolved paths instead. NFC on both sides for the same
+    // reason getClaudeConfigHomeDir normalizes (utils/envUtils.ts): an
+    // accented home directory can be spelled two ways and they are one
+    // directory. An empty value is treated as unset, also matching that
+    // function — `export CLAUDE_CONFIG_DIR=` and `unset` are one intent.
+    // `~` is left unexpanded deliberately: nothing else expands it either, so
+    // a literal `~/.claude` really is a third (relative) location here.
+    //
+    // Case-folded on win32 only. There, `c:\Users\me\.claude` and
+    // `C:\Users\me\.claude` are one directory, and `resolve` keeps whatever
+    // case it was given — so a case-exact compare would read the default,
+    // spelled with a lowercase drive letter, as a third location and strand
+    // ~/.axa exactly as before. Not folded on darwin, deliberately: APFS is
+    // case-insensitive only *by default* and can be formatted otherwise, so
+    // folding there risks the opposite and worse error — migrating into
+    // ~/.claude while the user's config home is really ~/.CLAUDE, i.e. moving
+    // credentials somewhere nothing reads. Not folding merely skips, which is
+    // what this code did before the guard was touched at all.
+    const foldCase = (path: string): string =>
+      process.platform === 'win32' ? path.toLowerCase() : path
+    const override = process.env.CLAUDE_CONFIG_DIR
+    if (
+      override &&
+      foldCase(resolve(override).normalize('NFC')) !==
+        foldCase(resolve(destination).normalize('NFC'))
+    ) {
+      return
+    }
 
     // lstat, not existsSync: everything below assumes the source is a real
     // directory it can readdir. A regular file or a symlink named `.axa` would
