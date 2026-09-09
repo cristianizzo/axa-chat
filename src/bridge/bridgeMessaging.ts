@@ -328,11 +328,10 @@ export function handleServerControlRequest(
     case 'set_permission_mode': {
       // The callback returns a policy verdict so we can send an error
       // control_response without importing isAutoModeGateEnabled /
-      // isBypassPermissionsModeDisabled here (bootstrap-isolation). If no
-      // callback is registered (daemon context, which doesn't wire this —
-      // see daemonBridge.ts), return an error verdict rather than a silent
-      // false-success: the mode is never actually applied in that context,
-      // so success would lie to the client.
+      // isBypassPermissionsModeDisabled here (bootstrap-isolation). A caller
+      // that builds this handler without an `onSetPermissionMode` gets an
+      // error verdict rather than a silent false-success: the mode is never
+      // actually applied in that context, so success would lie to the client.
       const verdict = onSetPermissionMode?.(request.request.mode) ?? {
         ok: false,
         error:

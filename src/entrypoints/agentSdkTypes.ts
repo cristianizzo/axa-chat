@@ -391,8 +391,9 @@ export type ConnectRemoteControlOptions = {
 
 /**
  * Handle returned by connectRemoteControl. Write query() yields in,
- * read inbound prompts out. See src/assistant/daemonBridge.ts for full
- * field documentation.
+ * read inbound prompts out. The daemon-side implementation that documented
+ * these fields is not shipped here — connectRemoteControl below throws
+ * 'not implemented'.
  * @internal
  */
 export type RemoteControlHandle = {

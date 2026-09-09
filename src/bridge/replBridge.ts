@@ -110,8 +110,8 @@ export type BridgeCoreParams = {
    * up in the Agent SDK bundle.
    *
    * REPL wrapper passes `createBridgeSession` from `createSession.ts`.
-   * Daemon wrapper passes `createBridgeSessionLean` from `sessionApi.ts`
-   * (HTTP-only, orgUUID+model supplied by the daemon caller).
+   * A daemon wrapper would pass an HTTP-only creator with orgUUID+model
+   * supplied by the caller; no such wrapper is shipped here.
    *
    * Receives `gitRepoUrl`+`branch` so the REPL wrapper can build the git
    * source/outcome for claude.ai's session card. Daemon ignores them.

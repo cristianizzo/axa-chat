@@ -6,8 +6,8 @@
  * Split out of replBridge.ts because the sessionStorage import
  * (getCurrentSessionTitle) transitively pulls in src/commands.ts → the
  * entire slash command + React component tree (~1300 modules). Keeping
- * initBridgeCore in a file that doesn't touch sessionStorage lets
- * daemonBridge.ts import the core without bloating the Agent SDK bundle.
+ * initBridgeCore in a file that doesn't touch sessionStorage lets a daemon
+ * caller import it from replBridge.ts without bloating the Agent SDK bundle.
  *
  * Called via dynamic import by useReplBridge (auto-start) and print.ts
  * (SDK -p mode via query.enableRemoteControl).
