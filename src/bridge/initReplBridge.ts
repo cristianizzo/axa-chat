@@ -170,7 +170,9 @@ export async function initReplBridge(
     // 2a. Cross-process backoff. If N prior processes already saw this exact
     // dead token (matched by expiresAt), skip silently — no event, no refresh
     // attempt. The count threshold tolerates transient refresh failures (auth
-    // server 5xx, lockfile errors per auth.ts:1437/1444/1485): each process
+    // server 5xx, and the lockfile errors utils/auth.ts logs as
+    // `tengu_oauth_token_refresh_lock_retry_limit_reached` /
+    // `tengu_oauth_token_refresh_lock_error`): each process
     // independently retries until 3 consecutive failures prove the token dead.
     // Mirrors useReplBridge's MAX_CONSECUTIVE_INIT_FAILURES for in-process.
     // The expiresAt key is content-addressed: /login → new token → new expiresAt
@@ -187,7 +189,8 @@ export async function initReplBridge(
       return null
     }
 
-    // 2b. Proactively refresh if expired. Mirrors bridgeMain.ts:2096 — the REPL
+    // 2b. Proactively refresh if expired. Mirrors the pre-`getBridgeSession`
+    // refresh in bridgeMain.ts's `--resume` path — the REPL
     // bridge fires at useEffect mount BEFORE any v1/messages call, making this
     // usually the first OAuth request of the session. Without this, ~9% of
     // registrations hit the server with a >8h-expired token → 401 → withOAuthRetry
@@ -202,7 +205,8 @@ export async function initReplBridge(
     await checkAndRefreshOAuthTokenIfNeeded()
 
     // 2c. Skip if token is still expired post-refresh-attempt. Env-var / FD
-    // tokens (auth.ts:894-917) have expiresAt=null → never trip this. But a
+    // tokens (getClaudeAIOAuthTokens returns them with `expiresAt: null` and
+    // `scopes: ['user:inference']`) never trip this. But a
     // keychain token whose refresh token is dead (password change, org left,
     // token GC'd) has expiresAt<now AND refresh just failed — the client would
     // otherwise loop 401 forever: withOAuthRetry → handleOAuth401Error →
@@ -437,8 +441,9 @@ export async function initReplBridge(
       // UUID collision risk, and the ref persists across enable→disable→
       // re-enable cycles which would cause the new session to receive zero
       // history (all UUIDs already in the set from the prior enable).
-      // v1 handles this by calling previouslyFlushedUUIDs.clear() on fresh
-      // session creation (replBridge.ts:768); v2 skips the param entirely.
+      // v1 handles this with the `previouslyFlushedUUIDs?.clear()` that
+      // follows its reconnection re-createSession in replBridge.ts;
+      // v2 skips the param entirely.
       onInboundMessage,
       onUserMessage,
       onPermissionResponse,
@@ -509,7 +514,8 @@ export async function initReplBridge(
       archiveBridgeSession(sessionId, {
         baseUrl,
         getAccessToken: getBridgeAccessToken,
-        // gracefulShutdown.ts:407 races runCleanupFunctions against 2s.
+        // gracefulShutdown.ts races runCleanupFunctions against a 2s
+        // CleanupTimeoutError.
         // Teardown also does stopWork (parallel) + deregister (sequential),
         // so archive can't have the full budget. 1.5s matches v2's
         // teardown_archive_timeout_ms default.
