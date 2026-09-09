@@ -1979,16 +1979,15 @@ async function run(): Promise<CommanderCommand> {
       // .claude/settings.json PATH/GIT_DIR/GIT_WORK_TREE) so gitExe() and
       // the git spawn below see it. Trust is implicit in -p mode; the
       // docstring on applyConfigEnvironmentVariables in managedEnv.ts says
-      // this applies "potentially
-      // dangerous environment variables such as LD_PRELOAD, PATH" from all
-      // sources. The later call in the isNonInteractiveSession block below
-      // is idempotent (Object.assign, configureGlobalAgents ejects prior
-      // interceptor) and picks up any plugin-contributed env after plugin
-      // init. Project settings are already loaded here:
-      // applySafeConfigEnvironmentVariables in init() called
-      // getSettings_DEPRECATED inside applySafeConfigEnvironmentVariables,
-      // which merges all enabled
-      // sources including projectSettings/localSettings.
+      // this applies "potentially dangerous environment variables such as
+      // LD_PRELOAD, PATH" from all sources. The later call in the
+      // isNonInteractiveSession block below is idempotent (Object.assign,
+      // configureGlobalAgents ejects prior interceptor) and picks up any
+      // plugin-contributed env after plugin init. Project settings are
+      // already loaded here: init() calls
+      // applySafeConfigEnvironmentVariables, whose getSettings_DEPRECATED
+      // call merges all enabled sources including
+      // projectSettings/localSettings.
       applyConfigEnvironmentVariables();
 
       // Spawn git status/log/branch now so the subprocess execution overlaps
@@ -3369,8 +3368,12 @@ async function run(): Promise<CommanderCommand> {
       }
       const getAccessToken = (): string => getClaudeAIOAuthTokens()?.accessToken ?? apiCreds.accessToken;
 
-      // Brief mode activation: setKairosActive(true) satisfies BOTH opt-in
-      // and entitlement for isBriefEnabled() (BriefTool.ts).
+      // Brief mode activation: setKairosActive(true) satisfies BOTH halves of
+      // BriefTool.ts's isBriefEnabled(), which is
+      // `(getKairosActive() || getUserMsgOptIn()) && isBriefEntitled()`.
+      // The opt-in half is direct; the entitlement half works because
+      // isBriefEntitled() itself short-circuits on `getKairosActive() || …`
+      // before consulting CLAUDE_CODE_BRIEF or the tengu_kairos_brief gate.
       setKairosActive(true);
       setUserMsgOptIn(true);
       setIsRemoteMode(true);
