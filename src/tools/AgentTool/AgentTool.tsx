@@ -635,7 +635,10 @@ export const AgentTool = buildTool({
       } : undefined,
       availableTools: isForkPath ? toolUseContext.options.tools : workerTools,
       // Pass parent conversation when the fork-subagent path needs full
-      // context. useExactTools inherits thinkingConfig (runAgent.ts:624).
+      // context. useExactTools inherits thinkingConfig — AgentTool/runAgent.ts
+      // sets `thinkingConfig: useExactTools ?
+      // toolUseContext.options.thinkingConfig` under its "For fork children
+      // (useExactTools), inherit thinking config" note.
       forkContextMessages: isForkPath ? toolUseContext.messages : undefined,
       ...(isForkPath && {
         useExactTools: true
@@ -1248,8 +1251,9 @@ export const AgentTool = buildTool({
                     data: {
                       message: m,
                       type: 'agent_progress',
-                      // prompt only needed on first progress message (UI.tsx:624
-                      // reads progressMessages[0]). Omit here to avoid duplication.
+                      // prompt only needed on first progress message
+                      // (AgentTool/UI.tsx reads `progressMessages[0]?.data`).
+                      // Omit here to avoid duplication.
                       prompt: '',
                       agentId: syncAgentId
                     }

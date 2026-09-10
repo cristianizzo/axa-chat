@@ -87,8 +87,11 @@ async function extractPrefixFromElement(
   const prefix = await buildPrefix(name, cmd.args, spec)
 
   // Post-buildPrefix word integrity: buildPrefix space-joins consumed args
-  // into the prefix string. parser.ts:685 stores .value (quote-stripped) for
-  // single-quoted literals: git 'push origin' → args=['push origin']. If
+  // into the prefix string. powershell/parser.ts stores .value
+  // (quote-stripped) for single-quoted literals — its `isStringLiteral` branch,
+  // documented there as "Use resolved .value for string constants (strips
+  // quotes, resolves backtick escapes …)": git 'push origin' →
+  // args=['push origin']. If
   // that arg is consumed, buildPrefix emits 'git push origin' — silently
   // promoting 1 argv element to 3 prefix words. Rule PowerShell(git push
   // origin:*) then matches `git push origin --force` (3-element argv) — not
