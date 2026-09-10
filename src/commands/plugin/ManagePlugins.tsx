@@ -1059,8 +1059,9 @@ export function ManagePlugins({
             // is the last scope, prompt before deleting it. For multi-scope
             // installs, the op's isLastScope check won't delete regardless of
             // the user's y/n — showing the dialog would mislead ("y" → nothing
-            // happens). The op's check is `isLastScope` in uninstallPlugin,
-            // services/plugins/pluginOperations.ts — `!remainingInstallations ||
+            // happens). The op's check is `isLastScope` in uninstallPluginOp,
+            // services/plugins/pluginOperations.ts (not the similarly named
+            // uninstallPlugin in pluginCliCommands.ts) — `!remainingInstallations ||
             // remainingInstallations.length === 0`. It counts AFTER
             // removePluginInstallation, so its threshold is 0 where this
             // pre-removal check uses <= 1; the two agree on the same set.
