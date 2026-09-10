@@ -353,10 +353,10 @@ const CMDLET_PATH_CONFIG: Record<string, CmdletPathConfig> = {
     // FileSystem provider throws NotSupportedException for Set-Item content,
     // so the practical write surface is registry/env/function/alias providers.
     // Provider-qualified paths (HKLM:\\, Env:\\) are independently caught at
-    // step 3.5 in powershellPermissions.ts, but classifying set-item as write
-    // here is defense-in-depth — PowerShellTool/powershellSecurity.ts already
-    // lists it in its ENV_WRITE_CMDLETS set; this makes pathValidation
-    // consistent.
+    // step 3.5 in tools/PowerShellTool/powershellPermissions.ts, but
+    // classifying set-item as write here is defense-in-depth —
+    // tools/PowerShellTool/powershellSecurity.ts already lists it in its
+    // ENV_WRITE_CMDLETS set; this makes pathValidation consistent.
     pathParams: ['-path', '-literalpath', '-pspath', '-lp'],
     knownSwitches: [
       '-force',
@@ -1924,9 +1924,9 @@ function checkPathConstraintsForStatement(
       }
 
       // Red-team P11/P14: step 5's fail-closed gate in
-      // PowerShellTool/powershellPermissions.ts already catches this — that
-      // gate takes the allowlist shortcut only when every pipeline element is
-      // a CommandAst, so a CommandExpressionAst source fails it. (Its comment
+      // tools/PowerShellTool/powershellPermissions.ts already catches this —
+      // that gate takes the allowlist shortcut only when every pipeline element
+      // is a CommandAst, so a CommandExpressionAst source fails it. (Its comment
       // notes it "subsumes the previous hasExpressionSource check", so the
       // mechanism is now the broader AST-type gate rather than a named
       // expression-source flag.) This is belt-and-suspenders so the nested
