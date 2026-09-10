@@ -28,8 +28,8 @@ export function getUserAgent(): string {
   // observability — proxies strip HTTP headers; QoS routing uses cc_workload
   // in the billing-header attribution block instead (see constants/system.ts).
   // getAnthropicClient (services/api/client.ts) calls this per-request inside
-  // withRetry,
-  // so the read picks up the same setWorkload() value as getAttributionHeader.
+  // withRetry, so the read picks up the same setWorkload() value as
+  // getAttributionHeader.
   const workload = getWorkload()
   const workloadSuffix = workload ? `, workload/${workload}` : ''
   return `claude-cli/${MACRO.VERSION} (${process.env.USER_TYPE}, ${process.env.CLAUDE_CODE_ENTRYPOINT ?? 'cli'}${agentSdkVersion}${clientApp}${workloadSuffix})`
