@@ -82,8 +82,9 @@ export function getRemoteManagedSettingsSyncFromCache(): SettingsJson | null {
     // When called from loadSettingsFromDisk() in utils/settings/settings.ts,
     // the merged cache is still null (its caller runs
     // setSessionSettingsCache only after loadSettingsFromDisk returns) —
-    // no-op. The async-fetch arm (index.ts
-    // setSessionCache + notifyChange) already handles its own reset.
+    // no-op. The async-fetch arm — the setSessionCache and
+    // settingsChangeDetector.notifyChange('policySettings') calls in this
+    // directory's own index.ts — already handles its own reset.
     //
     // gh-23085: isBridgeEnabled() at main.tsx Commander-definition time
     // (before preAction → init() → isRemoteManagedSettingsEligible()) reached
