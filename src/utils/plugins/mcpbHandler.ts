@@ -173,7 +173,8 @@ export function loadMcpServerUserConfig(
 
 /**
  * Save user configuration for an MCP server, splitting by `schema[key].sensitive`.
- * Mirrors savePluginOptions (pluginOptionsStorage.ts:90) for top-level options:
+ * Mirrors savePluginOptions in utils/plugins/pluginOptionsStorage.ts for
+ * top-level options:
  *   - `sensitive: true` → secureStorage (keychain on macOS, .credentials.json 0600 elsewhere)
  *   - everything else   → settings.json pluginConfigs[pluginId].mcpServers[serverName]
  *
@@ -284,8 +285,9 @@ export function saveMcpServerUserConfig(
     // updateSettingsForSource does mergeWith(diskSettings, ourSettings, ...)
     // which PRESERVES destination keys absent from source — so simply omitting
     // sensitive keys doesn't scrub them, the disk copy merges back in. Instead:
-    // set each sensitive key to explicit `undefined` — mergeWith (with the
-    // customizer at settings.ts:349) treats explicit undefined as a delete.
+    // set each sensitive key to explicit `undefined` — mergeWith, with the
+    // inline customizer updateSettingsForSource builds in
+    // utils/settings/settings.ts, treats explicit undefined as a delete.
     const settings = getSettings_DEPRECATED()
     const existingInSettings =
       settings.pluginConfigs?.[pluginId]?.mcpServers?.[serverName] ?? {}
@@ -309,7 +311,7 @@ export function saveMcpServerUserConfig(
       // include undefined, but updateSettingsForSource's mergeWith customizer
       // needs explicit undefined to delete — cast is deliberate internal
       // plumbing (same rationale as deletePluginOptions in
-      // pluginOptionsStorage.ts:184, see CLAUDE.md's 10% case).
+      // utils/plugins/pluginOptionsStorage.ts, see CLAUDE.md's 10% case).
       const scrubbed = Object.fromEntries(
         keysToScrubFromSettings.map(k => [k, undefined]),
       ) as Record<string, undefined>

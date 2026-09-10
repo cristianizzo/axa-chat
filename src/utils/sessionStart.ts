@@ -41,9 +41,12 @@ export async function processSessionStartHooks(
     forceSyncExecution,
   }: SessionStartHooksOptions = {},
 ): Promise<HookResultMessage[]> {
-  // --bare skips all hooks. executeHooks already early-returns under --bare
-  // (hooks.ts:1861), but this skips the loadPluginHooks() await below too —
-  // no point loading plugin hooks that'll never run.
+  // --bare skips all hooks. executeHooks in utils/hooks.ts already
+  // early-returns on `isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)`, but that
+  // is only half of isBareMode() — it does not check the
+  // `process.argv.includes('--bare')` arm — and it would not skip the
+  // loadPluginHooks() await below either. No point loading plugin hooks
+  // that'll never run.
   if (isBareMode()) {
     return []
   }

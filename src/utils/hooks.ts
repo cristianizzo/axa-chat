@@ -739,7 +739,10 @@ function processHookJSONOutput({
           // JSON-output hooks inject context via additionalContext →
           // hook_additional_context, not this field. Empty content suppresses
           // the trivial "X hook success: Success" system-reminder that
-          // otherwise pollutes every turn (messages.ts:3577 skips on '').
+          // otherwise pollutes every turn — utils/messages.ts's
+          // `case 'hook_success'` bails on `if (attachment.content === '')`
+          // before building the reminder (it also only builds one at all for
+          // SessionStart and UserPromptSubmit).
           content: '',
           stdout,
           stderr,
@@ -911,9 +914,10 @@ async function execCommandHook(
   // run the user's own code, same trust boundary as reading keychain directly.
   if (pluginOpts) {
     for (const [key, value] of Object.entries(pluginOpts)) {
-      // Sanitize non-identifier chars (bash can't ref $FOO-BAR). The schema
-      // at schemas.ts:611 now constrains keys to /^[A-Za-z_]\w*$/ so this is
-      // belt-and-suspenders, but cheap insurance if someone bypasses the schema.
+      // Sanitize non-identifier chars (bash can't ref $FOO-BAR). The schema in
+      // utils/plugins/schemas.ts now constrains option keys to
+      // /^[A-Za-z_]\w*$/ so this is belt-and-suspenders, but cheap insurance
+      // if someone bypasses the schema.
       const envKey = key.replace(/[^A-Za-z0-9_]/g, '_').toUpperCase()
       envVars[`CLAUDE_PLUGIN_OPTION_${envKey}`] = String(value)
     }
@@ -1658,7 +1662,8 @@ function getHooksConfig(
   // Skip session hooks entirely when allowManagedHooksOnly is set —
   // this prevents frontmatter hooks from agents/skills from bypassing the policy.
   // strictPluginOnlyCustomization does NOT block here — it gates at the
-  // REGISTRATION sites (runAgent.ts:526 for agent frontmatter hooks) where
+  // REGISTRATION sites, for agent frontmatter hooks the `hooksAllowedForThisAgent`
+  // guard in tools/AgentTool/runAgent.ts, where
   // agentDefinition.source is known. A blanket block here would also kill
   // plugin-provided agents' frontmatter hooks, which is too broad.
   // Also skip if appState not provided (for backwards compatibility)

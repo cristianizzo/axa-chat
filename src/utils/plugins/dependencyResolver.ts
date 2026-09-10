@@ -267,8 +267,9 @@ export function findReverseDependents(
  * Used by install-time resolution to skip already-enabled deps and avoid
  * surprise settings writes.
  *
- * Matches `true` (plain enable) AND array values (version constraints per
- * settings/types.ts:455-463 — a plugin at `"foo@bar": ["^1.0.0"]` IS enabled).
+ * Matches `true` (plain enable) AND array values (version constraints per the
+ * `enabledPlugins` schema in utils/settings/types.ts — a plugin at
+ * `"foo@bar": ["^1.0.0"]` IS enabled).
  * Without the array check, a version-pinned dep would be re-added to the
  * closure and the settings write would clobber the constraint with `true`.
  */
