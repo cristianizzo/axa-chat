@@ -448,9 +448,13 @@ export function extractHeredocs(
     //   EOF
     // bash joins to `cat <<'EOF' && rm -rf /` (rm is part of the command line),
     // then heredoc body = `content`. Our extractor runs BEFORE continuation
-    // joining (commands.ts:82), so it would put `rm -rf /` in the heredoc body,
-    // hiding it from all validators. Bail if same-line content ends with an
-    // odd number of backslashes.
+    // joining — the "Join continuation lines" pass inside
+    // splitCommandWithOperators in utils/bash/commands.ts. The other half of
+    // this contract lives in the same file's extractOutputRedirections, whose
+    // "SECURITY: Extract heredocs BEFORE line-continuation joining AND
+    // parsing" note states the same ordering requirement. So it would put
+    // `rm -rf /` in the heredoc body, hiding it from all validators. Bail if
+    // same-line content ends with an odd number of backslashes.
     const sameLineContent = command.slice(
       operatorEndIndex,
       operatorEndIndex + firstNewlineOffset,
