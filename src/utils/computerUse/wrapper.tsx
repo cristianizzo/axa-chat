@@ -288,7 +288,9 @@ export function getComputerUseMCPToolOverrides(toolName: string): ComputerUseMCP
 
 /**
  * Render the approval dialog mid-call via `setToolJSX` + `Promise`, wait for
- * the user. Mirrors `spawnMultiAgent.ts:419-436` (the `It2SetupPrompt` pattern).
+ * the user. Mirrors the `It2SetupPrompt` pattern in `handleSpawnSplitPane`
+ * (tools/shared/spawnMultiAgent.ts) — the `needsIt2Setup` branch that awaits a
+ * `new Promise` resolved by the prompt's `onDone`, then `setToolJSX(null)`.
  *
  * The merge-into-AppState that used to live here (dedupe + truthy-only flags)
  * is now in the package's `bindSessionContext` → `onAllowedAppsChanged`.

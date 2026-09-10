@@ -105,9 +105,12 @@ export async function markGroveNoticeViewed(): Promise<void> {
         },
       )
     })
-    // This mutates grove_notice_viewed_at server-side — Grove.tsx:87 reads it
-    // to decide whether to show the dialog. Without invalidation a same-session
-    // remount would read stale viewed_at:null and re-show the dialog.
+    // This mutates grove_notice_viewed_at server-side — the
+    // `checkGroveSettings` effect in `GroveDialog`
+    // (components/grove/Grove.tsx) reads it back via getGroveSettings() and
+    // feeds calculateShouldShowGrove() to decide whether to show the dialog.
+    // Without invalidation a same-session remount would read stale
+    // viewed_at:null and re-show the dialog.
     getGroveSettings.cache.clear?.()
   } catch (err) {
     logError(err)

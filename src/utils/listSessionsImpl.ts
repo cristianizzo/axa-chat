@@ -128,7 +128,8 @@ export function parseSessionInfoFromLite(
     extractJsonStringField(head, 'cwd') || projectPath || undefined
   // Type-scope tag extraction to the {"type":"tag"} JSONL line to avoid
   // collision with tool_use inputs containing a `tag` parameter (git tag,
-  // Docker tags, cloud resource tags). Mirrors sessionStorage.ts:608.
+  // Docker tags, cloud resource tags). Mirrors the `tagLine` findLast in
+  // `reAppendSessionMetadata` in utils/sessionStorage.ts.
   const tagLine = tail.split('\n').findLast(l => l.startsWith('{"type":"tag"'))
   const tag = tagLine
     ? extractLastJsonStringField(tagLine, 'tag') || undefined

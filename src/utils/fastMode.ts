@@ -100,7 +100,10 @@ export function getFastModeUnavailableReason(): string | null {
 
   // Not available in the SDK unless explicitly opted in via --settings.
   // Assistant daemon mode is exempt — it's first-party orchestration, and
-  // kairosActive is set before this check runs (main.tsx:~1626 vs ~3249).
+  // kairosActive is set before this check runs: main.tsx's kairosGate branch
+  // calls `setKairosActive(true)` during option handling in `run()`, well
+  // before the headless `getInitialFastModeSetting(effectiveModel ?? null)`
+  // in `headlessInitialState` reaches this function via isFastModeAvailable().
   if (
     getIsNonInteractiveSession() &&
     preferThirdPartyAuthentication() &&

@@ -134,7 +134,9 @@ export function openFileInExternalEditor(
     if (process.platform === 'win32') {
       // On Windows use shell: true so cmd.exe builtins like `start` resolve.
       // shell: true joins args unquoted, so assemble the command string with
-      // explicit quoting ourselves (matching promptEditor.ts:74). spawnSync
+      // explicit quoting ourselves (matching the
+      // `` `${editorCommand} "${filePath}"` `` command string in
+      // `editFileInEditor` in utils/promptEditor.ts). spawnSync
       // returns errors in .error rather than throwing.
       const lineArg = useGotoLine ? `+${line} ` : ''
       result = spawnSync(`${editor} ${lineArg}"${filePath}"`, {
