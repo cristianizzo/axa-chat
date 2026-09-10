@@ -1937,9 +1937,11 @@ async function run(): Promise<CommanderCommand> {
     // Parallelize setup() with commands+agents loading. setup()'s ~28ms is
     // mostly startUdsMessaging (socket bind, ~20ms) — not disk-bound, so it
     // doesn't contend with getCommands' file reads. Gated on !worktreeEnabled
-    // since --worktree makes setup() process.chdir() (src/setup.ts's
-    // process.chdir(mainRepoRoot)), and
-    // commands/agents need the post-chdir cwd.
+    // since --worktree can make setup() process.chdir() — src/setup.ts calls
+    // process.chdir(mainRepoRoot), but only under
+    // `if (mainRepoRoot !== (findGitRoot(getCwd()) ?? getCwd()))`, i.e. only
+    // when we are already inside a worktree — and commands/agents need the
+    // post-chdir cwd. Gated on the possibility, not the certainty.
     const preSetupCwd = getCwd();
     // Register bundled skills/plugins before kicking getCommands() — they're
     // pure in-memory array pushes (<1ms, zero I/O) that getBundledSkills()
@@ -1977,7 +1979,11 @@ async function run(): Promise<CommanderCommand> {
     if (getIsNonInteractiveSession()) {
       // Apply full merged settings env now (including project-scoped
       // .claude/settings.json PATH/GIT_DIR/GIT_WORK_TREE) so gitExe() and
-      // the git spawn below see it. Trust is implicit in -p mode; the
+      // the git spawn below see it. Trust is implicit in every
+      // non-interactive session — the guard above is
+      // getIsNonInteractiveSession(), which main() sets from
+      // `hasPrintFlag || hasInitOnlyFlag || hasSdkUrl || !process.stdout.isTTY`,
+      // so this is broader than -p alone. The
       // docstring on applyConfigEnvironmentVariables in managedEnv.ts says
       // this applies "potentially dangerous environment variables such as
       // LD_PRELOAD, PATH" from all sources. The later call in the
