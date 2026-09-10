@@ -130,11 +130,13 @@ export function useManagePlugins({
       // LSP: the primary fix for issue #15521 is in refresh.ts (via
       // performBackgroundPluginInstallations → refreshActivePlugins, which
       // clears caches first). This reinit is defensive — it reads the same
-      // memoized loadAllPlugins() result as the original init unless a cache
-      // invalidation happened between the original init — the
-      // loadAllPluginsCacheOnly() call inside logSessionTelemetry() in
-      // main.tsx — and REPL mount (e.g.
-      // seed marketplace registration or policySettings hot-reload).
+      // memoized loadAllPlugins() result as the `await loadAllPlugins()` at
+      // the top of this same callback, unless a cache invalidation landed
+      // between them (e.g. seed marketplace registration or policySettings
+      // hot-reload). Note this is loadAllPlugins()'s memo specifically —
+      // main.tsx's startup loadAllPluginsCacheOnly() keeps a deliberately
+      // separate cache (see its doc comment in pluginLoader.ts) and so never
+      // satisfies or invalidates this one.
       const lspServerCounts = await Promise.all(
         enabled.map(async p => {
           if (p.lspServers) return Object.keys(p.lspServers).length
