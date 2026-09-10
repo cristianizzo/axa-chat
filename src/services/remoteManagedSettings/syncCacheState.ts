@@ -87,9 +87,9 @@ export function getRemoteManagedSettingsSyncFromCache(): SettingsJson | null {
     //
     // gh-23085: isBridgeEnabled() at main.tsx Commander-definition time
     // (before preAction → init() → isRemoteManagedSettingsEligible()) reached
-    // getSettings_DEPRECATED() in utils/auth.ts's external-API-key check. The try/catch in bridgeEnabled
-    // swallowed the later getGlobalConfig() throw, but the merged settings
-    // cache was already poisoned. See managedSettingsHeadless.int.test.ts.
+    // getSettings_DEPRECATED() in utils/auth.ts's external-API-key check. The
+    // try/catch in bridgeEnabled swallowed the later getGlobalConfig() throw,
+    // but the merged settings cache was already poisoned.
     resetSettingsCache()
     return cachedSettings
   }
