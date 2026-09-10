@@ -101,9 +101,14 @@ export function logPluginFetch(
  *
  * Handles both axios Error objects (Node.js error codes like ENOTFOUND) and
  * git stderr strings (human phrases like "Could not resolve host"). DNS
- * checked BEFORE timeout because gitClone's error enhancement at
- * marketplaceManager.ts:~950 rewrites DNS failures to include the word
- * "timeout" — ordering the other way would misclassify git DNS as timeout.
+ * checked BEFORE timeout because gitClone's error enhancement rewrites DNS
+ * failures to include the word "timeout": the arm in gitClone in
+ * utils/plugins/marketplaceManager.ts (NOT the same-named gitClone in
+ * pluginLoader.ts) whose condition is `result.stderr.includes('timed out') ||
+ * result.stderr.includes('timeout') || result.stderr.includes('Could not
+ * resolve host')` replaces the stderr with "Network error or timeout while
+ * cloning repository." Ordering the other way would misclassify git DNS as
+ * timeout.
  */
 export function classifyFetchError(error: unknown): string {
   const msg = String((error as { message?: unknown })?.message ?? error)

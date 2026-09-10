@@ -221,7 +221,9 @@ export function resetHotReloadState(): void {
  *
  * Hashes FOUR fields — not just enabledPlugins — because the memoized
  * loadAllPluginsCacheOnly() also reads strictKnownMarketplaces, blockedMarketplaces
- * (pluginLoader.ts:1933 via getBlockedMarketplaces), and
+ * (the getStrictKnownMarketplaces() / getBlockedMarketplaces() pair that
+ * loadPluginsFromMarketplaces in utils/plugins/pluginLoader.ts reads under its
+ * "Fail-closed guard for enterprise policy" comment), and
  * extraKnownMarketplaces. If remote managed settings set only one of
  * these (no enabledPlugins), a snapshot keyed only on enabledPlugins
  * would never diff, the listener would skip, and the memoized result

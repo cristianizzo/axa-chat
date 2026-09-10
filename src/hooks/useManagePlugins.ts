@@ -131,7 +131,9 @@ export function useManagePlugins({
       // performBackgroundPluginInstallations → refreshActivePlugins, which
       // clears caches first). This reinit is defensive — it reads the same
       // memoized loadAllPlugins() result as the original init unless a cache
-      // invalidation happened between main.tsx:3203 and REPL mount (e.g.
+      // invalidation happened between the original init — the
+      // loadAllPluginsCacheOnly() call inside logSessionTelemetry() in
+      // main.tsx — and REPL mount (e.g.
       // seed marketplace registration or policySettings hot-reload).
       const lspServerCounts = await Promise.all(
         enabled.map(async p => {

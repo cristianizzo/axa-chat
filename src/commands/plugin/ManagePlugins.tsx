@@ -1059,7 +1059,11 @@ export function ManagePlugins({
             // is the last scope, prompt before deleting it. For multi-scope
             // installs, the op's isLastScope check won't delete regardless of
             // the user's y/n — showing the dialog would mislead ("y" → nothing
-            // happens). Length check mirrors pluginOperations.ts:513.
+            // happens). The op's check is `isLastScope` in uninstallPlugin,
+            // services/plugins/pluginOperations.ts — `!remainingInstallations ||
+            // remainingInstallations.length === 0`. It counts AFTER
+            // removePluginInstallation, so its threshold is 0 where this
+            // pre-removal check uses <= 1; the two agree on the same set.
             const installs = loadInstalledPluginsV2().plugins[pluginId_3];
             const isLastScope = !installs || installs.length <= 1;
             const dataSize = isLastScope ? await getPluginDataDirSize(pluginId_3) : null;
@@ -1405,8 +1409,10 @@ export function ManagePlugins({
     if (selectedPlugin.plugin.manifest.repository) {
       menuItems.push({
         // Generic label — manifest.repository can be GitLab, Bitbucket,
-        // Azure DevOps, etc. (gh-31598). pluginDetailsHelpers.tsx:74 keeps
-        // 'View on GitHub' because that path has an explicit isGitHub check.
+        // Azure DevOps, etc. (gh-31598). buildPluginDetailsMenuOptions in
+        // commands/plugin/pluginDetailsHelpers.tsx keeps 'View on GitHub'
+        // because it pushes that entry under `if (githubRepo)` — a
+        // GitHub-specific value, not the raw manifest.repository used here.
         label: 'View repository',
         action: () => void openBrowser(selectedPlugin.plugin.manifest.repository!)
       });
