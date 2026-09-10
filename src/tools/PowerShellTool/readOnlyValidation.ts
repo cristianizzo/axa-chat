@@ -477,8 +477,10 @@ export const CMDLET_ALLOWLIST: Record<string, CommandConfig> = Object.assign(
     // =========================================================================
     // PowerShell Cmdlets - Output & misc (no side effects)
     // =========================================================================
-    // Bash parity: `echo` is auto-allowed via custom regex (BashTool
-    // readOnlyValidation.ts:~1517). That regex WHITELISTS safe chars per arg.
+    // Bash parity: `echo` is auto-allowed via a custom regex — the entry
+    // commented "Echo that doesn't execute commands or use variables" in
+    // READONLY_COMMAND_REGEXES, tools/BashTool/readOnlyValidation.ts.
+    // That regex WHITELISTS safe chars per arg.
     // See argLeaksValue above for the three attack shapes it blocks.
     'write-output': {
       safeFlags: ['-InputObject', '-NoEnumerate'],
@@ -497,8 +499,8 @@ export const CMDLET_ALLOWLIST: Record<string, CommandConfig> = Object.assign(
       ],
       additionalCommandIsDangerousCallback: argLeaksValue,
     },
-    // Bash parity: `sleep` is in READONLY_COMMANDS (BashTool
-    // readOnlyValidation.ts:~1146). Zero side effects at runtime — but
+    // Bash parity: `sleep` is in the READONLY_COMMANDS array in
+    // tools/BashTool/readOnlyValidation.ts. Zero side effects at runtime — but
     // `Start-Sleep $env:SECRET` leaks via type-coerce error. Same guard.
     'start-sleep': {
       safeFlags: ['-Seconds', '-Milliseconds', '-Duration'],
@@ -1598,8 +1600,10 @@ function isGitSafe(args: string[]): boolean {
   //   → validator sees positional '$VAR' → validateFlags passes
   //   → PowerShell runs `git diff --output=/tmp/evil` → file write
   // This generalizes the ls-remote inline `$` guard below to all git subcommands.
-  // Bash equivalent: BashTool blanket
-  // `$` rejection at readOnlyValidation.ts:~1352. isGhSafe has the same guard.
+  // Bash equivalent: the blanket `$` rejection inside
+  // isCommandSafeViaFlagParsing in tools/BashTool/readOnlyValidation.ts, whose
+  // loop over the post-prefix tokens returns false on `token.includes('$')`.
+  // isGhSafe has the same guard.
   for (const arg of args) {
     if (arg.includes('$')) {
       return false
@@ -1672,8 +1676,11 @@ function isGitSafe(args: string[]): boolean {
 
   const flagArgs = args.slice(idx + subcommandTokens)
 
-  // git ls-remote URL rejection — ported from BashTool's inline guard
-  // (src/tools/BashTool/readOnlyValidation.ts:~962). ls-remote with a URL
+  // git ls-remote URL rejection — ported from BashTool's inline guard, the
+  // `tokens[0] === 'git' && tokens[1] === 'ls-remote'` branch in
+  // tools/BashTool/readOnlyValidation.ts under its "Special handling for git
+  // ls-remote to reject URLs that could lead to data exfiltration" note.
+  // ls-remote with a URL
   // is a data-exfiltration vector (encode secrets in hostname → DNS/HTTP).
   // Reject URL-like positionals: `://` (http/git protocols), `@` + `:` (SSH
   // git@host:path), and `$` (variable refs — $env:URL reaches here as the
@@ -1745,7 +1752,8 @@ function isGhSafe(args: string[]): boolean {
   //   gh search repos $env:SECRET_API_KEY
   //   → PowerShell expands at runtime → secret sent to GitHub API.
   // git ls-remote has an equivalent inline guard; this generalizes it for gh.
-  // Bash equivalent: BashTool blanket `$` rejection at readOnlyValidation.ts:~1352.
+  // Bash equivalent: the blanket `$` rejection inside
+  // isCommandSafeViaFlagParsing in tools/BashTool/readOnlyValidation.ts.
   for (const arg of flagArgs) {
     if (arg.includes('$')) {
       return false

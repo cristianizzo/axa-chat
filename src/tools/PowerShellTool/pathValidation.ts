@@ -353,9 +353,10 @@ const CMDLET_PATH_CONFIG: Record<string, CmdletPathConfig> = {
     // FileSystem provider throws NotSupportedException for Set-Item content,
     // so the practical write surface is registry/env/function/alias providers.
     // Provider-qualified paths (HKLM:\\, Env:\\) are independently caught at
-    // step 3.5 in powershellPermissions.ts, but classifying set-item as write
-    // here is defense-in-depth — powershellSecurity.ts:379 already lists it
-    // in ENV_WRITE_CMDLETS; this makes pathValidation consistent.
+    // step 3.5 in tools/PowerShellTool/powershellPermissions.ts, but
+    // classifying set-item as write here is defense-in-depth —
+    // tools/PowerShellTool/powershellSecurity.ts already lists it in its
+    // ENV_WRITE_CMDLETS set; this makes pathValidation consistent.
     pathParams: ['-path', '-literalpath', '-pspath', '-lp'],
     knownSwitches: [
       '-force',
@@ -1518,7 +1519,8 @@ function extractPathsFromCommand(cmd: ParsedCommandElement): {
  *   statement cannot be trusted — PowerShell executes statements sequentially
  *   and a cd in statement N changes the cwd for statement N+1, but this
  *   validator resolves all paths against the stale Node process cwd.
- *   BashTool parity (BashTool/pathValidation.ts:630-655).
+ *   BashTool parity — its `compoundCommandHasCd && operationType !== 'read'`
+ *   guard in tools/BashTool/pathValidation.ts.
  *
  * @returns
  * - 'ask' if any path command tries to access outside allowed directories
@@ -1575,7 +1577,8 @@ function checkPathConstraintsForStatement(
   let firstAsk: PermissionResult | undefined
 
   // SECURITY: BashTool parity — block path operations in compound commands
-  // containing a cwd-changing cmdlet (BashTool/pathValidation.ts:630-655).
+  // containing a cwd-changing cmdlet — the `compoundCommandHasCd &&
+  // operationType !== 'read'` guard in tools/BashTool/pathValidation.ts.
   //
   // When the compound contains Set-Location/Push-Location/Pop-Location/
   // New-PSDrive, relative paths in later statements resolve against the
@@ -1920,10 +1923,14 @@ function checkPathConstraintsForStatement(
         }
       }
 
-      // Red-team P11/P14: step 5 at powershellPermissions.ts:970 already
-      // catches this via the same synthetic-CommandExpressionAst mechanism —
-      // this is belt-and-suspenders so the nested loop doesn't rely on that
-      // accident. Placed AFTER the path loop so specific asks (blockedPath,
+      // Red-team P11/P14: step 5's fail-closed gate in
+      // tools/PowerShellTool/powershellPermissions.ts already catches this —
+      // that gate takes the allowlist shortcut only when every pipeline element
+      // is a CommandAst, so a CommandExpressionAst source fails it. (Its comment
+      // notes it "subsumes the previous hasExpressionSource check", so the
+      // mechanism is now the broader AST-type gate rather than a named
+      // expression-source flag.) This is belt-and-suspenders so the nested
+      // loop doesn't rely on that accident. Placed AFTER the path loop so specific asks (blockedPath,
       // suggestions) win via ??=.
       if (hasExpressionPipelineSource) {
         firstAsk ??= {
