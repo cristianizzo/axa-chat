@@ -456,7 +456,7 @@ function TranscriptSearchBar({
   // text rendered here IS on screen — /foo matches its own 'foo' in
   // the bar. With no content matches that's the ONLY visible match →
   // gets CURRENT → underlined. noSelect makes the `noSelect[idx] === 1`
-  // skip in `applySearchHighlight` (ink/searchHighlight.ts) drop these
+  // skip in `applySearchHighlight` (ink/searchHighlight.ts) drops these
   // cells (same exclusion as gutters). You can't text-
   // select the bar either; it's transient chrome, fine.
   noSelect>

@@ -731,7 +731,8 @@ export async function getEventMetadata(
     }),
     // Assistant mode tag — lives outside memoized buildEnvContext() because
     // `setKairosActive(true)` runs late in main.tsx startup (the kairosGate
-    // branch in `run()`, and again on the brief/teleport path), after the
+    // branch in `run()`, and again in the `axa assistant [sessionId]` branch
+    // that attaches a REPL as a viewer to a remote assistant session), after the
     // first event may have already fired and memoized the env. Read fresh
     // per-event instead.
     ...(feature('KAIROS') && getKairosActive()
