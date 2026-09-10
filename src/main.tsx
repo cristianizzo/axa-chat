@@ -918,7 +918,8 @@ async function run(): Promise<CommanderCommand> {
     // read (applySafeConfigEnvironmentVariables → ... ), so this has to come
     // first in the hook, not just before runMigrations() later on.
     migrateAxaConfigDir();
-    // Await async subprocess loads started at module evaluation (lines 12-20).
+    // Await async subprocess loads started at module evaluation (the
+    // top-of-file startMdmRawRead() / startKeychainPrefetch() side-effects).
     // Nearly free — subprocesses complete during the ~135ms of imports above.
     // Must resolve before init() which triggers the first settings read
     // (applySafeConfigEnvironmentVariables → getSettingsForSource('policySettings')
@@ -1071,7 +1072,8 @@ async function run(): Promise<CommanderCommand> {
     // Spawned teammates share the leader's cwd + settings.json, so
     // isAssistantMode() is true for them too. --agent-id being set
     // means we ARE a spawned teammate (extractTeammateOptions runs
-    // ~170 lines later so check the raw commander option) — don't
+    // later in this same action handler, so check the raw commander
+    // option) — don't
     // re-init the team or override teammateMode/proactive/brief.
     !(options as {
       agentId?: unknown;
@@ -1656,7 +1658,8 @@ async function run(): Promise<CommanderCommand> {
     // Channel server allowlist from --channels flag — servers whose
     // inbound push notifications should register this session. The option
     // is added inside a feature() block so TS doesn't know about it
-    // on the options type — same pattern as --assistant at main.tsx:1824.
+    // on the options type — same pattern as the hideHelp()'d --assistant
+    // option this file registers on `program`.
     // devChannels is deferred: showSetupScreens shows a confirmation dialog
     // and only appends to allowedChannels on accept.
     let devChannels: ChannelEntry[] | undefined;
@@ -1934,8 +1937,11 @@ async function run(): Promise<CommanderCommand> {
     // Parallelize setup() with commands+agents loading. setup()'s ~28ms is
     // mostly startUdsMessaging (socket bind, ~20ms) — not disk-bound, so it
     // doesn't contend with getCommands' file reads. Gated on !worktreeEnabled
-    // since --worktree makes setup() process.chdir() (setup.ts:203), and
-    // commands/agents need the post-chdir cwd.
+    // since --worktree can make setup() process.chdir() — src/setup.ts calls
+    // process.chdir(mainRepoRoot), but only under
+    // `if (mainRepoRoot !== (findGitRoot(getCwd()) ?? getCwd()))`, i.e. only
+    // when we are already inside a worktree — and commands/agents need the
+    // post-chdir cwd. Gated on the possibility, not the certainty.
     const preSetupCwd = getCwd();
     // Register bundled skills/plugins before kicking getCommands() — they're
     // pure in-memory array pushes (<1ms, zero I/O) that getBundledSkills()
@@ -1973,21 +1979,27 @@ async function run(): Promise<CommanderCommand> {
     if (getIsNonInteractiveSession()) {
       // Apply full merged settings env now (including project-scoped
       // .claude/settings.json PATH/GIT_DIR/GIT_WORK_TREE) so gitExe() and
-      // the git spawn below see it. Trust is implicit in -p mode; the
-      // docstring at managedEnv.ts:96-97 says this applies "potentially
-      // dangerous environment variables such as LD_PRELOAD, PATH" from all
-      // sources. The later call in the isNonInteractiveSession block below
-      // is idempotent (Object.assign, configureGlobalAgents ejects prior
-      // interceptor) and picks up any plugin-contributed env after plugin
-      // init. Project settings are already loaded here:
-      // applySafeConfigEnvironmentVariables in init() called
-      // getSettings_DEPRECATED at managedEnv.ts:86 which merges all enabled
-      // sources including projectSettings/localSettings.
+      // the git spawn below see it. Trust is implicit in every
+      // non-interactive session — the guard above is
+      // getIsNonInteractiveSession(), which main() sets from
+      // `hasPrintFlag || hasInitOnlyFlag || hasSdkUrl || !process.stdout.isTTY`,
+      // so this is broader than -p alone. The
+      // docstring on applyConfigEnvironmentVariables in managedEnv.ts says
+      // this applies "potentially dangerous environment variables such as
+      // LD_PRELOAD, PATH" from all sources. The later call in the
+      // isNonInteractiveSession block below is idempotent (Object.assign,
+      // configureGlobalAgents ejects prior interceptor) and picks up any
+      // plugin-contributed env after plugin init. Project settings are
+      // already loaded here: init() calls
+      // applySafeConfigEnvironmentVariables, whose getSettings_DEPRECATED
+      // call merges all enabled sources including
+      // projectSettings/localSettings.
       applyConfigEnvironmentVariables();
 
       // Spawn git status/log/branch now so the subprocess execution overlaps
       // with the getCommands await below and startDeferredPrefetches. After
-      // setup() so cwd is final (setup.ts:254 may process.chdir(worktreePath)
+      // setup() so cwd is final (src/setup.ts may
+      // process.chdir(worktreeSession.worktreePath)
       // for --worktree) and after the applyConfigEnvironmentVariables above
       // so PATH/GIT_DIR/GIT_WORK_TREE from all sources (trusted + project)
       // are applied. getSystemContext is memoized; the
@@ -2004,7 +2016,8 @@ async function run(): Promise<CommanderCommand> {
       void getUserContext();
       // Kick ensureModelStringsInitialized now — for Bedrock this triggers
       // a 100-200ms profile fetch that was awaited serially at
-      // print.ts:739. updateBedrockModelStrings is sequential()-wrapped so
+      // print.ts's own `await ensureModelStringsInitialized()`.
+      // updateBedrockModelStrings is sequential()-wrapped so
       // the await joins the in-flight fetch. Non-Bedrock is a sync
       // early-return (zero-cost).
       void ensureModelStringsInitialized();
@@ -2629,11 +2642,13 @@ async function run(): Promise<CommanderCommand> {
 
       // Kick SessionStart hooks now so the subprocess spawn overlaps with
       // MCP connect + plugin init + print.ts import below. loadInitialMessages
-      // joins this at print.ts:4397. Guarded same as loadInitialMessages —
+      // joins this at print.ts's `await (options.sessionStartHooksPromise ??
+      // ...)`. Guarded same as loadInitialMessages —
       // continue/resume/teleport paths don't fire startup hooks (or fire them
       // conditionally inside the resume branch, where this promise is
       // undefined and the ?? fallback runs). Also skip when setupTrigger is
-      // set — those paths run setup hooks first (print.ts:544), and session
+      // set — those paths run setup hooks first (print.ts's
+      // `await processSetupHooks(options.setupTrigger)`), and session
       // start hooks must wait until setup completes.
       const sessionStartHooksPromise = options.continue || options.resume || teleport || setupTrigger ? undefined : processSessionStartHooks('startup');
       // Suppress transient unhandledRejection if this rejects before
@@ -2669,12 +2684,15 @@ async function run(): Promise<CommanderCommand> {
           advisorModel
         }),
         // kairosEnabled gates the async fire-and-forget path in
-        // executeForkedSlashCommand (processSlashCommand.tsx:132) and
-        // AgentTool's shouldRunAsync. The REPL initialState sets this at
-        // ~3459; headless was defaulting to false, so the daemon child's
+        // executeForkedSlashCommand — its
+        // `(await context.getAppState()).kairosEnabled` gate — and
+        // AgentTool's shouldRunAsync. The REPL initialState below sets this
+        // from the same variable; headless was defaulting to false, so the
+        // daemon child's
         // scheduled tasks and Agent-tool calls ran synchronously — N
         // overdue cron tasks on spawn = N serial subagent turns blocking
-        // user input. Computed at :1620, well before this branch.
+        // user input. Computed in the `let kairosEnabled` block far above,
+        // well before this branch.
         ...(feature('KAIROS') ? {
           kairosEnabled
         } : {})
@@ -2717,7 +2735,8 @@ async function run(): Promise<CommanderCommand> {
 
       // Print-mode MCP: per-server incremental push into headlessStore.
       // Mirrors useManageMCPConnections — push pending first (so ToolSearch's
-      // pending-check at ToolSearchTool.ts:334 sees them), then replace with
+      // pending-check — getPendingServerNames' `c.type === 'pending'` filter
+      // in ToolSearchTool.ts — sees them), then replace with
       // connected/failed as each server settles.
       const connectMcpBatch = (configs: Record<string, ScopedMcpServerConfig>, label: string): Promise<void> => {
         if (Object.keys(configs).length === 0) return Promise.resolve();
@@ -2754,7 +2773,8 @@ async function run(): Promise<CommanderCommand> {
       // Zero-server case is free via the early return in connectMcpBatch.
       // Connectors parallelize inside getMcpToolsCommandsAndResources
       // (processBatched with Promise.all). claude.ai is awaited too — its
-      // fetch was kicked off early (line ~2558) so only residual time blocks
+      // fetch was kicked off early (claudeaiConfigPromise above) so only
+      // residual time blocks
       // here. --bare skips claude.ai entirely for perf-sensitive scripts.
       profileCheckpoint('before_connectMcp');
       await connectMcpBatch(regularMcpConfigs, 'regular');
@@ -2785,7 +2805,9 @@ async function run(): Promise<CommanderCommand> {
             // Disconnect before filtering from state. Only connected
             // servers need cleanup — clearServerCache on a never-connected
             // server triggers a real connect just to kill it (memoize
-            // cache-miss path, see useManageMCPConnections.ts:870).
+            // cache-miss path — useManageMCPConnections spells this out where
+            // it notes clearServerCache internally calls the memoized
+            // connectToServer).
             for (const c of headlessStore.getState().mcp.clients) {
               if (!suppressed.has(c.name) || c.type !== 'connected') continue;
               c.client.onclose = undefined;
@@ -3352,8 +3374,12 @@ async function run(): Promise<CommanderCommand> {
       }
       const getAccessToken = (): string => getClaudeAIOAuthTokens()?.accessToken ?? apiCreds.accessToken;
 
-      // Brief mode activation: setKairosActive(true) satisfies BOTH opt-in
-      // and entitlement for isBriefEnabled() (BriefTool.ts:124-132).
+      // Brief mode activation: setKairosActive(true) satisfies BOTH halves of
+      // BriefTool.ts's isBriefEnabled(), which is
+      // `(getKairosActive() || getUserMsgOptIn()) && isBriefEntitled()`.
+      // The opt-in half is direct; the entitlement half works because
+      // isBriefEntitled() itself short-circuits on `getKairosActive() || …`
+      // before consulting CLAUDE_CODE_BRIEF or the tengu_kairos_brief gate.
       setKairosActive(true);
       setUserMsgOptIn(true);
       setIsRemoteMode(true);
@@ -3910,7 +3936,8 @@ async function run(): Promise<CommanderCommand> {
   // on baseline — mostly the isBridgeEnabled() call (25ms settings Zod parse
   // + 40ms sync keychain subprocess), both hidden by the try/catch that
   // always returns false before enableConfigs(). cc:// URLs are rewritten to
-  // `open` at main() line ~851 BEFORE this runs, so argv check is safe here.
+  // `open` by the cc:// argv rewrite in main() BEFORE this runs, so the argv
+  // check is safe here.
   const isPrintMode = process.argv.includes('-p') || process.argv.includes('--print');
   const isCcUrl = process.argv.some(a => a.startsWith('cc://') || a.startsWith('cc+unix://'));
   if (isPrintMode && !isCcUrl) {
