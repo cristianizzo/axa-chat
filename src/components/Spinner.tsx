@@ -301,9 +301,13 @@ function SpinnerWithVerbInner({
 }
 
 // Brief/assistant mode spinner: single status line. PromptInput drops its
-// own marginTop when isBriefOnly is active — its outer Box is
-// `marginTop={briefOwnsGap ? 0 : 1}`, where `briefOwnsGap` is derived from
-// `useAppState(s => s.isBriefOnly)` — so this component owns the
+// own marginTop when briefOwnsGap is set — its outer Box is
+// `marginTop={briefOwnsGap ? 0 : 1}`. briefOwnsGap is defined in
+// components/PromptInput/PromptInput.tsx as
+// `feature('KAIROS') || feature('KAIROS_BRIEF') ? useAppState(s =>
+// s.isBriefOnly) && !viewingAgentTaskId : false` — so isBriefOnly alone does
+// not control it; the flags and !viewingAgentTaskId gate it too. When it is
+// set, this component owns the
 // 2-row footprint between messages and input. Footprint is [blank, content]
 // — one blank row above (breathing room under the messages list), spinner
 // flush against the input bar. PromptInput's absolute-positioned

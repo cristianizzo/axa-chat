@@ -1259,10 +1259,11 @@ export function Config({
       // permissions: the defaultMode onChange (above) spreads the MERGED
       // settingsData.permissions into userSettings — project/policy allow/deny
       // arrays can leak to disk. Spread the full initial snapshot so the
-      // mergeWith array-customizer — settingsMergeCustomizer in
-      // utils/settings/settings.ts, whose `Array.isArray(objValue) &&
-      // Array.isArray(srcValue)` arm calls mergeArrays — replaces leaked
-      // arrays.
+      // mergeWith array-customizer — the inline customizer inside
+      // updateSettingsForSource in utils/settings/settings.ts, whose
+      // `if (Array.isArray(srcValue)) return srcValue` arm — replaces leaked
+      // arrays. Note this is NOT settingsMergeCustomizer, which concatenates
+      // and dedupes arrays instead of replacing them.
       // Explicitly include defaultMode so undefined triggers the customizer's
       // delete path even when iu.permissions lacks that key.
       permissions: iu?.permissions === undefined ? undefined : {
