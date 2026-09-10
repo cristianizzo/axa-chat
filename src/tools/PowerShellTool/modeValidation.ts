@@ -198,7 +198,9 @@ export function checkPermissionMode(
   // sees ./settings.json as /project/settings.json, but PowerShell writes to
   // /project/.claude/settings.json. Refuse to auto-allow any write operation in a
   // compound that contains a cwd-changing command. This matches BashTool's
-  // compoundCommandHasCd guard (BashTool/pathValidation.ts:630-655).
+  // `if (compoundCommandHasCd && operationType !== 'read')` guard in
+  // tools/BashTool/pathValidation.ts, under its "SECURITY: Block write
+  // operations in compound commands containing 'cd'" block.
   const totalCommands = segments.reduce(
     (sum, seg) => sum + seg.commands.length,
     0,
