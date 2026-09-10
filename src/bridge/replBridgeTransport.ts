@@ -185,8 +185,11 @@ export async function createV2ReplTransport(opts: {
     `[bridge:repl] CCR v2: worker sessionId=${sessionId} epoch=${epoch}${opts.epoch !== undefined ? ' (from /bridge)' : ' (via registerWorker)'}`,
   )
 
-  // Derive SSE stream URL. Same logic as transportUtils.ts:26-33 but
-  // starting from an http(s) base instead of a --sdk-url that might be ws://.
+  // Derive SSE stream URL. Same logic as the CLAUDE_CODE_USE_CCR_V2 arm of
+  // getTransportForUrl in cli/transports/transportUtils.ts — the block that
+  // appends '/worker/events/stream' — but starting from an http(s) base
+  // instead of a --sdk-url that might be ws://, so the wss:/ws: protocol
+  // rewrite that arm performs is unnecessary here.
   const sseUrl = new URL(sessionUrl)
   sseUrl.pathname = sseUrl.pathname.replace(/\/$/, '') + '/worker/events/stream'
 
@@ -247,7 +250,8 @@ export async function createV2ReplTransport(opts: {
   // SSE receipt and transcript-write is narrow (queue → SDK → child stdin →
   // model); a crash there loses one prompt vs. the observed N-prompt flood on
   // every restart. Overwrite the constructor's wiring to do both — setOnEvent
-  // replaces, not appends (SSETransport.ts:658).
+  // replaces, not appends: its body in cli/transports/SSETransport.ts is the
+  // single assignment `this.onEventCallback = callback`, with no listener list.
   sse.setOnEvent(event => {
     ccr.reportDelivery(event.event_id, 'received')
     ccr.reportDelivery(event.event_id, 'processed')
