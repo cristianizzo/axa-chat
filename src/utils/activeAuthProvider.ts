@@ -79,7 +79,9 @@ export function hasCredentialsForAuthProvider(id: AuthProviderId): boolean {
  * try/catch: callers include getAPIProvider, which runs while main.tsx builds
  * the Commander program — before enableConfigs(), where getGlobalConfig() throws
  * "Config accessed before allowed." No credentials can exist that early, so the
- * default is correct. Same swallow as bridgeEnabled.ts:94-99.
+ * default is correct. Same swallow as the local `isClaudeAISubscriber()` wrapper
+ * in bridge/bridgeEnabled.ts, which try/catches authModule.isClaudeAISubscriber()
+ * and returns false for the identical pre-enableConfigs() reason.
  *
  * @returns The active provider ID, defaulting to Anthropic
  */

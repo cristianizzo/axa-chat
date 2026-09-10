@@ -392,7 +392,9 @@ export async function initEnvLessBridgeCore(
         initialFlushDone = true
         // Capture current transport — if 401/teardown happens mid-flush,
         // the stale .finally() must not drain the gate or signal connected.
-        // (Same guard pattern as replBridge.ts:1119.)
+        // (Same guard pattern as bridge/replBridge.ts's `if (transport !==
+        // newTransport) return` stale-callback guards, one of which wraps
+        // handleTransportPermanentClose inside newTransport.setOnClose.)
         const flushTransport = transport
         void flushHistory(initialMessages)
           .catch(e =>
@@ -400,9 +402,12 @@ export async function initEnvLessBridgeCore(
           )
           .finally(() => {
             // authRecoveryInFlight catches the v1-vs-v2 asymmetry: v1 nulls
-            // transport synchronously in setOnClose (replBridge.ts:1175), so
+            // transport synchronously in setOnClose — replBridge.ts's
+            // handleTransportPermanentClose does `transport = null` before it
+            // returns, and setOnClose calls it directly — so
             // transport !== flushTransport trips immediately. v2 doesn't null —
-            // transport reassigned only at rebuildTransport:346, 3 awaits deep.
+            // transport is reassigned only by rebuildTransport's `transport =
+            // await createV2ReplTransport({`, 3 awaits deep in this file.
             // authRecoveryInFlight is set synchronously at rebuildTransport entry.
             if (
               transport !== flushTransport ||
@@ -570,8 +575,9 @@ export async function initEnvLessBridgeCore(
       // If 401 interrupted the initial flush, writeBatch may have silently
       // no-op'd on the closed uploader (ccr.close() ran in the SSE wrapper
       // before our setOnClose callback). Reset so the new onConnect re-flushes.
-      // (v1 scopes initialFlushDone inside the per-transport closure at
-      // replBridge.ts:1027 so it resets naturally; v2 has it at outer scope.)
+      // (v1 declares `let initialFlushDone = false` in the per-connection
+      // closure just above wireTransport in bridge/replBridge.ts, so it resets
+      // naturally on each rebuild; v2 has it at outer scope.)
       initialFlushDone = false
       await rebuildTransport(fresh, 'auth_401_recovery')
       logForDebugging('[remote-bridge] Transport rebuilt after 401')
