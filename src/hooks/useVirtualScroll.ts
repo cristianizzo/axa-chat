@@ -120,8 +120,10 @@ export type VirtualScrollResult = {
 /**
  * React-level virtualization for items inside a ScrollBox.
  *
- * The ScrollBox already does Ink-output-level viewport culling
- * (render-node-to-output.ts:617 skips children outside the visible window),
+ * The ScrollBox already does Ink-output-level viewport culling — the
+ * "Skip culled children (outside viewport)" test in the scroll container's
+ * child loop in ink/render-node-to-output.ts, `childBottom <= scrollTop ||
+ * childTop >= scrollTop + innerHeight` —
  * but all React fibers + Yoga nodes are still allocated. At ~250 KB RSS per
  * MessageRow, a 1000-message session costs ~250 MB of grow-only memory
  * (Ink screen buffer, WASM linear memory, JSC page retention all grow-only).
@@ -134,8 +136,10 @@ export type VirtualScrollResult = {
  * absorbs estimate errors. If drift is noticeable in practice, anchoring
  * (scrollBy(delta) when topSpacer changes) is a straightforward followup.
  *
- * stickyScroll caveat: render-node-to-output.ts:450 sets scrollTop=maxScroll
- * during Ink's render phase, which does NOT fire ScrollBox.subscribe. The
+ * stickyScroll caveat: ink/render-node-to-output.ts sets `node.scrollTop =
+ * maxScroll` inside its `if (atBottom && (node.pendingScrollDelta ?? 0) >= 0)`
+ * branch, during Ink's render phase, which does NOT fire
+ * ScrollBox.subscribe. The
  * at-bottom check below handles this — when pinned to the bottom, we render
  * the last N items regardless of what scrollTop claims.
  */

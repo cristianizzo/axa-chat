@@ -412,7 +412,8 @@ export const nonAlphanumericKeys = [
   // escape and backspace are assigned directly in parseKeypress (not via the
   // keyName map), so the spread above misses them. Without these, ctrl+escape
   // via Kitty/modifyOtherKeys leaks the literal word "escape" as input text
-  // (input-event.ts:58 assigns keypress.name when ctrl is set).
+  // (ink/events/input-event.ts does `let input = keypress.ctrl ?
+  // keypress.name : keypress.sequence`, so a ctrl chord's input IS its name).
   'escape',
   'backspace',
   'wheelup',

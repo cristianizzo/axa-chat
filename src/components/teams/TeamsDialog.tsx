@@ -604,12 +604,16 @@ async function killTeammate(paneId: string, backendType: PaneBackendType | undef
 }
 async function viewTeammateOutput(paneId: string, backendType: PaneBackendType | undefined): Promise<void> {
   if (backendType === 'iterm2') {
-    // -s is required to target a specific session (ITermBackend.ts:216-217)
+    // -s is required to target a specific session — same reason
+    // sendCommandToPane in utils/swarm/backends/ITermBackend.ts gives for
+    // always passing it: "this ensures the command goes to the right pane even
+    // if user switches windows".
     await execFileNoThrow(IT2_COMMAND, ['session', 'focus', '-s', paneId]);
   } else {
     // External-tmux teammates live on the swarm socket — without -L, this
     // targets the default server and silently no-ops. Mirrors runTmuxInSwarm
-    // in TmuxBackend.ts:85-89.
+    // in utils/swarm/backends/TmuxBackend.ts, whose whole body is
+    // `execFileNoThrow(TMUX_COMMAND, ['-L', getSwarmSocketName(), ...args])`.
     const args = isInsideTmuxSync() ? ['select-pane', '-t', paneId] : ['-L', getSwarmSocketName(), 'select-pane', '-t', paneId];
     await execFileNoThrow(TMUX_COMMAND, args);
   }

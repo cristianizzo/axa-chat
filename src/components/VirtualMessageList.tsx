@@ -119,8 +119,10 @@ type Props = {
  *
  * Two shapes land here: NormalizedUserMessage (normal prompts) and
  * AttachmentMessage with type==='queued_command' (prompts sent mid-turn
- * while a tool was executing — they get drained as attachments on the
- * next turn, see query.ts:1410). Both render as ❯-prefixed UserTextMessage
+ * while a tool was executing — query.ts takes a `queuedCommandsSnapshot` via
+ * getCommandsByMaxPriority(), feeds it to getAttachmentMessages(), and then
+ * removeFromQueue()s the commands it consumed, so they arrive as attachments
+ * on the next turn). Both render as ❯-prefixed UserTextMessage
  * in the UI so both should stick.
  *
  * Leading <system-reminder> blocks are stripped before checking — they get
