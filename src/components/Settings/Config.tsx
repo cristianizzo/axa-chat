@@ -1229,7 +1229,10 @@ export function Config({
     // disk but content is identical).
     saveGlobalConfig(() => initialConfig.current);
     // Settings files: restore each key Config may have touched. undefined
-    // deletes the key (updateSettingsForSource customizer at settings.ts:368).
+    // deletes the key — updateSettingsForSource's docblock in
+    // utils/settings/settings.ts says so: "set it to `undefined` — do NOT use
+    // `delete`. mergeWith only detects deletion when the key is present with
+    // an explicit `undefined` value."
     const il = initialLocalSettings;
     updateSettingsForSource('localSettings', {
       spinnerTipsEnabled: il?.spinnerTipsEnabled,
@@ -1256,7 +1259,11 @@ export function Config({
       // permissions: the defaultMode onChange (above) spreads the MERGED
       // settingsData.permissions into userSettings — project/policy allow/deny
       // arrays can leak to disk. Spread the full initial snapshot so the
-      // mergeWith array-customizer (settings.ts:375) replaces leaked arrays.
+      // mergeWith array-customizer — the inline customizer inside
+      // updateSettingsForSource in utils/settings/settings.ts, whose
+      // `if (Array.isArray(srcValue)) return srcValue` arm — replaces leaked
+      // arrays. Note this is NOT settingsMergeCustomizer, which concatenates
+      // and dedupes arrays instead of replacing them.
       // Explicitly include defaultMode so undefined triggers the customizer's
       // delete path even when iu.permissions lacks that key.
       permissions: iu?.permissions === undefined ? undefined : {
