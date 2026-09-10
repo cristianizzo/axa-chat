@@ -311,7 +311,9 @@ export function saveMcpServerUserConfig(
       // include undefined, but updateSettingsForSource's mergeWith customizer
       // needs explicit undefined to delete — cast is deliberate internal
       // plumbing (same rationale as deletePluginOptions in
-      // utils/plugins/pluginOptionsStorage.ts, see CLAUDE.md's 10% case).
+      // utils/plugins/pluginOptionsStorage.ts, which spells it out: widening
+      // the Zod schema instead would leak `| {[k: string]: unknown}` into the
+      // public SDK type).
       const scrubbed = Object.fromEntries(
         keysToScrubFromSettings.map(k => [k, undefined]),
       ) as Record<string, undefined>

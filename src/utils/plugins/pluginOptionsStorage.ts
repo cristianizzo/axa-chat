@@ -213,8 +213,9 @@ export function deletePluginOptions(pluginId: string): void {
   //
   // Use `undefined` (not `delete`) because `updateSettingsForSource` merges
   // via `mergeWith` — absent keys are ignored, only `undefined` triggers
-  // removal. Cast is deliberate (CLAUDE.md's 10% case): adding z.undefined()
-  // to the schema instead (like enabledPlugins:466 does) leaks
+  // removal. The cast is deliberate: adding z.undefined()
+  // to the schema instead (as the `enabledPlugins` schema in
+  // utils/settings/types.ts does) leaks
   // `| {[k: string]: unknown}` into the public SDK type, which subsumes the
   // real object arm and kills excess-property checks for SDK consumers. The
   // mergeWith-deletion contract is internal plumbing — it shouldn't shape
