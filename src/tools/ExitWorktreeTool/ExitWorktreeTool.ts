@@ -72,9 +72,13 @@ type ChangeSummary = {
  * Null is returned when:
  * - git status or rev-list exit non-zero (lock file, corrupt index, bad ref)
  * - originalHeadCommit is undefined but git status succeeded — this is the
- *   hook-based-worktree-wrapping-git case (worktree.ts's `hookBased: true`
- *   branch returns without setting originalHeadCommit). We can see the working tree is git, but cannot count
- *   commits without a baseline, so we cannot prove the branch is clean.
+ *   hook-based-worktree-wrapping-git case: the `hookBased: true` arm of
+ *   createWorktreeForSession in utils/worktree.ts builds
+ *   currentWorktreeSession without an originalHeadCommit field. (Not the
+ *   `hookBased: true` in createAgentWorktree in the same file — that one
+ *   returns a bare {worktreePath, hookBased} and is a different code path.)
+ *   We can see the working tree is git, but cannot count commits without a
+ *   baseline, so we cannot prove the branch is clean.
  */
 async function countWorktreeChanges(
   worktreePath: string,
