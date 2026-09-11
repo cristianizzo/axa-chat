@@ -1142,8 +1142,9 @@ export async function powershellToolHasPermission(
   // _.behavior === 'deny')`. Cited by name because the previous revision cited
   // them as "B9, line 1416" and "B11", and BOTH pointers were dead: `B9`/`B11`
   // appear nowhere in bashPermissions.ts (nor anywhere in src/ outside this
-  // comment), and bashPermissions.ts:1416 is a deny-enforcement docblock, not
-  // a cd+git guard. Dead pointers inside a security-ordering claim are worse
+  // comment), and that line number lands inside `checkEarlyExitDeny()` (a
+  // different, unrelated deny-enforcement helper — not even its docblock),
+  // not a cd+git guard. Dead pointers inside a security-ordering claim are worse
   // than useless — that line number lands on deny code of the right *kind*,
   // so following it looks like confirmation.
   //

@@ -284,7 +284,8 @@ export function getClaudeSkillScope(
     },
     {
       // Our config dir, not `~/.claude` — personal skills load from
-      // getClaudeConfigHomeDir()/skills (loadSkillsDir.ts:640), so the upstream
+      // getClaudeConfigHomeDir()/skills, per `userSkillsDir` in
+      // skills/loadSkillsDir.ts's getSkillDirCommands(), so the upstream
       // name would make this scope match nothing.
       //
       // Built from homedir() rather than getClaudeConfigHomeDir() so `dir` and

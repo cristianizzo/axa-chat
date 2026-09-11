@@ -796,8 +796,10 @@ export async function enhanceSystemPromptWithEnvDetails(
   // no agentId guard since #22830) but don't go through getSystemPrompt —
   // surface the same DiscoverSkills framing the main session gets. Gated on
   // enabledToolNames when the caller provides it (runAgent.ts does).
-  // AgentTool.tsx:768 builds the prompt before assembleToolPool:830 so it
-  // omits this param — `?? true` preserves guidance there.
+  // In tools/AgentTool/AgentTool.tsx, the `enhanceSystemPromptWithEnvDetails(
+  // [agentPrompt], ...)` call runs before `assembleToolPool(workerPermission
+  // Context, ...)` builds the worker's tools, so it omits this param —
+  // `?? true` preserves guidance there.
   const discoverSkillsGuidance =
     feature('EXPERIMENTAL_SKILL_SEARCH') &&
     skillSearchFeatureCheck?.isSkillSearchEnabled() &&

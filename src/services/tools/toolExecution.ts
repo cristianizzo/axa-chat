@@ -172,7 +172,8 @@ export function classifyToolError(error: unknown): string {
 
 /**
  * Map a rule's origin to the documented OTel `source` vocabulary, matching
- * the interactive path's semantics (permissionLogging.ts:81): session-scoped
+ * the interactive path's semantics (`sourceToString()` in
+ * hooks/toolPermission/permissionLogging.ts): session-scoped
  * grants are temporary, on-disk grants are permanent, and user-authored
  * denies are user_reject regardless of persistence. Everything the user
  * didn't write (cliArg, policySettings, projectSettings, flagSettings) is

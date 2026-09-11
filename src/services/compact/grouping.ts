@@ -27,7 +27,10 @@ export function groupMessagesByApiRound(messages: Message[]): Message[][] {
   // id, so boundaries only fire at the start of a genuinely new round.
   // normalizeMessages yields one AssistantMessage per content block, and
   // StreamingToolExecutor interleaves tool_results between chunks live
-  // (yield order, not concat order — see query.ts:613). The id check
+  // (yield order, not concat order — in query.ts, the loop that calls
+  // `streamingToolExecutor.addTool(toolBlock, message)` per assistant
+  // chunk also drains `streamingToolExecutor.getCompletedResults()` and
+  // yields each result inline). The id check
   // correctly keeps `[tu_A(id=X), result_A, tu_B(id=X)]` in one group.
   let lastAssistantId: string | undefined
 
@@ -38,8 +41,8 @@ export function groupMessagesByApiRound(messages: Message[]): Message[][] {
   // after resume-from-partial-batch or max_tokens truncation) — and in that
   // case it pins the gate shut forever, merging all subsequent rounds into
   // one group. We let those boundaries fire; the summarizer fork's own
-  // ensureToolResultPairing at claude.ts:1136 repairs the dangling tu at
-  // API time.
+  // `built = ensureToolResultPairing(built)` call in services/api/claude.ts
+  // (just before the request is built) repairs the dangling tu at API time.
   for (const msg of messages) {
     if (
       msg.type === 'assistant' &&

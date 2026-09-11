@@ -1063,7 +1063,8 @@ async function executeRemoteSkill(
   )
 
   // Strip YAML frontmatter (---\nname: x\n---) before prepending the header
-  // (matches loadSkillsDir.ts:333). parseFrontmatter returns the original
+  // (matches the `parseFrontmatter(content, skillFilePath)` call in
+  // skills/loadSkillsDir.ts). parseFrontmatter returns the original
   // content unchanged if no frontmatter is present.
   const { content: bodyContent } = parseFrontmatter(content, skillPath)
 
