@@ -106,9 +106,12 @@ export function logPluginFetch(
  * utils/plugins/marketplaceManager.ts (NOT the same-named gitClone in
  * pluginLoader.ts) whose condition is `result.stderr.includes('timed out') ||
  * result.stderr.includes('timeout') || result.stderr.includes('Could not
- * resolve host')` replaces the stderr with "Network error or timeout while
- * cloning repository." Ordering the other way would misclassify git DNS as
- * timeout.
+ * resolve host')` prefixes the stderr with "Network error or timeout while
+ * cloning repository. Please check your internet connection and try again."
+ * and retains the original after `\n\nOriginal error: `. So a DNS failure's
+ * message carries the word "timeout" even though the original "Could not
+ * resolve host" is still present — ordering the other way would match the
+ * injected prefix and misclassify git DNS as timeout.
  */
 export function classifyFetchError(error: unknown): string {
   const msg = String((error as { message?: unknown })?.message ?? error)

@@ -133,10 +133,13 @@ export function useManagePlugins({
       // memoized loadAllPlugins() result as the `await loadAllPlugins()` at
       // the top of this same callback, unless a cache invalidation landed
       // between them (e.g. seed marketplace registration or policySettings
-      // hot-reload). Note this is loadAllPlugins()'s memo specifically —
-      // main.tsx's startup loadAllPluginsCacheOnly() keeps a deliberately
-      // separate cache (see its doc comment in pluginLoader.ts) and so never
-      // satisfies or invalidates this one.
+      // hot-reload). Note this is loadAllPlugins()'s memo specifically — in
+      // normal (interactive) mode main.tsx's startup loadAllPluginsCacheOnly()
+      // keeps a deliberately separate cache (see its doc comment in
+      // pluginLoader.ts) and so never satisfies this one. The exception is
+      // CLAUDE_CODE_SYNC_PLUGIN_INSTALL=1, where loadAllPluginsCacheOnly()
+      // returns `loadAllPlugins()` directly and therefore does warm this memo
+      // — interactive startup never sets that flag.
       const lspServerCounts = await Promise.all(
         enabled.map(async p => {
           if (p.lspServers) return Object.keys(p.lspServers).length
