@@ -17,9 +17,12 @@
  * Imports stay minimal: child_process + macOsKeychainHelpers.ts (NOT
  * macOsKeychainStorage.ts — that pulls in execa → human-signals →
  * cross-spawn, ~58ms of synchronous module init). The helpers file's own
- * import chain (envUtils, oauth constants, crypto) is already evaluated by
- * main.tsx's top-of-file `import ... from './utils/startupProfiler.js'`,
- * so no new module-init cost lands here.
+ * import chain is nearly free: envUtils and the product constants are
+ * already evaluated by main.tsx's top-of-file
+ * `import ... from './utils/startupProfiler.js'`, and crypto/os are Node
+ * built-ins. The one module this path does evaluate fresh is
+ * `src/constants/oauth.js`, which startupProfiler does not reach — see the
+ * header comment in macOsKeychainHelpers.ts.
  */
 
 import { execFile } from 'child_process'
