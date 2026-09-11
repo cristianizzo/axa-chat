@@ -64,7 +64,8 @@ export function fireRawRead(): Promise<RawReadResult> {
           // and non-MDM machines never have these files.
           // Uses synchronous existsSync to preserve the spawn-during-imports
           // invariant: execFilePromise must be the first await so plutil
-          // spawns before the event loop polls (see main.tsx:3-4).
+          // spawns before the event loop polls (see main.tsx's top-of-file
+          // `startMdmRawRead()` call, fired before the file's other imports).
           if (!existsSync(path)) {
             return { stdout: '', label, ok: false }
           }

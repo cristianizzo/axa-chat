@@ -9,9 +9,14 @@
  * so a heavy transitive import here defeats the prefetch. The execa →
  * human-signals → cross-spawn chain alone is ~58ms of synchronous init.
  *
- * The imports below (envUtils, oauth constants, crypto, os) are already
- * evaluated by startupProfiler.ts at main.tsx:5, so they add no module-init
- * cost when keychainPrefetch.ts pulls this file in.
+ * Most of the imports below are already evaluated by main.tsx's top-of-file
+ * `import ... from './utils/startupProfiler.js'` — envUtils and the product
+ * constants are both in that module's runtime import graph — and crypto/os
+ * are Node built-ins, so none of those add module-init cost when
+ * keychainPrefetch.ts pulls this file in. `src/constants/oauth.js` is the
+ * exception: it is NOT in the startupProfiler graph and is first evaluated
+ * here. That is acceptable only because it stays a small constants module —
+ * keep it that way.
  */
 
 import { createHash } from 'crypto'
