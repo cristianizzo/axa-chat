@@ -18,7 +18,8 @@
  * macOsKeychainStorage.ts — that pulls in execa → human-signals →
  * cross-spawn, ~58ms of synchronous module init). The helpers file's own
  * import chain (envUtils, oauth constants, crypto) is already evaluated by
- * startupProfiler.ts at main.tsx:5, so no new module-init cost lands here.
+ * main.tsx's top-of-file `import ... from './utils/startupProfiler.js'`,
+ * so no new module-init cost lands here.
  */
 
 import { execFile } from 'child_process'

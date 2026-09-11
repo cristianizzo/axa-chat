@@ -10,8 +10,9 @@
  * human-signals → cross-spawn chain alone is ~58ms of synchronous init.
  *
  * The imports below (envUtils, oauth constants, crypto, os) are already
- * evaluated by startupProfiler.ts at main.tsx:5, so they add no module-init
- * cost when keychainPrefetch.ts pulls this file in.
+ * evaluated by main.tsx's top-of-file
+ * `import ... from './utils/startupProfiler.js'`, so they add no
+ * module-init cost when keychainPrefetch.ts pulls this file in.
  */
 
 import { createHash } from 'crypto'
