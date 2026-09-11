@@ -2383,9 +2383,11 @@ function runHeadlessStreaming(
         // (status: 'running' for their whole lifetime, cleaned up by the
         // shutdown protocol, not by transitioning to 'completed'). Waiting
         // on them here loops forever (gh-30008). Same exclusion already
-        // exists at useBackgroundTaskNavigation.ts:55 for the same reason;
-        // L1839 above is already narrower (type === 'local_agent') so it
-        // doesn't hit this.
+        // exists in the `hasNonTeammateBackgroundTasks` filter in
+        // hooks/useBackgroundTaskNavigation.ts for the same reason; the
+        // result hold-back above is already narrower (`t.type ===
+        // 'local_agent' || t.type === 'local_workflow'`) so it doesn't hit
+        // this.
         waitingForAgents = false
         {
           const state = getAppState()

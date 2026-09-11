@@ -430,7 +430,8 @@ export function extractUnknownErrorFormat(value: unknown): string | undefined {
  * Two wordings, one situation. The stale signature is rejected directly; or the
  * pre-send strip in claude.ts has already removed a foreign turn's thinking
  * while its tool_use stayed, which breaks the rule that thinking must survive a
- * whole assistant trajectory (query.ts:161) and is reported as a *missing*
+ * whole assistant trajectory (rule 3 of the "rules of thinking" doc comment in
+ * query.ts) and is reported as a *missing*
  * thinking block instead. Both clear the same way, so both get the same message.
  *
  * Exported for withRetry.ts, which — when the attempt budget still allows it —

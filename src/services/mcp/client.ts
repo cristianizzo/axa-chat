@@ -2305,7 +2305,8 @@ export async function getMcpToolsCommandsAndResources(
       // check closes the gap the TTL leaves open: without it, every 15min
       // we re-probe servers that cannot succeed until the user runs /mcp.
       // Each probe is a network round-trip for connect-401 plus OAuth
-      // discovery, and print mode awaits the whole batch (main.tsx:3503).
+      // discovery, and print mode awaits the whole batch (the
+      // `await connectMcpBatch(regularMcpConfigs, 'regular')` in main.tsx).
       if (
         (config.type === 'claudeai-proxy' ||
           config.type === 'http' ||

@@ -405,7 +405,11 @@ const bareGitRepoScrubPaths: string[] = []
 function scrubBareGitRepoFiles(): void {
   for (const p of bareGitRepoScrubPaths) {
     try {
-      // eslint-disable-next-line custom-rules/no-sync-fs -- cleanupAfterCommand must be sync (Shell.ts:367)
+      // Must be sync: `SandboxManager.cleanupAfterCommand()` is called from
+      // `exec()`'s `shellCommand.result.then` in utils/Shell.ts, before any
+      // await, so callers awaiting `.result` see a clean tree in the same
+      // microtask.
+      // eslint-disable-next-line custom-rules/no-sync-fs -- must stay sync, see the comment above
       rmSync(p, { recursive: true })
       logForDebugging(`[Sandbox] scrubbed planted bare-repo file: ${p}`)
     } catch {
