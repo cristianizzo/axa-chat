@@ -5102,8 +5102,11 @@ export function stripSignatureBlocksWhere<T extends Message>(
     if (filtered.length === content.length) return msg
 
     // Strip to [] even for thinking-only messages. Streaming yields each
-    // content block as a separate same-id AssistantMessage (claude.ts:2150),
-    // so a thinking-only singleton here is usually a split sibling that
+    // content block as a separate same-id AssistantMessage: in services/
+    // api/claude.ts, the `content_block_stop` handler builds each
+    // `m: AssistantMessage` from `...partialMessage` (set once at
+    // message_start) plus that single content block, so a thinking-only
+    // singleton here is usually a split sibling that
     // mergeAssistantMessages (2232) rejoins with its text/tool_use partner.
     // If we returned the original message, the stale signature would survive
     // the merge. Empty content is absorbed by merge; true orphans are handled

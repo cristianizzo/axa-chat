@@ -902,9 +902,10 @@ async function approximateMessageTokens(
   // The strip mirrors what queryModel does before every real request. The
   // counting endpoints validate thinking signatures the same way the Messages
   // API does, so without it a flipped session 400s here — and there is no
-  // graceful degradation waiting: countTokensViaHaikuFallback re-sends the
-  // same messages under the same credentials (tokenEstimation.ts:302) and
-  // fails identically, so the result is null, totalTokens is 0, and the
+  // graceful degradation waiting: countTokensViaHaikuFallback (services/
+  // tokenEstimation.ts) re-sends the same messages via its own
+  // `anthropic.beta.messages.create(...)` call, using the same credentials,
+  // and fails identically, so the result is null, totalTokens is 0, and the
   // "Messages" category disappears from the panel rather than reading low.
   //
   // That premise is load-bearing. Were the count endpoints ever to stop

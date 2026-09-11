@@ -11,9 +11,10 @@ import {
 // Checks both the cached isAutoModeAvailable (set at startup by
 // verifyAutoModeGateAccess) and the live isAutoModeGateEnabled() — these can
 // diverge if the circuit breaker or settings change mid-session. The
-// live check prevents transitionPermissionMode from throwing
-// (permissionSetup.ts:~559), which would silently crash the shift+tab handler
-// and leave the user stuck at the current mode.
+// live check prevents transitionPermissionMode (permissionSetup.ts) from
+// hitting its `throw new Error('Cannot transition to auto mode: gate is
+// not enabled')`, which would silently crash the shift+tab handler and
+// leave the user stuck at the current mode.
 function canCycleToAuto(ctx: ToolPermissionContext): boolean {
   if (feature('TRANSCRIPT_CLASSIFIER')) {
     const gateEnabled = isAutoModeGateEnabled()

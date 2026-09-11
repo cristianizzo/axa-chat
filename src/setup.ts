@@ -428,7 +428,12 @@ export async function setup(
       process.env.USER_TYPE === 'ant' &&
       // Skip for Desktop's local agent mode — same trust model as CCR/BYOC
       // (trusted Anthropic-managed launcher intentionally pre-approving everything).
-      // Precedent: permissionSetup.ts:861, applySettingsChange.ts:55 (PR #19116)
+      // Precedent: the `CLAUDE_CODE_ENTRYPOINT !== 'local-agent'` guard on the
+      // ant-only overly-broad-permissions check in
+      // utils/permissions/permissionSetup.ts (around
+      // `findOverlyBroadBashPermissions(rulesFromDisk, ...)`), and the
+      // matching ant-only guard in utils/settings/applySettingsChange.ts
+      // around `findOverlyBroadBashPermissions(updatedRules, [])` (PR #19116)
       process.env.CLAUDE_CODE_ENTRYPOINT !== 'local-agent' &&
       // Same for CCD (Claude Code in Desktop) — apps#29127 passes the flag
       // unconditionally to unlock mid-session bypass switching

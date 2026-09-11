@@ -2395,8 +2395,10 @@ export function bashCommandIsSafe_DEPRECATED(
 
   // SECURITY: We must NOT short-circuit when a non-misparsing validator
   // returns 'ask' if there are still misparsing validators later in the list.
-  // Non-misparsing ask results are discarded at bashPermissions.ts:~1301-1303
-  // (the gate only blocks when isBashSecurityCheckForMisparsing is set). If
+  // Non-misparsing ask results are discarded by the legacy misparsing gate in
+  // BashTool/bashPermissions.ts, which only blocks when
+  // `originalCommandSafetyResult.isBashSecurityCheckForMisparsing` is true
+  // (the ask is otherwise ignored and the command proceeds). If
   // validateRedirections (index 10, non-misparsing) fires first on `>`, it
   // returns ask-without-flag — but validateBackslashEscapedOperators (index 12,
   // misparsing) would have caught `\;` WITH the flag. Short-circuiting lets a
