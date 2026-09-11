@@ -33,10 +33,15 @@ export type PluginOptionSchema = UserConfigSchema
 
 /**
  * Canonical storage key for a plugin's options in both `settings.pluginConfigs`
- * and `secureStorage.pluginSecrets`. Today this is `plugin.source` — always
- * `"${name}@${marketplace}"` (pluginLoader.ts:1400). `plugin.repository` is
- * a backward-compat alias that's set to the same string (1401); don't use it
- * for storage. UI code that manually constructs `` `${name}@${marketplace}` ``
+ * and `secureStorage.pluginSecrets`. Today this is `plugin.source`, assigned
+ * from the `source` parameter in createPluginFromPath's object literal in
+ * utils/plugins/pluginLoader.ts. For marketplace plugins that is
+ * `"${name}@${marketplace}"`; the inline loader in the same file overwrites it
+ * with `` `${plugin.name}@inline` `` after the manifest name is known, so
+ * "always name@marketplace" is not literally true. `plugin.repository` is a
+ * backward-compat alias set to the same string on the line below
+ * (`repository: source`), and mirrored on the inline path; don't use it for
+ * storage. UI code that manually constructs `` `${name}@${marketplace}` ``
  * produces the same key by convention — see PluginOptionsFlow, ManagePlugins.
  *
  * Exists so there's exactly one place to change if the key format ever drifts.
@@ -226,7 +231,10 @@ export function deletePluginOptions(pluginId: string): void {
   if (settings.pluginConfigs?.[pluginId]) {
     // Partial<Record<K,V>> = Record<K, V | undefined> — gives us the widening
     // for the undefined value, and Partial-of-X overlaps with X so the cast
-    // is a narrowing TS accepts (same approach as marketplaceManager.ts:1795).
+    // is a narrowing TS accepts. Same approach as removeMarketplaceSource in
+    // utils/plugins/marketplaceManager.ts, whose
+    // `Partial<SettingsJson['extraKnownMarketplaces']>` local is cast back on
+    // assignment for the same undefined-means-delete reason.
     const pluginConfigs: Partial<PluginConfigs> = { [pluginId]: undefined }
     const { error } = updateSettingsForSource('userSettings', {
       pluginConfigs: pluginConfigs as PluginConfigs,

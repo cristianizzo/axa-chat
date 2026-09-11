@@ -2451,8 +2451,12 @@ export async function refreshMarketplace(
         )
       ) {
         // Throw, don't return — every other failure path in this function
-        // throws, and callers like ManageMarketplaces.tsx:259 increment
-        // updatedCount on any non-throwing return. A silent return would
+        // throws, and the one caller that counts successes treats any
+        // non-throwing return as one: commands/plugin/ManageMarketplaces.tsx
+        // does `await refreshMarketplace(...)` then `updatedCount++`
+        // unconditionally under its `if (state.pendingUpdate)` branch. (The
+        // other callers — cli/handlers/plugins.ts, thinkback.tsx,
+        // pluginAutoupdate.ts — keep no such counter.) A silent return would
         // report "Updated 1 marketplace" when nothing was refreshed.
         throw new Error(
           'Official marketplace GCS fetch failed and git fallback is disabled',
