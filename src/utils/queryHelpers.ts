@@ -84,9 +84,11 @@ export function isResultSuccessful(
   // no assistant content — last(messages) is still this turn's prompt.
   // In services/api/claude.ts's queryModel, the check
   // `if (!partialMessage || (newMessages.length === 0 && !stopReason))`
-  // only throws 'Stream ended without receiving any events' when
-  // stopReason is unset — so end_turn-with-zero-content-blocks is
-  // recognized as legitimate and passes through without throwing. Observed on
+  // throws 'Stream ended without receiving any events' if message_start
+  // never arrived (`!partialMessage`), and otherwise only when the stream
+  // produced no messages AND stopReason is unset. So once message_start has
+  // landed, end_turn-with-zero-content-blocks is recognized as legitimate
+  // and passes through without throwing. Observed on
   // task_notification drain turns: model returns stop_reason=end_turn,
   // outputTokens=4, textContentLength=0 — it saw the subagent result
   // and decided nothing needed saying. Without this, QueryEngine emits

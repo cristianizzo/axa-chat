@@ -5107,7 +5107,8 @@ export function stripSignatureBlocksWhere<T extends Message>(
     // `m: AssistantMessage` from `...partialMessage` (set once at
     // message_start) plus that single content block, so a thinking-only
     // singleton here is usually a split sibling that
-    // mergeAssistantMessages (2232) rejoins with its text/tool_use partner.
+    // `mergeAssistantMessages` in this file rejoins with its text/tool_use
+    // partner.
     // If we returned the original message, the stale signature would survive
     // the merge. Empty content is absorbed by merge; true orphans are handled
     // by the empty-content placeholder path in normalizeMessagesForAPI.
