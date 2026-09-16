@@ -17,7 +17,7 @@
  * Endpoint: https://api.x.ai/v1/chat/completions
  */
 
-import { GROK_BASE_URL, GROK_MAX_OUTPUT_TOKENS, GROK_MESSAGES_PATH, DEFAULT_GROK_MODEL } from '../../config/grok.js'
+import { GROK_BASE_URL, GROK_MAX_OUTPUT_TOKENS, GROK_MESSAGES_PATH, resolveClaudeModelForGrok } from '../../config/grok.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { estimateTokenCountResponse } from './count-tokens-shim.js'
 import { createBackpressuredSseStream } from './sse-backpressure.js'
@@ -229,7 +229,7 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
       .join('\n') || undefined
   }
 
-  const model = resolveModel(anthropicBody.model as string | undefined)
+  const model = resolveClaudeModelForGrok(anthropicBody.model as string | undefined)
   const openAIMessages = translateMessages(messages, system)
   const anthropicTools = (anthropicBody.tools ?? []) as AnthropicTool[]
 
@@ -294,40 +294,6 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
   }
 
   return body
-}
-
-/**
- * Maps an Anthropic model name to the appropriate Grok model.
- *
- * Every Claude family — Opus, Sonnet, Haiku, Fable, Mythos — maps to whatever
- * DEFAULT_GROK_MODEL currently names, so the flagship version lives in
- * config/grok.ts alone and this function needs no edit when it moves.
- *
- * A `grok-*` ID passes through rather than being clamped to the default. In
- * practice only the catalog's own ID can arrive here — `/model`, settings and
- * ANTHROPIC_MODEL are all filtered by isServableByActiveProvider, which defers
- * to the catalog's exact-ID acceptsModel — so the branch is a no-op today. It
- * stays permissive because the failure modes are asymmetric: if GROK_MODELS
- * gains a second entry, pass-through serves it, whereas clamping would quietly
- * answer as the wrong model with no way for the user to tell.
- */
-function resolveModel(claudeModel: string | undefined): string {
-  if (!claudeModel) return DEFAULT_GROK_MODEL
-
-  const lower = claudeModel.toLowerCase()
-
-  // Already a Grok model — pass through
-  if (lower.startsWith('grok-')) return claudeModel
-
-  // Map Claude families to the Grok flagship
-  if (lower.includes('opus')) return DEFAULT_GROK_MODEL
-  if (lower.includes('sonnet')) return DEFAULT_GROK_MODEL
-  if (lower.includes('haiku')) return DEFAULT_GROK_MODEL
-  if (lower.includes('fable')) return DEFAULT_GROK_MODEL
-  if (lower.includes('mythos')) return DEFAULT_GROK_MODEL
-
-  logForDebugging(`Grok resolveModel: unrecognised model '${claudeModel}', falling back to '${DEFAULT_GROK_MODEL}'`, { level: 'warn' })
-  return DEFAULT_GROK_MODEL
 }
 
 // ── Response translation: OpenAI SSE → Anthropic SSE ─────────────────────────
@@ -1062,7 +1028,7 @@ export function createGrokFetch(
       return estimateTokenCountResponse(anthropicBody)
     }
 
-    const model = resolveModel(anthropicBody.model as string | undefined)
+    const model = resolveClaudeModelForGrok(anthropicBody.model as string | undefined)
     const openAIBody = translateToOpenAIBody(anthropicBody)
 
     const grokResponse = await inner(`${GROK_BASE_URL}${GROK_MESSAGES_PATH}`, {

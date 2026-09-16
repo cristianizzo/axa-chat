@@ -7,6 +7,7 @@ import { useMainLoopModel } from '../../hooks/useMainLoopModel.js'
 import { Text } from '../../ink.js'
 import { getActiveAuthProvider } from '../../utils/activeAuthProvider.js'
 import { getDeepSeekAuth, isDeepSeekSubscriber } from '../../utils/auth.js'
+import { getDisplayModelForActiveProvider } from '../../utils/model/model.js'
 import { isActiveAccountServingRequests } from '../../utils/model/providers.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
 
@@ -132,7 +133,7 @@ export function ActiveAccount({
   separator?: boolean
 }): React.ReactNode {
   useAppState(s => s.authVersion)
-  const model = useMainLoopModel()
+  const model = getDisplayModelForActiveProvider(useMainLoopModel())
   const balance = useDeepSeekBalance()
 
   // Same guard as the banner's provider line: when CLAUDE_CODE_USE_BEDROCK/

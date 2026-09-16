@@ -41,6 +41,25 @@ export type GrokModelId = (typeof GROK_MODELS)[number]['id']
 export const DEFAULT_GROK_MODEL: GrokModelId = 'grok-4.6'
 
 /**
+ * Resolves a model ID to the Grok model that will actually be served.
+ *
+ * Every Claude family maps to whatever {@link DEFAULT_GROK_MODEL} currently
+ * names, so the flagship version lives here alone and no call site needs an
+ * edit when it moves. A `grok-*` ID passes through untouched, and anything
+ * unrecognised falls back to the default.
+ *
+ * Dependency-free on purpose: the fetch adapter and the account pill both call
+ * this, so it must not drag runtime imports into either graph.
+ */
+export function resolveClaudeModelForGrok(
+  claudeModel: string | null | undefined,
+): string {
+  if (!claudeModel) return DEFAULT_GROK_MODEL
+  if (claudeModel.toLowerCase().startsWith('grok-')) return claudeModel
+  return DEFAULT_GROK_MODEL
+}
+
+/**
  * Context window for Grok models (input tokens).
  * Verified live against GET /v1/models — grok-4.6 advertises 500k.
  */
