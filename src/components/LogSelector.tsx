@@ -341,8 +341,8 @@ export function LogSelector(t0) {
   }
   // The Favorites tab only exists once something is starred: with no tags and
   // no stars the header stays the plain "Resume Session" line it has always
-  // been. Ctrl+S is advertised in the hint bar regardless, so the tab is
-  // reachable from a standing start.
+  // been. Ctrl+F stars the focused session (which adds the tab); Ctrl+S then
+  // toggles the favorites-only view once that tab exists.
   const hasFavorites = t20b;
   let t21;
   if ($[21] !== hasTags || $[22] !== uniqueTags || $[249] !== hasFavorites) {
@@ -1150,7 +1150,22 @@ export function LogSelector(t0) {
                     enabled: true
                   });
                 } else {
-                  if (lowerInput === "s" && key.ctrl && focusedLog) {
+                  if (lowerInput === "s" && key.ctrl) {
+                    // Toggle the favorites-only view. When nothing is starred
+                    // there is no ★ Favorites tab, so the toggle is a no-op —
+                    // the list simply has no favorites tab to switch to.
+                    if (hasFavorites) {
+                      const favoritesIndex = tagTabs.length - 1;
+                      setSelectedTagIndex(prev => {
+                        const current = prev < tagTabs.length ? prev : 0;
+                        const next = current === favoritesIndex ? 0 : favoritesIndex;
+                        logEvent("tengu_session_favorites_toggled", {
+                          enabled: next === favoritesIndex
+                        });
+                        return next;
+                      });
+                    }
+                  } else if (lowerInput === "f" && key.ctrl && focusedLog) {
                     const starSessionId = getSessionIdFromLog(focusedLog);
                     if (starSessionId) {
                       const nowFavorite = !focusedLog.favorite;
@@ -1459,13 +1474,14 @@ export function LogSelector(t0) {
     t70 = $[221];
   }
   let t71;
-  if ($[222] !== agenticSearchState.status || $[223] !== currentBranch || $[224] !== exitState.keyName || $[225] !== exitState.pending || $[255] !== focusedLog?.favorite || $[226] !== getExpandCollapseHint || $[227] !== hasMultipleWorktrees || $[228] !== isAgenticSearchOptionFocused || $[229] !== isSearching || $[230] !== onToggleAllProjects || $[231] !== showAllProjects || $[232] !== showAllWorktrees || $[233] !== viewMode) {
-    t71 = <Box paddingLeft={2}>{exitState.pending ? <Text dimColor={true}>Press {exitState.keyName} again to exit</Text> : viewMode === "rename" ? <Text dimColor={true}><Byline><KeyboardShortcutHint shortcut="Enter" action="save" /><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" /></Byline></Text> : agenticSearchState.status === "searching" ? <Text dimColor={true}><Byline><Text>Searching with Claude…</Text><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" /></Byline></Text> : isAgenticSearchOptionFocused ? <Text dimColor={true}><Byline><KeyboardShortcutHint shortcut="Enter" action="search" /><KeyboardShortcutHint shortcut={"\u2193"} action="skip" /><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" /></Byline></Text> : viewMode === "search" ? <Text dimColor={true}><Byline><Text>{isSearching && false ? "Searching\u2026" : "Type to Search"}</Text><KeyboardShortcutHint shortcut="Enter" action="select" /><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="clear" /></Byline></Text> : <Text dimColor={true}><Byline>{onToggleAllProjects && <KeyboardShortcutHint shortcut="Ctrl+A" action={`show ${showAllProjects ? "current dir" : "all projects"}`} />}{currentBranch && <KeyboardShortcutHint shortcut="Ctrl+B" action="toggle branch" />}{hasMultipleWorktrees && <KeyboardShortcutHint shortcut="Ctrl+W" action={`show ${showAllWorktrees ? "current worktree" : "all worktrees"}`} />}<KeyboardShortcutHint shortcut="Ctrl+V" action="preview" /><KeyboardShortcutHint shortcut="Ctrl+R" action="rename" /><KeyboardShortcutHint shortcut="Ctrl+S" action={focusedLog?.favorite ? "unfavorite" : "favorite"} /><Text>Type to search</Text><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" />{getExpandCollapseHint() && <Text>{getExpandCollapseHint()}</Text>}</Byline></Text>}</Box>;
+  if ($[222] !== agenticSearchState.status || $[223] !== currentBranch || $[224] !== exitState.keyName || $[225] !== exitState.pending || $[255] !== focusedLog?.favorite || $[257] !== favoritesOnly || $[226] !== getExpandCollapseHint || $[227] !== hasMultipleWorktrees || $[228] !== isAgenticSearchOptionFocused || $[229] !== isSearching || $[230] !== onToggleAllProjects || $[231] !== showAllProjects || $[232] !== showAllWorktrees || $[233] !== viewMode) {
+    t71 = <Box paddingLeft={2}>{exitState.pending ? <Text dimColor={true}>Press {exitState.keyName} again to exit</Text> : viewMode === "rename" ? <Text dimColor={true}><Byline><KeyboardShortcutHint shortcut="Enter" action="save" /><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" /></Byline></Text> : agenticSearchState.status === "searching" ? <Text dimColor={true}><Byline><Text>Searching with Claude…</Text><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" /></Byline></Text> : isAgenticSearchOptionFocused ? <Text dimColor={true}><Byline><KeyboardShortcutHint shortcut="Enter" action="search" /><KeyboardShortcutHint shortcut={"\u2193"} action="skip" /><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" /></Byline></Text> : viewMode === "search" ? <Text dimColor={true}><Byline><Text>{isSearching && false ? "Searching\u2026" : "Type to Search"}</Text><KeyboardShortcutHint shortcut="Enter" action="select" /><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="clear" /></Byline></Text> : <Text dimColor={true}><Byline>{onToggleAllProjects && <KeyboardShortcutHint shortcut="Ctrl+A" action={`show ${showAllProjects ? "current dir" : "all projects"}`} />}{currentBranch && <KeyboardShortcutHint shortcut="Ctrl+B" action="toggle branch" />}{hasMultipleWorktrees && <KeyboardShortcutHint shortcut="Ctrl+W" action={`show ${showAllWorktrees ? "current worktree" : "all worktrees"}`} />}<KeyboardShortcutHint shortcut="Ctrl+V" action="preview" /><KeyboardShortcutHint shortcut="Ctrl+R" action="rename" /><KeyboardShortcutHint shortcut="Ctrl+S" action={favoritesOnly ? "show all" : "show favorites"} /><KeyboardShortcutHint shortcut="Ctrl+F" action={focusedLog?.favorite ? "unfavorite" : "favorite"} /><Text>Type to search</Text><ConfigurableShortcutHint action="confirm:no" context="Confirmation" fallback="Esc" description="cancel" />{getExpandCollapseHint() && <Text>{getExpandCollapseHint()}</Text>}</Byline></Text>}</Box>;
     $[222] = agenticSearchState.status;
     $[223] = currentBranch;
     $[224] = exitState.keyName;
     $[225] = exitState.pending;
     $[255] = focusedLog?.favorite;
+    $[257] = favoritesOnly;
     $[226] = getExpandCollapseHint;
     $[227] = hasMultipleWorktrees;
     $[228] = isAgenticSearchOptionFocused;
