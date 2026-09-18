@@ -560,9 +560,12 @@ async function initializeWatcherOnce(): Promise<void> {
     atomic: true,
   })
 
-  watcher.on('add', handleChange)
-  watcher.on('change', handleChange)
-  watcher.on('unlink', handleDelete)
+  // Handlers carry the generation they were installed under: a watcher torn
+  // down by the kill switch can still have events queued, and delivering one
+  // of those would speak for a gate state that no longer holds.
+  watcher.on('add', path => void handleChange(path, generation))
+  watcher.on('change', path => void handleChange(path, generation))
+  watcher.on('unlink', path => handleDelete(path, generation))
 
   // Register cleanup. Once only: the watcher can be torn down and rebuilt
   // every time the gate is toggled, and each registration is a distinct
@@ -592,10 +595,11 @@ export function disposeKeybindingWatcher(): void {
  */
 export const subscribeToKeybindingChanges = keybindingsChanged.subscribe
 
-async function handleChange(path: string): Promise<void> {
+async function handleChange(path: string, generation: number): Promise<void> {
+  if (disposed || generation !== gateGeneration) return
+
   logForDebugging(`[keybindings] Detected change to ${path}`)
 
-  const generation = gateGeneration
   try {
     const result = await loadKeybindings()
 
@@ -616,7 +620,9 @@ async function handleChange(path: string): Promise<void> {
   }
 }
 
-function handleDelete(path: string): void {
+function handleDelete(path: string, generation: number): void {
+  if (disposed || generation !== gateGeneration) return
+
   logForDebugging(`[keybindings] Detected deletion of ${path}`)
 
   // Reset to defaults when file is deleted
@@ -652,7 +658,6 @@ export function resetKeybindingLoaderForTesting(): void {
   // the next caller and then mutate state belonging to the reset run. The
   // generation bump above already makes it a no-op when it resumes.
   initializing = null
-  watcherClosing = null
   cleanupRegistered = false
   closeWatcher()
   keybindingsChanged.clear()

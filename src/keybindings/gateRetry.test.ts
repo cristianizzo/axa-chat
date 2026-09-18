@@ -35,14 +35,22 @@ let maxLiveWatchers = 0
 // close cannot mutate the next test's counters.
 let testEpoch = 0
 
+type FakeWatcher = { handlers: Record<string, (path: string) => void> }
+let watcherInstances: FakeWatcher[] = []
+
 mock.module('chokidar', () => {
   const watch = () => {
     const epoch = testEpoch
     watchCalls++
     liveWatchers++
     maxLiveWatchers = Math.max(maxLiveWatchers, liveWatchers)
+    const instance: FakeWatcher = { handlers: {} }
+    watcherInstances.push(instance)
     return {
-      on: () => {},
+      ...instance,
+      on: (event: string, handler: (path: string) => void) => {
+        instance.handlers[event] = handler
+      },
       // Deliberately slow: closing is asynchronous in chokidar too, and the
       // window between "watcher cleared" and "watcher actually closed" is
       // where a second one could be created on top of the first.
@@ -94,6 +102,7 @@ beforeEach(() => {
   closeCalls = 0
   liveWatchers = 0
   maxLiveWatchers = 0
+  watcherInstances = []
   testEpoch++
   setCachedGate(undefined)
 })
@@ -231,6 +240,27 @@ test('toggling the gate never leaves two watchers on the file', async () => {
   await new Promise(r => setTimeout(r, 400))
 
   expect(maxLiveWatchers).toBe(1)
+  expect(hasFixtureBinding()).toBe(true)
+})
+
+test('an event from a torn-down watcher is ignored', async () => {
+  gate = true
+  await mod.initializeKeybindingWatcher()
+  const oldWatcher = watcherInstances[0]!
+
+  gate = false
+  fireRefresh!()
+  gate = true
+  fireRefresh!()
+  await new Promise(r => setTimeout(r, 400))
+
+  expect(watcherInstances.length).toBe(2)
+  expect(hasFixtureBinding()).toBe(true)
+
+  // The closed watcher still had this queued. Acting on it would reset the
+  // bindings the live watcher just loaded.
+  oldWatcher.handlers.unlink!(join(configDir, 'keybindings.json'))
+
   expect(hasFixtureBinding()).toBe(true)
 })
 
