@@ -13,7 +13,10 @@ import chokidar, { type FSWatcher } from 'chokidar'
 import { readFileSync } from 'fs'
 import { readFile, stat } from 'fs/promises'
 import { dirname, join } from 'path'
-import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
+import {
+  getFeatureValue_CACHED_MAY_BE_STALE,
+  onGrowthBookRefresh,
+} from '../services/analytics/growthbook.js'
 import { logEvent } from '../services/analytics/index.js'
 import { registerCleanup } from '../utils/cleanupRegistry.js'
 import { getGlobalConfig } from '../utils/config.js'
@@ -90,6 +93,7 @@ let initialized = false
 let disposed = false
 let cachedBindings: ParsedBinding[] | null = null
 let cachedWarnings: KeybindingWarning[] = []
+let unsubscribeGateRetry: (() => void) | null = null
 const keybindingsChanged = createSignal<[result: KeybindingsLoadResult]>()
 
 /**
@@ -365,10 +369,38 @@ export function loadKeybindingsSyncWithWarnings(): KeybindingsLoadResult {
 }
 
 /**
+ * Wait for a GrowthBook refresh to turn the gate on, then drop the defaults
+ * cached while it was off and start watching.
+ *
+ * Without this the gated-off result is permanent for the process: the loaders
+ * memoise the default bindings they returned and initializeKeybindingWatcher()
+ * is only ever called once, so the user's file would stay ignored even after
+ * the gate flipped.
+ */
+function retryWatcherWhenGateEnabled(): void {
+  if (unsubscribeGateRetry) return
+
+  unsubscribeGateRetry = onGrowthBookRefresh(() => {
+    if (initialized || disposed) return
+    if (!isKeybindingCustomizationEnabled()) return
+
+    logForDebugging('[keybindings] Gate enabled after startup - reloading')
+    cachedBindings = null
+    cachedWarnings = []
+    void initializeKeybindingWatcher().then(() => {
+      keybindingsChanged.emit(loadKeybindingsSyncWithWarnings())
+    })
+  })
+}
+
+/**
  * Initialize file watching for keybindings.json.
  * Call this once when the app starts.
  *
- * No-op when keybinding customization is gated off.
+ * When the gate is off this installs no watcher, but retries once GrowthBook
+ * refreshes: the gate is a runtime kill switch, so a value arriving after
+ * startup has to be able to turn customization back on for the rest of the
+ * process.
  */
 export async function initializeKeybindingWatcher(): Promise<void> {
   if (initialized || disposed) return
@@ -378,8 +410,12 @@ export async function initializeKeybindingWatcher(): Promise<void> {
     logForDebugging(
       '[keybindings] Skipping file watcher - user customization disabled',
     )
+    retryWatcherWhenGateEnabled()
     return
   }
+
+  unsubscribeGateRetry?.()
+  unsubscribeGateRetry = null
 
   const userPath = getKeybindingsPath()
   const watchDir = dirname(userPath)
@@ -428,6 +464,8 @@ export async function initializeKeybindingWatcher(): Promise<void> {
  */
 export function disposeKeybindingWatcher(): void {
   disposed = true
+  unsubscribeGateRetry?.()
+  unsubscribeGateRetry = null
   if (watcher) {
     void watcher.close()
     watcher = null
@@ -484,6 +522,8 @@ export function resetKeybindingLoaderForTesting(): void {
   cachedBindings = null
   cachedWarnings = []
   lastCustomBindingsLogDate = null
+  unsubscribeGateRetry?.()
+  unsubscribeGateRetry = null
   if (watcher) {
     void watcher.close()
     watcher = null
