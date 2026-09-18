@@ -95,6 +95,12 @@ let cachedBindings: ParsedBinding[] | null = null
 let cachedWarnings: KeybindingWarning[] = []
 let unsubscribeGateChanges: (() => void) | null = null
 let gateEnabled: boolean | null = null
+/**
+ * Bumped on every gate transition. Async work that reads the gate before an
+ * await captures this and bails if it changed, so a load started while the
+ * gate was on cannot commit its result after the kill switch has been thrown.
+ */
+let gateGeneration = 0
 let initializing: Promise<void> | null = null
 const keybindingsChanged = createSignal<[result: KeybindingsLoadResult]>()
 
@@ -387,6 +393,7 @@ function watchGateChanges(): void {
     const enabled = isKeybindingCustomizationEnabled()
     if (enabled === gateEnabled) return
     gateEnabled = enabled
+    gateGeneration++
 
     cachedBindings = null
     cachedWarnings = []
@@ -447,6 +454,7 @@ async function initializeWatcherOnce(): Promise<void> {
     return
   }
 
+  const generation = gateGeneration
   const userPath = getKeybindingsPath()
   const watchDir = dirname(userPath)
 
@@ -461,6 +469,14 @@ async function initializeWatcherOnce(): Promise<void> {
     }
   } catch {
     logForDebugging(`[keybindings] Not watching: ${watchDir} does not exist`)
+    return
+  }
+
+  // The gate could have been thrown while the directory check was in flight;
+  // installing the watcher now would outlive the kill switch until the next
+  // refresh.
+  if (disposed || generation !== gateGeneration) {
+    logForDebugging('[keybindings] Gate changed during init - not watching')
     return
   }
 
@@ -497,6 +513,7 @@ export function disposeKeybindingWatcher(): void {
   unsubscribeGateChanges?.()
   unsubscribeGateChanges = null
   gateEnabled = null
+  gateGeneration++
   if (watcher) {
     void watcher.close()
     watcher = null
@@ -513,8 +530,17 @@ export const subscribeToKeybindingChanges = keybindingsChanged.subscribe
 async function handleChange(path: string): Promise<void> {
   logForDebugging(`[keybindings] Detected change to ${path}`)
 
+  const generation = gateGeneration
   try {
     const result = await loadKeybindings()
+
+    // The gate may have been thrown while the file was being read; committing
+    // now would put the user's bindings back after the kill switch.
+    if (disposed || generation !== gateGeneration) {
+      logForDebugging('[keybindings] Gate changed during load - discarding')
+      return
+    }
+
     cachedBindings = result.bindings
     cachedWarnings = result.warnings
 
@@ -556,6 +582,7 @@ export function resetKeybindingLoaderForTesting(): void {
   unsubscribeGateChanges?.()
   unsubscribeGateChanges = null
   gateEnabled = null
+  gateGeneration++
   if (watcher) {
     void watcher.close()
     watcher = null

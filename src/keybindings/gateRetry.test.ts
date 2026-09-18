@@ -41,6 +41,18 @@ mock.module('chokidar', () => {
 })
 
 const TEST_ACTION = 'command:gate-retry-fixture'
+const KEYBINDING_GATE = 'tengu_keybinding_customization_release'
+
+// saveGlobalConfig() only mutates an in-memory object under NODE_ENV=test, so
+// this never touches the real ~/.claude/config.json.
+const { saveGlobalConfig } = await import('../utils/config.js')
+
+const setCachedGate = (value: boolean | undefined) =>
+  saveGlobalConfig(config => ({
+    ...config,
+    cachedGrowthBookFeatures:
+      value === undefined ? {} : { [KEYBINDING_GATE]: value },
+  }))
 
 let configDir: string
 let previousConfigDir: string | undefined
@@ -63,6 +75,7 @@ beforeEach(() => {
   gate = false
   watchCalls = 0
   closeCalls = 0
+  setCachedGate(undefined)
 })
 
 afterEach(() => {
@@ -147,5 +160,32 @@ test('an absent gate enables customization', async () => {
   gate = undefined
   await mod.initializeKeybindingWatcher()
 
+  expect(hasFixtureBinding()).toBe(true)
+})
+
+/**
+ * The production shape of a kill switch: GrowthBook is disabled, so the getter
+ * hands back its fallback without ever consulting the disk cache, and the
+ * explicit `false` only exists in cachedGrowthBookFeatures. Reading it there is
+ * the sole reason the gate still works in that state.
+ */
+test('an explicit false in the disk cache still disables customization', async () => {
+  gate = undefined
+  setCachedGate(false)
+
+  expect(mod.isKeybindingCustomizationEnabled()).toBe(false)
+
+  await mod.initializeKeybindingWatcher()
+  expect(hasFixtureBinding()).toBe(false)
+  expect(watchCalls).toBe(0)
+})
+
+test('an explicit true in the disk cache enables customization', async () => {
+  gate = undefined
+  setCachedGate(true)
+
+  expect(mod.isKeybindingCustomizationEnabled()).toBe(true)
+
+  await mod.initializeKeybindingWatcher()
   expect(hasFixtureBinding()).toBe(true)
 })
