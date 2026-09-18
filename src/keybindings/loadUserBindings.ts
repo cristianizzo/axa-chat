@@ -93,7 +93,8 @@ let initialized = false
 let disposed = false
 let cachedBindings: ParsedBinding[] | null = null
 let cachedWarnings: KeybindingWarning[] = []
-let unsubscribeGateRetry: (() => void) | null = null
+let unsubscribeGateChanges: (() => void) | null = null
+let gateEnabled: boolean | null = null
 let initializing: Promise<void> | null = null
 const keybindingsChanged = createSignal<[result: KeybindingsLoadResult]>()
 
@@ -370,24 +371,40 @@ export function loadKeybindingsSyncWithWarnings(): KeybindingsLoadResult {
 }
 
 /**
- * Wait for a GrowthBook refresh to turn the gate on, then drop the defaults
- * cached while it was off and start watching.
+ * Follow the gate for the life of the process, in both directions.
  *
- * Without this the gated-off result is permanent for the process: the loaders
- * memoise the default bindings they returned and initializeKeybindingWatcher()
- * is only ever called once, so the user's file would stay ignored even after
- * the gate flipped.
+ * The loaders memoise whatever they returned and initializeKeybindingWatcher()
+ * is only ever called once, so without this a value observed at startup would
+ * be permanent: a gate arriving late could never turn customization on, and a
+ * kill switch thrown later could never turn it off.
  */
-function retryWatcherWhenGateEnabled(): void {
-  if (unsubscribeGateRetry) return
+function watchGateChanges(): void {
+  if (unsubscribeGateChanges) return
 
-  unsubscribeGateRetry = onGrowthBookRefresh(() => {
-    if (initialized || disposed) return
-    if (!isKeybindingCustomizationEnabled()) return
+  unsubscribeGateChanges = onGrowthBookRefresh(() => {
+    if (disposed) return
 
-    logForDebugging('[keybindings] Gate enabled after startup - reloading')
+    const enabled = isKeybindingCustomizationEnabled()
+    if (enabled === gateEnabled) return
+    gateEnabled = enabled
+
     cachedBindings = null
     cachedWarnings = []
+
+    if (!enabled) {
+      logForDebugging('[keybindings] Gate disabled after startup - reverting')
+      initialized = false
+      if (watcher) {
+        void watcher.close()
+        watcher = null
+      }
+      const defaultBindings = getDefaultParsedBindings()
+      cachedBindings = defaultBindings
+      keybindingsChanged.emit({ bindings: defaultBindings, warnings: [] })
+      return
+    }
+
+    logForDebugging('[keybindings] Gate enabled after startup - reloading')
     void initializeKeybindingWatcher().then(() => {
       keybindingsChanged.emit(loadKeybindingsSyncWithWarnings())
     })
@@ -398,10 +415,11 @@ function retryWatcherWhenGateEnabled(): void {
  * Initialize file watching for keybindings.json.
  * Call this once when the app starts.
  *
- * When the gate is off this installs no watcher, but retries once GrowthBook
- * refreshes: the gate is a runtime kill switch, so a value arriving after
- * startup has to be able to turn customization back on for the rest of the
- * process.
+ * When the gate is off this installs no file watcher. Either way it subscribes
+ * to GrowthBook refreshes for the life of the process: the gate is a runtime
+ * kill switch, so a value arriving after startup has to be able to turn
+ * customization on, and a later flip back to off has to revert to the
+ * defaults immediately rather than waiting for the file to change.
  *
  * Safe to call concurrently: `initialized` is only set once the directory
  * check has resolved, so two overlapping calls would otherwise both get past
@@ -418,17 +436,16 @@ export function initializeKeybindingWatcher(): Promise<void> {
 async function initializeWatcherOnce(): Promise<void> {
   if (initialized || disposed) return
 
+  gateEnabled = isKeybindingCustomizationEnabled()
+  watchGateChanges()
+
   // Skip file watching when the gate is off
-  if (!isKeybindingCustomizationEnabled()) {
+  if (!gateEnabled) {
     logForDebugging(
       '[keybindings] Skipping file watcher - user customization disabled',
     )
-    retryWatcherWhenGateEnabled()
     return
   }
-
-  unsubscribeGateRetry?.()
-  unsubscribeGateRetry = null
 
   const userPath = getKeybindingsPath()
   const watchDir = dirname(userPath)
@@ -477,8 +494,9 @@ async function initializeWatcherOnce(): Promise<void> {
  */
 export function disposeKeybindingWatcher(): void {
   disposed = true
-  unsubscribeGateRetry?.()
-  unsubscribeGateRetry = null
+  unsubscribeGateChanges?.()
+  unsubscribeGateChanges = null
+  gateEnabled = null
   if (watcher) {
     void watcher.close()
     watcher = null
@@ -535,8 +553,9 @@ export function resetKeybindingLoaderForTesting(): void {
   cachedBindings = null
   cachedWarnings = []
   lastCustomBindingsLogDate = null
-  unsubscribeGateRetry?.()
-  unsubscribeGateRetry = null
+  unsubscribeGateChanges?.()
+  unsubscribeGateChanges = null
+  gateEnabled = null
   if (watcher) {
     void watcher.close()
     watcher = null
