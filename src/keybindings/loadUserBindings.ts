@@ -102,6 +102,9 @@ let gateEnabled: boolean | null = null
  */
 let gateGeneration = 0
 let initializing: Promise<void> | null = null
+/** Resolves once a watcher being torn down has really closed. */
+let watcherClosing: Promise<void> | null = null
+let cleanupRegistered = false
 const keybindingsChanged = createSignal<[result: KeybindingsLoadResult]>()
 
 /**
@@ -385,22 +388,38 @@ export function loadKeybindingsSyncWithWarnings(): KeybindingsLoadResult {
  * kill switch thrown later could never turn it off.
  */
 /**
+ * Tear the watcher down, keeping hold of the close so a watcher created
+ * afterwards cannot overlap with it: close() is async while `watcher` is
+ * cleared immediately, and an off/on cycle inside that window would otherwise
+ * leave two watchers emitting reloads.
+ */
+function closeWatcher(): void {
+  if (!watcher) return
+  const closing = watcher.close()
+  watcher = null
+  watcherClosing = Promise.resolve(closing).catch(() => {})
+}
+
+/**
  * Drop anything loaded from the user's file and fall back to the defaults.
  *
- * Only emits when the cache actually held user bindings: user bindings are
+ * Only emits when something is actually being discarded: user bindings are
  * always appended to the defaults, so a differing length is the cache holding
- * something the gate no longer allows. Staying quiet otherwise keeps startup
- * from emitting a change nobody made.
+ * something the gate no longer allows, and warnings have to count too — a
+ * malformed config caches the defaults but leaves its errors on screen.
+ * Staying quiet otherwise keeps startup from emitting a change nobody made.
  */
 function revertToDefaultBindings(): void {
   const defaultBindings = getDefaultParsedBindings()
-  const hadUserBindings =
-    cachedBindings !== null && cachedBindings.length !== defaultBindings.length
+  const hadUserState =
+    (cachedBindings !== null &&
+      cachedBindings.length !== defaultBindings.length) ||
+    cachedWarnings.length > 0
 
   cachedBindings = defaultBindings
   cachedWarnings = []
 
-  if (hadUserBindings) {
+  if (hadUserState) {
     keybindingsChanged.emit({ bindings: defaultBindings, warnings: [] })
   }
 }
@@ -419,10 +438,7 @@ function watchGateChanges(): void {
     if (!enabled) {
       logForDebugging('[keybindings] Gate disabled after startup - reverting')
       initialized = false
-      if (watcher) {
-        void watcher.close()
-        watcher = null
-      }
+      closeWatcher()
       revertToDefaultBindings()
       return
     }
@@ -515,6 +531,10 @@ async function initializeWatcherOnce(): Promise<void> {
     return
   }
 
+  // A watcher torn down by the kill switch may still be closing; overlapping
+  // with it would have both of them reporting the same file change.
+  if (watcherClosing) await watcherClosing
+
   // The gate could have been thrown while the directory check was in flight;
   // installing the watcher now would outlive the kill switch until the next
   // refresh.
@@ -544,8 +564,13 @@ async function initializeWatcherOnce(): Promise<void> {
   watcher.on('change', handleChange)
   watcher.on('unlink', handleDelete)
 
-  // Register cleanup
-  registerCleanup(async () => disposeKeybindingWatcher())
+  // Register cleanup. Once only: the watcher can be torn down and rebuilt
+  // every time the gate is toggled, and each registration is a distinct
+  // closure the global cleanup set would keep.
+  if (!cleanupRegistered) {
+    cleanupRegistered = true
+    registerCleanup(async () => disposeKeybindingWatcher())
+  }
 }
 
 /**
@@ -557,10 +582,7 @@ export function disposeKeybindingWatcher(): void {
   unsubscribeGateChanges = null
   gateEnabled = null
   gateGeneration++
-  if (watcher) {
-    void watcher.close()
-    watcher = null
-  }
+  closeWatcher()
   keybindingsChanged.clear()
 }
 
@@ -626,9 +648,12 @@ export function resetKeybindingLoaderForTesting(): void {
   unsubscribeGateChanges = null
   gateEnabled = null
   gateGeneration++
-  if (watcher) {
-    void watcher.close()
-    watcher = null
-  }
+  // An initialization still awaiting its stat() would otherwise be handed to
+  // the next caller and then mutate state belonging to the reset run. The
+  // generation bump above already makes it a no-op when it resumes.
+  initializing = null
+  watcherClosing = null
+  cleanupRegistered = false
+  closeWatcher()
   keybindingsChanged.clear()
 }

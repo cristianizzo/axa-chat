@@ -27,13 +27,30 @@ mock.module('../services/analytics/growthbook.js', () => ({
 let watchCalls = 0
 let closeCalls = 0
 
+let liveWatchers = 0
+let maxLiveWatchers = 0
+
+// Closing is slow on purpose, which means a close can outlive the test that
+// started it. Every watcher is stamped with the test it belongs to so a late
+// close cannot mutate the next test's counters.
+let testEpoch = 0
+
 mock.module('chokidar', () => {
   const watch = () => {
+    const epoch = testEpoch
     watchCalls++
+    liveWatchers++
+    maxLiveWatchers = Math.max(maxLiveWatchers, liveWatchers)
     return {
       on: () => {},
+      // Deliberately slow: closing is asynchronous in chokidar too, and the
+      // window between "watcher cleared" and "watcher actually closed" is
+      // where a second one could be created on top of the first.
       close: async () => {
+        await new Promise(r => setTimeout(r, 50))
+        if (epoch !== testEpoch) return
         closeCalls++
+        liveWatchers--
       },
     }
   }
@@ -75,6 +92,9 @@ beforeEach(() => {
   gate = false
   watchCalls = 0
   closeCalls = 0
+  liveWatchers = 0
+  maxLiveWatchers = 0
+  testEpoch++
   setCachedGate(undefined)
 })
 
@@ -196,6 +216,39 @@ test('a gate that flips off and on mid-init still ends up watching', async () =>
 
   expect(hasFixtureBinding()).toBe(true)
   expect(watchCalls).toBe(1)
+})
+
+test('toggling the gate never leaves two watchers on the file', async () => {
+  gate = true
+  await mod.initializeKeybindingWatcher()
+
+  // Off and straight back on, inside the window where the first watcher is
+  // still closing.
+  gate = false
+  fireRefresh!()
+  gate = true
+  fireRefresh!()
+  await new Promise(r => setTimeout(r, 400))
+
+  expect(maxLiveWatchers).toBe(1)
+  expect(hasFixtureBinding()).toBe(true)
+})
+
+test('the kill switch clears warnings from a malformed config', async () => {
+  writeFileSync(join(configDir, 'keybindings.json'), '{ "bindings": "nope" }')
+  gate = true
+  expect(mod.loadKeybindingsSyncWithWarnings().warnings.length).toBe(1)
+
+  const emitted: number[] = []
+  mod.subscribeToKeybindingChanges(result => emitted.push(result.warnings.length))
+
+  gate = false
+  await mod.initializeKeybindingWatcher()
+
+  // The binding count already matches the defaults here, so only the warnings
+  // distinguish the stale result from the reverted one.
+  expect(mod.getCachedKeybindingWarnings()).toEqual([])
+  expect(emitted).toEqual([0])
 })
 
 test('an absent gate enables customization', async () => {
