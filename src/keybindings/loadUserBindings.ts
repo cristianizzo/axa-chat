@@ -4,18 +4,22 @@
  * Loads keybindings from ~/.claude/keybindings.json and watches
  * for changes to reload them automatically.
  *
- * NOTE: User keybinding customization is currently only available for
- * Anthropic employees (USER_TYPE === 'ant'). External users always
- * use the default bindings.
+ * User keybinding customization is enabled by default. It can still be turned
+ * off remotely through the tengu_keybinding_customization_release gate; see
+ * isKeybindingCustomizationEnabled().
  */
 
 import chokidar, { type FSWatcher } from 'chokidar'
 import { readFileSync } from 'fs'
 import { readFile, stat } from 'fs/promises'
 import { dirname, join } from 'path'
-import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
+import {
+  getFeatureValue_CACHED_MAY_BE_STALE,
+  onGrowthBookRefresh,
+} from '../services/analytics/growthbook.js'
 import { logEvent } from '../services/analytics/index.js'
 import { registerCleanup } from '../utils/cleanupRegistry.js'
+import { getGlobalConfig } from '../utils/config.js'
 import { logForDebugging } from '../utils/debug.js'
 import { getClaudeConfigHomeDir } from '../utils/envUtils.js'
 import { errorMessage, isENOENT } from '../utils/errors.js'
@@ -30,19 +34,40 @@ import {
   validateBindings,
 } from './validate.js'
 
+const KEYBINDING_GATE = 'tengu_keybinding_customization_release'
+
 /**
  * Check if keybinding customization is enabled.
  *
- * Returns true if the tengu_keybinding_customization_release GrowthBook gate is enabled.
+ * Enabled unless tengu_keybinding_customization_release explicitly says
+ * otherwise, so the gate keeps working as a remote kill switch.
+ *
+ * The cached value has to be read directly: getFeatureValue_CACHED_MAY_BE_STALE
+ * returns its default before ever consulting cachedGrowthBookFeatures when 1P
+ * event logging is off (growthbook.ts), which is precisely the state where the
+ * absent gate used to resolve to `false`. loadKeybindings() then returned early
+ * and ~/.claude/keybindings.json was never read at all — a user binding did
+ * nothing, with no warning to tell it apart from a malformed config file.
  *
  * This function is exported so other parts of the codebase (e.g., /doctor)
  * can check the same condition consistently.
  */
 export function isKeybindingCustomizationEnabled(): boolean {
-  return getFeatureValue_CACHED_MAY_BE_STALE(
-    'tengu_keybinding_customization_release',
-    false,
+  const gate = getFeatureValue_CACHED_MAY_BE_STALE<boolean | undefined>(
+    KEYBINDING_GATE,
+    undefined,
   )
+  if (typeof gate === 'boolean') return gate
+
+  try {
+    const cached = getGlobalConfig().cachedGrowthBookFeatures?.[KEYBINDING_GATE]
+    if (typeof cached === 'boolean') return cached
+  } catch {
+    // getGlobalConfig() throws before config reading is allowed; treat the
+    // gate as absent, same as the disk-cache fallback inside GrowthBook.
+  }
+
+  return true
 }
 
 /**
@@ -68,6 +93,18 @@ let initialized = false
 let disposed = false
 let cachedBindings: ParsedBinding[] | null = null
 let cachedWarnings: KeybindingWarning[] = []
+let unsubscribeGateChanges: (() => void) | null = null
+let gateEnabled: boolean | null = null
+/**
+ * Bumped on every gate transition. Async work that reads the gate before an
+ * await captures this and bails if it changed, so a load started while the
+ * gate was on cannot commit its result after the kill switch has been thrown.
+ */
+let gateGeneration = 0
+let initializing: Promise<void> | null = null
+/** Resolves once a watcher being torn down has really closed. */
+let watcherClosing: Promise<void> | null = null
+let cleanupRegistered = false
 const keybindingsChanged = createSignal<[result: KeybindingsLoadResult]>()
 
 /**
@@ -127,13 +164,12 @@ function getDefaultParsedBindings(): ParsedBinding[] {
  * Load and parse keybindings from user config file.
  * Returns merged default + user bindings along with validation warnings.
  *
- * For external users, always returns default bindings only.
- * User customization is currently gated to Anthropic employees.
+ * Returns default bindings only when the gate is off.
  */
 export async function loadKeybindings(): Promise<KeybindingsLoadResult> {
   const defaultBindings = getDefaultParsedBindings()
 
-  // Skip user config loading for external users
+  // Skip user config loading when the gate is off
   if (!isKeybindingCustomizationEnabled()) {
     return { bindings: defaultBindings, warnings: [] }
   }
@@ -253,8 +289,7 @@ export function loadKeybindingsSync(): ParsedBinding[] {
  * Load keybindings synchronously with validation warnings.
  * Uses cached values if available.
  *
- * For external users, always returns default bindings only.
- * User customization is currently gated to Anthropic employees.
+ * Returns default bindings only when the gate is off.
  */
 export function loadKeybindingsSyncWithWarnings(): KeybindingsLoadResult {
   if (cachedBindings) {
@@ -263,7 +298,7 @@ export function loadKeybindingsSyncWithWarnings(): KeybindingsLoadResult {
 
   const defaultBindings = getDefaultParsedBindings()
 
-  // Skip user config loading for external users
+  // Skip user config loading when the gate is off
   if (!isKeybindingCustomizationEnabled()) {
     cachedBindings = defaultBindings
     cachedWarnings = []
@@ -345,22 +380,144 @@ export function loadKeybindingsSyncWithWarnings(): KeybindingsLoadResult {
 }
 
 /**
+ * Tear the watcher down, keeping hold of the close so a watcher created
+ * afterwards cannot overlap with it: close() is async while `watcher` is
+ * cleared immediately, and an off/on cycle inside that window would otherwise
+ * leave two watchers emitting reloads.
+ */
+function closeWatcher(): void {
+  if (!watcher) return
+  const closing = watcher.close()
+  watcher = null
+  watcherClosing = Promise.resolve(closing).catch(() => {})
+}
+
+/**
+ * Drop anything loaded from the user's file and fall back to the defaults.
+ *
+ * Only emits when something is actually being discarded: user bindings are
+ * always appended to the defaults, so a differing length is the cache holding
+ * something the gate no longer allows, and warnings have to count too — a
+ * malformed config caches the defaults but leaves its errors on screen.
+ * Staying quiet otherwise keeps startup from emitting a change nobody made.
+ */
+function revertToDefaultBindings(): void {
+  const defaultBindings = getDefaultParsedBindings()
+  const hadUserState =
+    (cachedBindings !== null &&
+      cachedBindings.length !== defaultBindings.length) ||
+    cachedWarnings.length > 0
+
+  cachedBindings = defaultBindings
+  cachedWarnings = []
+
+  if (hadUserState) {
+    keybindingsChanged.emit({ bindings: defaultBindings, warnings: [] })
+  }
+}
+
+/**
+ * Follow the gate for the life of the process, in both directions.
+ *
+ * The loaders memoise whatever they returned and initializeKeybindingWatcher()
+ * is only ever called once, so without this a value observed at startup would
+ * be permanent: a gate arriving late could never turn customization on, and a
+ * kill switch thrown later could never turn it off.
+ */
+function watchGateChanges(): void {
+  if (unsubscribeGateChanges) return
+
+  unsubscribeGateChanges = onGrowthBookRefresh(() => {
+    if (disposed) return
+
+    const enabled = isKeybindingCustomizationEnabled()
+    if (enabled === gateEnabled) return
+    gateEnabled = enabled
+    gateGeneration++
+
+    if (!enabled) {
+      logForDebugging('[keybindings] Gate disabled after startup - reverting')
+      initialized = false
+      closeWatcher()
+      revertToDefaultBindings()
+      return
+    }
+
+    logForDebugging('[keybindings] Gate enabled after startup - reloading')
+    cachedBindings = null
+    cachedWarnings = []
+    void reinitializeAfterGateEnabled()
+  })
+}
+
+/**
+ * Bring the watcher up after the gate turned on, then publish the result.
+ *
+ * The first call can join an initialization that started before the gate
+ * moved; that one skips installing a watcher because its generation check
+ * fires, which would otherwise leave customization enabled with nothing
+ * watching the file for the rest of the process. Hence the second attempt.
+ */
+async function reinitializeAfterGateEnabled(): Promise<void> {
+  const generation = gateGeneration
+
+  await initializeKeybindingWatcher()
+  if (disposed || generation !== gateGeneration) return
+
+  if (!initialized) {
+    await initializeKeybindingWatcher()
+    if (disposed || generation !== gateGeneration) return
+  }
+
+  keybindingsChanged.emit(loadKeybindingsSyncWithWarnings())
+}
+
+/**
  * Initialize file watching for keybindings.json.
  * Call this once when the app starts.
  *
- * For external users, this is a no-op since user customization is disabled.
+ * When the gate is off this installs no file watcher. Either way it subscribes
+ * to GrowthBook refreshes for the life of the process: the gate is a runtime
+ * kill switch, so a value arriving after startup has to be able to turn
+ * customization on, and a later flip back to off has to revert to the
+ * defaults immediately rather than waiting for the file to change.
+ *
+ * Safe to call concurrently: `initialized` is only set once the directory
+ * check has resolved, so two overlapping calls would otherwise both get past
+ * it and create a second chokidar watcher.
  */
-export async function initializeKeybindingWatcher(): Promise<void> {
+export function initializeKeybindingWatcher(): Promise<void> {
+  if (initializing) return initializing
+  // Only the promise still occupying the slot may clear it: a reset can drop
+  // an older one while it is pending, and letting that one null the slot on
+  // settling would release the single-flight guard for a newer run.
+  const current: Promise<void> = initializeWatcherOnce().finally(() => {
+    if (initializing === current) initializing = null
+  })
+  initializing = current
+  return current
+}
+
+async function initializeWatcherOnce(): Promise<void> {
   if (initialized || disposed) return
 
-  // Skip file watching for external users
-  if (!isKeybindingCustomizationEnabled()) {
+  gateEnabled = isKeybindingCustomizationEnabled()
+  watchGateChanges()
+
+  // Skip file watching when the gate is off
+  if (!gateEnabled) {
     logForDebugging(
       '[keybindings] Skipping file watcher - user customization disabled',
     )
+    // The sync loader runs first and memoises its result, so the cache can
+    // already hold bindings read while the gate was still on. Nothing would
+    // re-check it: loadKeybindingsSync() returns the cache without consulting
+    // the gate at all.
+    revertToDefaultBindings()
     return
   }
 
+  const generation = gateGeneration
   const userPath = getKeybindingsPath()
   const watchDir = dirname(userPath)
 
@@ -375,6 +532,18 @@ export async function initializeKeybindingWatcher(): Promise<void> {
     }
   } catch {
     logForDebugging(`[keybindings] Not watching: ${watchDir} does not exist`)
+    return
+  }
+
+  // A watcher torn down by the kill switch may still be closing; overlapping
+  // with it would have both of them reporting the same file change.
+  if (watcherClosing) await watcherClosing
+
+  // The gate could have been thrown while the directory check was in flight;
+  // installing the watcher now would outlive the kill switch until the next
+  // refresh.
+  if (disposed || generation !== gateGeneration) {
+    logForDebugging('[keybindings] Gate changed during init - not watching')
     return
   }
 
@@ -395,12 +564,20 @@ export async function initializeKeybindingWatcher(): Promise<void> {
     atomic: true,
   })
 
-  watcher.on('add', handleChange)
-  watcher.on('change', handleChange)
-  watcher.on('unlink', handleDelete)
+  // Handlers carry the generation they were installed under: a watcher torn
+  // down by the kill switch can still have events queued, and delivering one
+  // of those would speak for a gate state that no longer holds.
+  watcher.on('add', path => void handleChange(path, generation))
+  watcher.on('change', path => void handleChange(path, generation))
+  watcher.on('unlink', path => handleDelete(path, generation))
 
-  // Register cleanup
-  registerCleanup(async () => disposeKeybindingWatcher())
+  // Register cleanup. Once only: the watcher can be torn down and rebuilt
+  // every time the gate is toggled, and each registration is a distinct
+  // closure the global cleanup set would keep.
+  if (!cleanupRegistered) {
+    cleanupRegistered = true
+    registerCleanup(async () => disposeKeybindingWatcher())
+  }
 }
 
 /**
@@ -408,10 +585,11 @@ export async function initializeKeybindingWatcher(): Promise<void> {
  */
 export function disposeKeybindingWatcher(): void {
   disposed = true
-  if (watcher) {
-    void watcher.close()
-    watcher = null
-  }
+  unsubscribeGateChanges?.()
+  unsubscribeGateChanges = null
+  gateEnabled = null
+  gateGeneration++
+  closeWatcher()
   keybindingsChanged.clear()
 }
 
@@ -421,11 +599,21 @@ export function disposeKeybindingWatcher(): void {
  */
 export const subscribeToKeybindingChanges = keybindingsChanged.subscribe
 
-async function handleChange(path: string): Promise<void> {
+async function handleChange(path: string, generation: number): Promise<void> {
+  if (disposed || generation !== gateGeneration) return
+
   logForDebugging(`[keybindings] Detected change to ${path}`)
 
   try {
     const result = await loadKeybindings()
+
+    // The gate may have been thrown while the file was being read; committing
+    // now would put the user's bindings back after the kill switch.
+    if (disposed || generation !== gateGeneration) {
+      logForDebugging('[keybindings] Gate changed during load - discarding')
+      return
+    }
+
     cachedBindings = result.bindings
     cachedWarnings = result.warnings
 
@@ -436,7 +624,9 @@ async function handleChange(path: string): Promise<void> {
   }
 }
 
-function handleDelete(path: string): void {
+function handleDelete(path: string, generation: number): void {
+  if (disposed || generation !== gateGeneration) return
+
   logForDebugging(`[keybindings] Detected deletion of ${path}`)
 
   // Reset to defaults when file is deleted
@@ -464,9 +654,15 @@ export function resetKeybindingLoaderForTesting(): void {
   cachedBindings = null
   cachedWarnings = []
   lastCustomBindingsLogDate = null
-  if (watcher) {
-    void watcher.close()
-    watcher = null
-  }
+  unsubscribeGateChanges?.()
+  unsubscribeGateChanges = null
+  gateEnabled = null
+  gateGeneration++
+  // An initialization still awaiting its stat() would otherwise be handed to
+  // the next caller and then mutate state belonging to the reset run. The
+  // generation bump above already makes it a no-op when it resumes.
+  initializing = null
+  cleanupRegistered = false
+  closeWatcher()
   keybindingsChanged.clear()
 }
