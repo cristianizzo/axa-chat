@@ -4,9 +4,9 @@
  * Loads keybindings from ~/.claude/keybindings.json and watches
  * for changes to reload them automatically.
  *
- * NOTE: User keybinding customization is currently only available for
- * Anthropic employees (USER_TYPE === 'ant'). External users always
- * use the default bindings.
+ * User keybinding customization is enabled by default. It can still be turned
+ * off remotely through the tengu_keybinding_customization_release gate; see
+ * isKeybindingCustomizationEnabled().
  */
 
 import chokidar, { type FSWatcher } from 'chokidar'
@@ -16,6 +16,7 @@ import { dirname, join } from 'path'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import { logEvent } from '../services/analytics/index.js'
 import { registerCleanup } from '../utils/cleanupRegistry.js'
+import { getGlobalConfig } from '../utils/config.js'
 import { logForDebugging } from '../utils/debug.js'
 import { getClaudeConfigHomeDir } from '../utils/envUtils.js'
 import { errorMessage, isENOENT } from '../utils/errors.js'
@@ -30,23 +31,40 @@ import {
   validateBindings,
 } from './validate.js'
 
+const KEYBINDING_GATE = 'tengu_keybinding_customization_release'
+
 /**
  * Check if keybinding customization is enabled.
  *
- * The tengu_keybinding_customization_release gate stays as the default, but a
- * local `true` wins. GrowthBook only populates its cache when 1P event logging
- * is on; on this fork it usually isn't, so the gate resolves to its `false`
- * default, loadKeybindings() returns early and ~/.claude/keybindings.json is
- * never read at all — indistinguishable from a malformed config file.
+ * Enabled unless tengu_keybinding_customization_release explicitly says
+ * otherwise, so the gate keeps working as a remote kill switch.
+ *
+ * The cached value has to be read directly: getFeatureValue_CACHED_MAY_BE_STALE
+ * returns its default before ever consulting cachedGrowthBookFeatures when 1P
+ * event logging is off (growthbook.ts), which is precisely the state where the
+ * absent gate used to resolve to `false`. loadKeybindings() then returned early
+ * and ~/.claude/keybindings.json was never read at all — a user binding did
+ * nothing, with no warning to tell it apart from a malformed config file.
  *
  * This function is exported so other parts of the codebase (e.g., /doctor)
  * can check the same condition consistently.
  */
 export function isKeybindingCustomizationEnabled(): boolean {
-  return getFeatureValue_CACHED_MAY_BE_STALE(
-    'tengu_keybinding_customization_release',
-    true,
+  const gate = getFeatureValue_CACHED_MAY_BE_STALE<boolean | undefined>(
+    KEYBINDING_GATE,
+    undefined,
   )
+  if (typeof gate === 'boolean') return gate
+
+  try {
+    const cached = getGlobalConfig().cachedGrowthBookFeatures?.[KEYBINDING_GATE]
+    if (typeof cached === 'boolean') return cached
+  } catch {
+    // getGlobalConfig() throws before config reading is allowed; treat the
+    // gate as absent, same as the disk-cache fallback inside GrowthBook.
+  }
+
+  return true
 }
 
 /**
@@ -131,13 +149,12 @@ function getDefaultParsedBindings(): ParsedBinding[] {
  * Load and parse keybindings from user config file.
  * Returns merged default + user bindings along with validation warnings.
  *
- * For external users, always returns default bindings only.
- * User customization is currently gated to Anthropic employees.
+ * Returns default bindings only when the gate is off.
  */
 export async function loadKeybindings(): Promise<KeybindingsLoadResult> {
   const defaultBindings = getDefaultParsedBindings()
 
-  // Skip user config loading for external users
+  // Skip user config loading when the gate is off
   if (!isKeybindingCustomizationEnabled()) {
     return { bindings: defaultBindings, warnings: [] }
   }
@@ -257,8 +274,7 @@ export function loadKeybindingsSync(): ParsedBinding[] {
  * Load keybindings synchronously with validation warnings.
  * Uses cached values if available.
  *
- * For external users, always returns default bindings only.
- * User customization is currently gated to Anthropic employees.
+ * Returns default bindings only when the gate is off.
  */
 export function loadKeybindingsSyncWithWarnings(): KeybindingsLoadResult {
   if (cachedBindings) {
@@ -267,7 +283,7 @@ export function loadKeybindingsSyncWithWarnings(): KeybindingsLoadResult {
 
   const defaultBindings = getDefaultParsedBindings()
 
-  // Skip user config loading for external users
+  // Skip user config loading when the gate is off
   if (!isKeybindingCustomizationEnabled()) {
     cachedBindings = defaultBindings
     cachedWarnings = []
@@ -352,12 +368,12 @@ export function loadKeybindingsSyncWithWarnings(): KeybindingsLoadResult {
  * Initialize file watching for keybindings.json.
  * Call this once when the app starts.
  *
- * For external users, this is a no-op since user customization is disabled.
+ * No-op when keybinding customization is gated off.
  */
 export async function initializeKeybindingWatcher(): Promise<void> {
   if (initialized || disposed) return
 
-  // Skip file watching for external users
+  // Skip file watching when the gate is off
   if (!isKeybindingCustomizationEnabled()) {
     logForDebugging(
       '[keybindings] Skipping file watcher - user customization disabled',
