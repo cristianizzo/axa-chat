@@ -380,14 +380,6 @@ export function loadKeybindingsSyncWithWarnings(): KeybindingsLoadResult {
 }
 
 /**
- * Follow the gate for the life of the process, in both directions.
- *
- * The loaders memoise whatever they returned and initializeKeybindingWatcher()
- * is only ever called once, so without this a value observed at startup would
- * be permanent: a gate arriving late could never turn customization on, and a
- * kill switch thrown later could never turn it off.
- */
-/**
  * Tear the watcher down, keeping hold of the close so a watcher created
  * afterwards cannot overlap with it: close() is async while `watcher` is
  * cleared immediately, and an off/on cycle inside that window would otherwise
@@ -424,6 +416,14 @@ function revertToDefaultBindings(): void {
   }
 }
 
+/**
+ * Follow the gate for the life of the process, in both directions.
+ *
+ * The loaders memoise whatever they returned and initializeKeybindingWatcher()
+ * is only ever called once, so without this a value observed at startup would
+ * be permanent: a gate arriving late could never turn customization on, and a
+ * kill switch thrown later could never turn it off.
+ */
 function watchGateChanges(): void {
   if (unsubscribeGateChanges) return
 
@@ -488,10 +488,14 @@ async function reinitializeAfterGateEnabled(): Promise<void> {
  */
 export function initializeKeybindingWatcher(): Promise<void> {
   if (initializing) return initializing
-  initializing = initializeWatcherOnce().finally(() => {
-    initializing = null
+  // Only the promise still occupying the slot may clear it: a reset can drop
+  // an older one while it is pending, and letting that one null the slot on
+  // settling would release the single-flight guard for a newer run.
+  const current: Promise<void> = initializeWatcherOnce().finally(() => {
+    if (initializing === current) initializing = null
   })
-  return initializing
+  initializing = current
+  return current
 }
 
 async function initializeWatcherOnce(): Promise<void> {
