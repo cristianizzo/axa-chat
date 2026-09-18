@@ -33,7 +33,11 @@ import {
 /**
  * Check if keybinding customization is enabled.
  *
- * Returns true if the tengu_keybinding_customization_release GrowthBook gate is enabled.
+ * The tengu_keybinding_customization_release gate stays as the default, but a
+ * local `true` wins. GrowthBook only populates its cache when 1P event logging
+ * is on; on this fork it usually isn't, so the gate resolves to its `false`
+ * default, loadKeybindings() returns early and ~/.claude/keybindings.json is
+ * never read at all — indistinguishable from a malformed config file.
  *
  * This function is exported so other parts of the codebase (e.g., /doctor)
  * can check the same condition consistently.
@@ -41,7 +45,7 @@ import {
 export function isKeybindingCustomizationEnabled(): boolean {
   return getFeatureValue_CACHED_MAY_BE_STALE(
     'tengu_keybinding_customization_release',
-    false,
+    true,
   )
 }
 
