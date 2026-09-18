@@ -384,6 +384,27 @@ export function loadKeybindingsSyncWithWarnings(): KeybindingsLoadResult {
  * be permanent: a gate arriving late could never turn customization on, and a
  * kill switch thrown later could never turn it off.
  */
+/**
+ * Drop anything loaded from the user's file and fall back to the defaults.
+ *
+ * Only emits when the cache actually held user bindings: user bindings are
+ * always appended to the defaults, so a differing length is the cache holding
+ * something the gate no longer allows. Staying quiet otherwise keeps startup
+ * from emitting a change nobody made.
+ */
+function revertToDefaultBindings(): void {
+  const defaultBindings = getDefaultParsedBindings()
+  const hadUserBindings =
+    cachedBindings !== null && cachedBindings.length !== defaultBindings.length
+
+  cachedBindings = defaultBindings
+  cachedWarnings = []
+
+  if (hadUserBindings) {
+    keybindingsChanged.emit({ bindings: defaultBindings, warnings: [] })
+  }
+}
+
 function watchGateChanges(): void {
   if (unsubscribeGateChanges) return
 
@@ -395,9 +416,6 @@ function watchGateChanges(): void {
     gateEnabled = enabled
     gateGeneration++
 
-    cachedBindings = null
-    cachedWarnings = []
-
     if (!enabled) {
       logForDebugging('[keybindings] Gate disabled after startup - reverting')
       initialized = false
@@ -405,17 +423,37 @@ function watchGateChanges(): void {
         void watcher.close()
         watcher = null
       }
-      const defaultBindings = getDefaultParsedBindings()
-      cachedBindings = defaultBindings
-      keybindingsChanged.emit({ bindings: defaultBindings, warnings: [] })
+      revertToDefaultBindings()
       return
     }
 
     logForDebugging('[keybindings] Gate enabled after startup - reloading')
-    void initializeKeybindingWatcher().then(() => {
-      keybindingsChanged.emit(loadKeybindingsSyncWithWarnings())
-    })
+    cachedBindings = null
+    cachedWarnings = []
+    void reinitializeAfterGateEnabled()
   })
+}
+
+/**
+ * Bring the watcher up after the gate turned on, then publish the result.
+ *
+ * The first call can join an initialization that started before the gate
+ * moved; that one skips installing a watcher because its generation check
+ * fires, which would otherwise leave customization enabled with nothing
+ * watching the file for the rest of the process. Hence the second attempt.
+ */
+async function reinitializeAfterGateEnabled(): Promise<void> {
+  const generation = gateGeneration
+
+  await initializeKeybindingWatcher()
+  if (disposed || generation !== gateGeneration) return
+
+  if (!initialized) {
+    await initializeKeybindingWatcher()
+    if (disposed || generation !== gateGeneration) return
+  }
+
+  keybindingsChanged.emit(loadKeybindingsSyncWithWarnings())
 }
 
 /**
@@ -451,6 +489,11 @@ async function initializeWatcherOnce(): Promise<void> {
     logForDebugging(
       '[keybindings] Skipping file watcher - user customization disabled',
     )
+    // The sync loader runs first and memoises its result, so the cache can
+    // already hold bindings read while the gate was still on. Nothing would
+    // re-check it: loadKeybindingsSync() returns the cache without consulting
+    // the gate at all.
+    revertToDefaultBindings()
     return
   }
 

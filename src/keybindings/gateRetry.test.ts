@@ -156,6 +156,48 @@ test('concurrent initialization creates a single watcher', async () => {
   expect(watchCalls).toBe(1)
 })
 
+/**
+ * The provider reads bindings synchronously at mount and only then calls
+ * initializeKeybindingWatcher(), so the cache can already hold user bindings
+ * by the time the gate is first consulted for the watcher. Nothing else
+ * re-checks it: loadKeybindingsSync() returns the cache without looking at the
+ * gate.
+ */
+test('initialization drops bindings cached before the gate went off', async () => {
+  gate = true
+  expect(hasFixtureBinding()).toBe(true)
+
+  const emitted: string[][] = []
+  mod.subscribeToKeybindingChanges(result =>
+    emitted.push(result.bindings.map(b => b.action)),
+  )
+
+  gate = false
+  await mod.initializeKeybindingWatcher()
+
+  expect(hasFixtureBinding()).toBe(false)
+  expect(emitted.length).toBe(1)
+  expect(emitted[0]).not.toContain(TEST_ACTION)
+})
+
+test('a gate that flips off and on mid-init still ends up watching', async () => {
+  gate = true
+  const pending = mod.initializeKeybindingWatcher()
+
+  // Both refreshes land while the first initialization is still awaiting its
+  // directory stat, so the retry joins that stale promise.
+  gate = false
+  fireRefresh!()
+  gate = true
+  fireRefresh!()
+
+  await pending
+  await new Promise(r => setTimeout(r, 300))
+
+  expect(hasFixtureBinding()).toBe(true)
+  expect(watchCalls).toBe(1)
+})
+
 test('an absent gate enables customization', async () => {
   gate = undefined
   await mod.initializeKeybindingWatcher()
