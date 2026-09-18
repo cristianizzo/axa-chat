@@ -94,6 +94,7 @@ let disposed = false
 let cachedBindings: ParsedBinding[] | null = null
 let cachedWarnings: KeybindingWarning[] = []
 let unsubscribeGateRetry: (() => void) | null = null
+let initializing: Promise<void> | null = null
 const keybindingsChanged = createSignal<[result: KeybindingsLoadResult]>()
 
 /**
@@ -401,8 +402,20 @@ function retryWatcherWhenGateEnabled(): void {
  * refreshes: the gate is a runtime kill switch, so a value arriving after
  * startup has to be able to turn customization back on for the rest of the
  * process.
+ *
+ * Safe to call concurrently: `initialized` is only set once the directory
+ * check has resolved, so two overlapping calls would otherwise both get past
+ * it and create a second chokidar watcher.
  */
-export async function initializeKeybindingWatcher(): Promise<void> {
+export function initializeKeybindingWatcher(): Promise<void> {
+  if (initializing) return initializing
+  initializing = initializeWatcherOnce().finally(() => {
+    initializing = null
+  })
+  return initializing
+}
+
+async function initializeWatcherOnce(): Promise<void> {
   if (initialized || disposed) return
 
   // Skip file watching when the gate is off

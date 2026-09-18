@@ -24,6 +24,16 @@ mock.module('../services/analytics/growthbook.js', () => ({
   },
 }))
 
+let watchCalls = 0
+
+mock.module('chokidar', () => {
+  const watch = () => {
+    watchCalls++
+    return { on: () => {}, close: async () => {} }
+  }
+  return { default: { watch }, watch }
+})
+
 const TEST_ACTION = 'command:gate-retry-fixture'
 
 let configDir: string
@@ -45,6 +55,7 @@ beforeEach(() => {
   previousConfigDir = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = configDir
   gate = false
+  watchCalls = 0
 })
 
 afterEach(() => {
@@ -72,6 +83,18 @@ test('a refresh that leaves the gate off changes nothing', async () => {
   await new Promise(r => setTimeout(r, 100))
 
   expect(hasFixtureBinding()).toBe(false)
+})
+
+test('concurrent initialization creates a single watcher', async () => {
+  gate = true
+  // `initialized` is only set once the directory stat resolves, so two
+  // overlapping calls would otherwise both get past that check.
+  await Promise.all([
+    mod.initializeKeybindingWatcher(),
+    mod.initializeKeybindingWatcher(),
+  ])
+
+  expect(watchCalls).toBe(1)
 })
 
 test('an absent gate enables customization', async () => {
