@@ -9,6 +9,7 @@ import { randomBytes } from 'crypto'
 import { unwatchFile, watchFile } from 'fs'
 import memoize from 'lodash-es/memoize.js'
 import pickBy from 'lodash-es/pickBy.js'
+import { homedir } from 'os'
 import { basename, dirname, join, resolve } from 'path'
 import { getOriginalCwd, getSessionTrustAccepted } from '../bootstrap/state.js'
 import type { AuthProviderId } from '../config/providers/index.js'
@@ -814,20 +815,99 @@ export function checkHasTrustDialogAccepted(): boolean {
   return (_trustAccepted ||= computeTrustDialogAccepted())
 }
 
+/**
+ * $HOME is the one directory whose trust must not be inherited by children.
+ *
+ * Trust normally implies trust for child directories, which is what makes the
+ * dialog a once-per-project question. Applying that to $HOME would turn a
+ * single acceptance in ~ into a blanket acceptance for every project ever
+ * created under it, so a persisted $HOME entry counts only when $HOME is the
+ * directory being checked — not when it merely sits above it.
+ *
+ * This comparison only ever *removes* trust, so every way it can be wrong is a
+ * way it can fail open. It is therefore deliberately generous about spelling:
+ * the config key on the other side is canonicalised (getOriginalCwd() applies
+ * NFC, findCanonicalGitRoot() realpaths) while homedir() is not, so matching
+ * the raw value alone silently misses a symlinked home — /home/x -> /var/home/x
+ * and macOS firmlinks both produce a key that never equals homedir(). An
+ * over-match costs an extra prompt; an under-match hands out the filesystem.
+ */
+const homeConfigKeys = memoize((): ReadonlySet<string> => {
+  const home = homedir()
+  const keys = new Set<string>()
+  // Guard the empty case explicitly: resolve('') returns the *current working
+  // directory*, which would exempt cwd instead of home and let the real $HOME
+  // entry inherit freely.
+  if (!home) {
+    return keys
+  }
+  const absolute = resolve(home)
+  const candidates = [absolute]
+  try {
+    candidates.push(getFsImplementation().realpathSync(absolute))
+  } catch {
+    // Home unreadable or missing; the unresolved spelling is all we have.
+  }
+  for (const candidate of candidates) {
+    keys.add(normalizePathForConfigKey(candidate).normalize('NFC'))
+  }
+  return keys
+})
+
+export function resetHomeConfigKeysCacheForTesting(): void {
+  homeConfigKeys.cache.clear?.()
+}
+
+function isHomeConfigKey(path: string): boolean {
+  return homeConfigKeys().has(normalizePathForConfigKey(path).normalize('NFC'))
+}
+
+/**
+ * Where trust is persisted and looked up for the current workspace.
+ *
+ * Normally this is getProjectPathForConfig() — the git root, so trusting a
+ * repo covers the whole repo. The exception is a git repository rooted at
+ * $HOME (a `git init ~` dotfiles setup), which would otherwise make every
+ * directory under home share one config key and defeat the exemption above.
+ *
+ * Both sides have to use this. Writing to the git root while the read side
+ * refuses to honour a $HOME key produces the original bug in its worst form:
+ * a dialog that is accepted, persisted, and asked again every single launch.
+ */
+function getTrustPathForConfig(): string {
+  const projectPath = getProjectPathForConfig()
+  // When the workspace *is* $HOME both branches return the same string, so
+  // this needs no separate equality test.
+  if (isHomeConfigKey(projectPath)) {
+    return normalizePathForConfigKey(getCwd())
+  }
+  return projectPath
+}
+
+/**
+ * Record that the user accepted the trust dialog for the current workspace.
+ */
+export function acceptTrustForCurrentWorkspace(): void {
+  saveProjectConfigAt(getTrustPathForConfig(), current => ({
+    ...current,
+    hasTrustDialogAccepted: true,
+  }))
+}
+
 function computeTrustDialogAccepted(): boolean {
-  // Check session-level trust (for home directory case where trust is not persisted)
-  // When running from home dir, trust dialog is shown but acceptance is stored
-  // in memory only. This allows hooks and other features to work during the session.
+  // Session-level trust, set by the TrustDialog and by showSetupScreens once the
+  // workspace has been confirmed. Persisted trust is checked below.
   if (getSessionTrustAccepted()) {
     return true
   }
 
   const config = getGlobalConfig()
 
-  // Always check where trust would be saved (git root or original cwd)
-  // This is the primary location where trust is persisted by saveCurrentProjectConfig
-  const projectPath = getProjectPathForConfig()
-  const projectConfig = config.projects?.[projectPath]
+  // Always check where trust would be saved. This is the primary location,
+  // written by acceptTrustForCurrentWorkspace(); it must be read through the
+  // same helper, because a key the read side refuses to honour is a dialog
+  // that reappears on every launch no matter how often it is accepted.
+  const projectConfig = config.projects?.[getTrustPathForConfig()]
   if (projectConfig?.hasTrustDialogAccepted) {
     return true
   }
@@ -835,13 +915,18 @@ function computeTrustDialogAccepted(): boolean {
   // Now check from current working directory and its parents
   // Normalize paths for consistent JSON key lookup
   let currentPath = normalizePathForConfigKey(getCwd())
+  let isStartPath = true
 
   // Traverse all parent directories
   while (true) {
     const pathConfig = config.projects?.[currentPath]
-    if (pathConfig?.hasTrustDialogAccepted) {
+    if (
+      pathConfig?.hasTrustDialogAccepted &&
+      (isStartPath || !isHomeConfigKey(currentPath))
+    ) {
       return true
     }
+    isStartPath = false
 
     const parentPath = normalizePathForConfigKey(resolve(currentPath, '..'))
     // Stop if we've reached the root (when parent is same as current)
@@ -864,8 +949,15 @@ function computeTrustDialogAccepted(): boolean {
 export function isPathTrusted(dir: string): boolean {
   const config = getGlobalConfig()
   let currentPath = normalizePathForConfigKey(resolve(dir))
+  let isStartPath = true
   while (true) {
-    if (config.projects?.[currentPath]?.hasTrustDialogAccepted) return true
+    if (
+      config.projects?.[currentPath]?.hasTrustDialogAccepted &&
+      (isStartPath || !isHomeConfigKey(currentPath))
+    ) {
+      return true
+    }
+    isStartPath = false
     const parentPath = normalizePathForConfigKey(resolve(currentPath, '..'))
     if (parentPath === currentPath) return false
     currentPath = parentPath
@@ -1737,6 +1829,13 @@ export function getCurrentProjectConfig(): ProjectConfig {
 export function saveCurrentProjectConfig(
   updater: (currentConfig: ProjectConfig) => ProjectConfig,
 ): void {
+  saveProjectConfigAt(getProjectPathForConfig(), updater)
+}
+
+function saveProjectConfigAt(
+  absolutePath: string,
+  updater: (currentConfig: ProjectConfig) => ProjectConfig,
+): void {
   if (process.env.NODE_ENV === 'test') {
     const config = updater(TEST_PROJECT_CONFIG_FOR_TESTING)
     // Skip if no changes (same reference returned)
@@ -1746,7 +1845,6 @@ export function saveCurrentProjectConfig(
     Object.assign(TEST_PROJECT_CONFIG_FOR_TESTING, config)
     return
   }
-  const absolutePath = getProjectPathForConfig()
 
   let written: GlobalConfig | null = null
   try {
