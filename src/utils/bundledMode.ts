@@ -29,3 +29,47 @@ export function isInBundledMode(): boolean {
     Bun.embeddedFiles.length > 0
   )
 }
+
+/**
+ * Prefixes of Bun's virtual filesystem root, where the entry module of a
+ * `bun build --compile` executable lives.
+ *
+ * `/$bunfs/` is measured (see isCompiledBinary). The Windows spelling is taken
+ * from Bun's own documentation and is NOT measured here — this repo has no
+ * Windows machine to measure it on. It is included because getting it wrong
+ * fails in the safe direction: a Windows binary that is not recognised as
+ * compiled behaves exactly as every build did before this function existed.
+ */
+const BUN_VFS_ROOT_PREFIXES = ['/$bunfs/', 'B:\\~BUN\\', '/~BUN/'] as const
+
+/**
+ * Whether this process is a `bun build --compile` standalone executable.
+ *
+ * This is the predicate `isInBundledMode()` above reads like and is not. Use
+ * this one to answer "am I a compiled binary"; use that one only to answer
+ * "were assets embedded", which in this tree is always no.
+ *
+ * Measured on Bun 1.3.11 / macOS arm64 with a purpose-built probe, not
+ * inferred:
+ *
+ * | | compiled binary | `bun run entry.ts` |
+ * |---|---|---|
+ * | `Bun.main` | `/$bunfs/root/probe` | `/private/tmp/…/probe.ts` |
+ * | `process.argv[1]` | `/$bunfs/root/probe` | `/private/tmp/…/probe.ts` |
+ * | `process.execPath` | `/private/tmp/…/probe` | `…/bun/1.3.11/bin/bun` |
+ * | `Bun.embeddedFiles.length` | **0** | **0** |
+ *
+ * The last row is why `isInBundledMode()` cannot answer this question, and the
+ * reason it is restated as a measurement here rather than left as a comment
+ * cross-reference: the two disagree on exactly the case that matters.
+ *
+ * `Bun.main` rather than `process.argv[1]`: argv can be rewritten by a launcher
+ * and is optional in the type, while `Bun.main` is the runtime's own record of
+ * the entry module. Both were measured identical above.
+ */
+export function isCompiledBinary(): boolean {
+  if (typeof Bun === 'undefined') return false
+  const entry = Bun.main
+  if (typeof entry !== 'string' || entry === '') return false
+  return BUN_VFS_ROOT_PREFIXES.some(prefix => entry.startsWith(prefix))
+}

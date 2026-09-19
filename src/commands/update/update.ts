@@ -1,7 +1,7 @@
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { LocalCommandCall } from '../../types/command.js'
-import { isInBundledMode } from '../../utils/bundledMode.js'
+import { isCompiledBinary } from '../../utils/bundledMode.js'
 import {
   acquireUpdateLock,
   applyStagedBinary,
@@ -95,8 +95,12 @@ export const call: LocalCommandCall = async () => {
     // (~400MB) isn't needed at runtime. Only do this for the compiled binary —
     // in source mode (`bun run dev`) node_modules is required by the running
     // process. Best-effort; a future update reinstalls it via `bun install`.
+    //
+    // This was dead code until `isCompiledBinary()` existed: the predicate was
+    // `isInBundledMode()`, which is false in every binary this repo builds, so
+    // the trim never ran anywhere and the `trimNote` below was never printed.
     let trimmed = false
-    if (isInBundledMode()) {
+    if (isCompiledBinary()) {
       trimmed = await rm(join(repoDir, 'node_modules'), {
         recursive: true,
         force: true,

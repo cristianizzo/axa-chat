@@ -12,7 +12,7 @@ import { rm } from 'node:fs/promises'
 import { delimiter as pathDelimiter, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { createStore } from '../state/store.js'
-import { isInBundledMode } from './bundledMode.js'
+import { isCompiledBinary } from './bundledMode.js'
 import { getGlobalConfig } from './config.js'
 import { isEnvTruthy } from './envUtils.js'
 import { lock } from './lockfile.js'
@@ -238,10 +238,19 @@ function walkUpToRepoRoot(start: string): string | null {
  * the axa binary, which sits at the source root next to package.json (true for
  * the dev checkout and for installer-based installs under ~/axa-chat, whether
  * cloned with git or unpacked from a tarball).
+ *
+ * The compiled branch below was unreachable until `isCompiledBinary()` existed:
+ * the predicate here used to be `isInBundledMode()`, which counts embedded
+ * assets and is false in every binary this repo builds. So a compiled axa read
+ * `process.argv[1]` instead — the virtual `/$bunfs/root/…` path, which is on no
+ * filesystem — found nothing to walk up from, and fell through to the fallbacks
+ * below. `/update` therefore only worked from a cwd inside a checkout, or by
+ * the coincidence that the installer's directory and the hardcoded fallback
+ * were the same path.
  */
 export function findRepoDir(): string | null {
   try {
-    const binary = isInBundledMode() ? realpathSync(process.execPath) : (process.argv[1] ?? '')
+    const binary = isCompiledBinary() ? realpathSync(process.execPath) : (process.argv[1] ?? '')
     if (binary) {
       const root = walkUpToRepoRoot(dirname(binary))
       if (root) return root
@@ -261,7 +270,7 @@ export function findRepoDir(): string | null {
   // cwd only when running from source, where the tree we are in is by
   // definition the one to update. For a compiled binary the cwd is the user's
   // project, which is not ours to pull or rebuild.
-  return isInBundledMode() ? null : walkUpToRepoRoot(process.cwd())
+  return isCompiledBinary() ? null : walkUpToRepoRoot(process.cwd())
 }
 
 /** Find a runnable `bun` — PATH first, then the standard install locations. */
@@ -955,7 +964,7 @@ function isInstallerManaged(repoDir: string): boolean {
  * from — is left alone.
  */
 function autoUpdatableRepoDir(): string | null {
-  if (!isInBundledMode()) return null
+  if (!isCompiledBinary()) return null
   let binary: string
   try {
     binary = realpathSync(process.execPath)
