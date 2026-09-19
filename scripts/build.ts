@@ -41,6 +41,18 @@ function flagValue(name: string): string | null {
 // running axa binary that started the build. See src/utils/sourceUpdate.ts.
 const outfileOverride = flagValue('--outfile')
 
+// Release builds stamp the published version instead of the generated dev
+// string. Without it a released binary reports `2.1.88-dev.20260920.t…shaabc`,
+// which does not match the release it was cut from and cannot be compared
+// against a manifest by eye.
+//
+// It does NOT decide what gets updated: the updater reads the version from the
+// name of the file it is running (src/utils/binaryUpdate.ts), because that is
+// the state of the disk rather than a string someone compiled in. This flag
+// exists so `axa --version` tells the truth, which is how a human tells two
+// builds apart.
+const versionTag = flagValue('--version-tag')
+
 const fullExperimentalFeatures = [
   'AGENT_MEMORY_SNAPSHOT',
   'AGENT_TRIGGERS',
@@ -229,7 +241,16 @@ const outfile =
   (compile ? (dev ? './dist/cli-dev' : './dist/cli') : dev ? './cli-dev' : './cli')
 const buildDate = resolveBuildDate()
 const buildTime = buildDate.toISOString()
-const version = dev ? getDevVersion(pkg.version, buildDate) : pkg.version
+if (versionTag !== null && !/^[0-9A-Za-z][0-9A-Za-z._-]*$/.test(versionTag)) {
+  // Rejected rather than sanitised: this string names the release directory
+  // the binary will be installed into, and a value that has to be cleaned up
+  // is a value the caller got wrong.
+  console.error(
+    `\x1b[31m[error]\x1b[0m --version-tag must look like a version, got "${versionTag}"`,
+  )
+  process.exit(1)
+}
+const version = versionTag ?? (dev ? getDevVersion(pkg.version, buildDate) : pkg.version)
 
 const outDir = dirname(outfile)
 if (outDir !== '.') {
