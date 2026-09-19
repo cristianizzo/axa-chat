@@ -21,15 +21,66 @@
 
 ## Quick Install
 
+**macOS, Apple Silicon.** A prebuilt binary is downloaded — nothing is compiled on your machine, and Bun is not needed.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cristianizzo/axa-chat/main/install.sh | bash
 ```
 
-Checks your system, installs Bun if needed, fetches the source, builds with all experimental features enabled, and symlinks `axa` on your PATH.
-
-Git is optional. With git you get a normal checkout and incremental updates; without it the source is downloaded as a tarball and `/update` re-downloads it (curl and tar are enough).
-
 Then run `axa` and use the `/login` command to authenticate with your preferred model provider.
+
+> **If you already have an `axa` shell function or alias**, it wins over anything on your PATH and the newly installed binary will not be what runs. The installer checks for this and says so instead of reporting success; follow what it prints.
+
+<details>
+<summary>Downloading the binary by hand instead</summary>
+
+Grab `axa-<version>-darwin-arm64.tar.gz` and its `.sha256` from the [latest release](https://github.com/cristianizzo/axa-chat/releases), then:
+
+```bash
+shasum -a 256 -c axa-<version>-darwin-arm64.tar.gz.sha256
+tar -xzf axa-<version>-darwin-arm64.tar.gz
+xattr -d com.apple.quarantine axa && chmod +x axa
+```
+
+The `xattr` line is not optional. A browser marks its downloads with `com.apple.quarantine`, and a bare executable (as opposed to a `.app` or a `.pkg`) that carries that flag is **hard-blocked** by Gatekeeper — there is no right-click → Open escape hatch for this file shape. Clearing the flag yourself is the only way through, and it means you are vouching for the download, which is what the checksum above is for.
+
+`curl` sets no quarantine flag, which is why the one-liner needs none of this.
+
+</details>
+
+### Updating
+
+```
+/update
+```
+
+from inside a session. It downloads the next version, verifies it, and repoints the symlink. Your running session keeps the binary it started with — a replaced file does not disturb a process that already has it open — so the new version is what launches next time.
+
+### Rolling back
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cristianizzo/axa-chat/main/install.sh | bash -s -- --rollback
+```
+
+or, if you would rather not pipe a script while something is broken, one line you can type from memory:
+
+```bash
+ln -sfn ~/.local/share/axa/versions/<version> ~/.local/bin/axa
+```
+
+`ls ~/.local/share/axa/versions` shows what is still on disk. The last three versions are kept.
+
+### Where things go
+
+```
+~/.local/bin/axa                      symlink -> the active version
+~/.local/share/axa/versions/<v>       the binaries themselves
+~/.local/share/axa/previous           what --rollback goes back to
+```
+
+Set `AXA_BIN_DIR` and `AXA_DATA_DIR` to move either of those.
+
+Building it yourself is still supported and unaffected — see [Building from Source](#building-from-source).
 
 ---
 
@@ -39,7 +90,7 @@ Then run `axa` and use the `/login` command to authenticate with your preferred 
 - [Model Providers](#model-providers)
 - [Quick Install](#quick-install)
 - [Requirements](#requirements)
-- [Build](#build)
+- [Building from Source](#building-from-source)
 - [Usage](#usage)
 - [Experimental Features](#experimental-features)
 - [Project Structure](#project-structure)
@@ -175,19 +226,29 @@ between accounts you have already authenticated.
 
 ## Requirements
 
-- **Runtime**: [Bun](https://bun.sh) >= 1.4.0
-- **OS**: macOS or Linux (Windows via WSL)
-- **Tools**: `curl`, plus `tar` when installing without git (see [Quick Install](#quick-install))
-- **Auth**: An API key or OAuth login for your chosen provider
+To **install and run** the released binary:
+
+- **OS**: macOS on Apple Silicon (arm64). This is the only published artifact; see below.
+- **Tools**: `curl`, `tar`, `shasum` — all present on a stock macOS.
+- **Auth**: An API key or OAuth login for your chosen provider.
+
+No Bun, no toolchain, no compiler: the binary is self-contained.
+
+To **build from source** you additionally need [Bun](https://bun.sh) >= 1.4.0:
 
 ```bash
-# Install Bun if you don't have it
 curl -fsSL https://bun.sh/install | bash
 ```
 
+### Why only macOS arm64
+
+The build passes `--target bun` to `bun build --compile`, which produces a binary for the machine it runs on. Every additional platform is therefore another release runner producing an artifact nobody here can run on real hardware before publishing it. Publishing an untested `darwin-x64` or Linux build would be worse than publishing none, so `install.sh` refuses on those platforms and points here rather than failing obscurely.
+
+Building from source works anywhere Bun does, including Linux and Intel Macs. What is unsupported is the *released* binary, not the project.
+
 ---
 
-## Build
+## Building from Source
 
 ```bash
 git clone https://github.com/cristianizzo/axa-chat.git
@@ -208,28 +269,37 @@ bun run build:dev
 
 ### Update & Rebuild
 
+`/update` does one of two things, decided by where the running executable
+actually sits rather than by a flag:
+
+- **A released install** — a versioned file under `~/.local/share/axa/versions`
+  with `~/.local/bin/axa` pointing at it — downloads the next version, verifies
+  its checksum, and moves the symlink. See [Rolling back](#rolling-back) if it
+  goes wrong.
+- **A source checkout** — the binary sitting at the source root beside
+  `package.json` — pulls and rebuilds, which is what `bun run update` does by
+  hand:
+
 ```bash
 bun run update
 ```
 
-Installs made by `install.sh` also update themselves. Once a day an idle session
-checks for a newer commit and, if there is one, downloads and builds it into
-`cli-dev.next` beside the live binary — progress shows above the prompt — then
-swaps it in with an atomic rename and deletes `node_modules`, which the compiled
-binary does not need. The running session is unaffected; the new build starts
-with the next `axa`. Turn it off with `autoUpdate` in `/config`.
+A checkout can also update itself once a day from an idle session, staging the
+build into `cli-dev.next` and swapping it in with an atomic rename. The running
+session is unaffected either way; the new build starts with the next `axa`. Turn
+it off with `autoUpdate` in `/config`.
 
-What opts a tree in is `.axa-install.json`, which `install.sh` writes at the
-source root. A checkout you cloned yourself has no marker and is left alone, and
-so is an install predating the marker — run `install.sh` once more to opt it in.
-Conversely, running `install.sh` over a clone of your own does mark it, and it
-will then update itself; `autoUpdate: false` turns that off.
+Opting in is a `.axa-install.json` file at the source root. A checkout you cloned
+yourself does not have one and is left alone — which is now the normal case,
+since the installer no longer builds from source and so no longer writes a
+marker. Older installs that were built by `install.sh` keep theirs and keep
+updating.
 
-A marked tree is still skipped whenever a `git pull` would not be plainly safe:
-any uncommitted change, any untracked file that is not gitignored, unpushed
-commits, a detached HEAD, or a branch with no upstream. The untracked case is
-easy to hit and silent — one scratch file at the source root keeps the tree on
-the build it has. In a checkout, run `bun run update` yourself.
+The self-update is skipped whenever a `git pull` would not be plainly safe: any
+uncommitted change, any untracked file that is not gitignored, unpushed commits,
+a detached HEAD, or a branch with no upstream. The untracked case is easy to hit
+and silent — one scratch file at the source root keeps the tree on the build it
+has. Run `bun run update` yourself when that happens.
 
 ### Custom Feature Flags
 

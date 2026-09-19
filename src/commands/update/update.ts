@@ -1,6 +1,11 @@
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { LocalCommandCall } from '../../types/command.js'
+import {
+  currentBinaryInstall,
+  describeOutcome,
+  runBinaryUpdate,
+} from '../../utils/binaryUpdate.js'
 import { isCompiledBinary } from '../../utils/bundledMode.js'
 import {
   acquireUpdateLock,
@@ -16,12 +21,28 @@ import {
 } from '../../utils/sourceUpdate.js'
 
 export const call: LocalCommandCall = async () => {
+  // Two update paths, and which one applies is decided by where the running
+  // executable actually sits, not by a flag or a marker file.
+  //
+  // A released install is a bare versioned file under `versions/` with a
+  // symlink pointing at it: there is no source tree, no bun and no compiler on
+  // that machine, so the only thing to do is download the next version and flip
+  // the symlink. A developer's checkout has all three and no release to
+  // download, so it pulls and rebuilds. Running this one first because it is
+  // the one with a positive, unambiguous test — `currentBinaryInstall()`
+  // returns null for everything that is not exactly this layout.
+  const binaryInstall = currentBinaryInstall()
+  if (binaryInstall) {
+    const outcome = await runBinaryUpdate()
+    return { type: 'text', value: describeOutcome(outcome, binaryInstall) }
+  }
+
   const repoDir = findRepoDir()
   if (!repoDir) {
     return {
       type: 'text',
       value:
-        'Could not find the axa-chat source tree to update. The running binary should sit at the source root, beside package.json, scripts/build.ts and src/entrypoints/cli.tsx. If you installed elsewhere, run `bun run update` in that directory.',
+        'Could not find anything to update. A released install is a versioned binary under ~/.local/share/axa/versions with ~/.local/bin/axa pointing at it — reinstall with the one-liner in the README if that is what you expected. Running from a source tree, the binary should sit at the source root beside package.json, scripts/build.ts and src/entrypoints/cli.tsx; if you built it elsewhere, run `bun run update` in that directory.',
     }
   }
 
