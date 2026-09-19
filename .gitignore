@@ -35,3 +35,12 @@ conversation-backup.jsonl
 .axa-install.json
 .axa-update.json
 .axa-update.json.lock
+# Design docs and implementation plans the superpowers skill writes while a
+# change is being worked out. They are scratch: dated, frozen at the moment the
+# work started, and superseded by whatever actually shipped. Publishing them
+# would stand a second, stale account of this codebase next to CLAUDE.md, which
+# is the one loaded before any code is read and therefore the one believed.
+#
+# Same search cost as .claude/ above: ignored AND untracked is invisible to both
+# rg and git grep. Read it from the filesystem if you need it.
+docs/superpowers/
