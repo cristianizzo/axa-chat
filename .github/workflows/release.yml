@@ -1,0 +1,235 @@
+name: release
+
+# Builds the published binary on CI instead of on the user's machine.
+#
+# That relocation is the whole point of this file. Size was never the problem —
+# the binary is 173 MB raw and ~51 MB gzipped, which is *smaller* than the
+# reference implementation's — the problem was that installing meant fetching
+# bun, running `bun install`, compiling ~5700 modules and then deleting 400 MB
+# of node_modules, on a machine that wanted a CLI.
+#
+# Publishes, for tag `v<version>`:
+#
+#   v<version>/axa-<version>-darwin-arm64.tar.gz          one file: `axa`
+#   v<version>/axa-<version>-darwin-arm64.tar.gz.sha256   `shasum -c` format
+#   v<version>/manifest.json
+#   <channel>/VERSION                                     plain text, one line
+#   <channel>/manifest.json
+#
+# The channel release is a rolling one whose assets are replaced each time. Its
+# tag moves, which is deliberate and is the reason its assets are a pointer and
+# a manifest rather than source: `install.sh` and the in-process updater both
+# bake `.../download/stable/...` into themselves, so the channel has to be a
+# stable URL rather than a per-release one. Retrofitting a channel segment into
+# a URL that installed copies already use would be a migration; publishing a
+# second channel later is one more file.
+#
+# Two consumers, two formats, on purpose. `install.sh` is bash with no JSON
+# parser it can rely on, so it reads the plain-text VERSION and the `.sha256`
+# sidecar. The in-process updater has JSON.parse, so it reads manifest.json.
+# Both are generated below from one `shasum` run, so they cannot disagree.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish (e.g. v2.1.88)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CHANNEL: stable
+  PLATFORM: darwin-arm64
+
+jobs:
+  release:
+    # macos-15 is Apple Silicon. Deliberately one runner and one artifact:
+    # `scripts/build.ts` passes `--target bun`, which is host-only, so every
+    # additional platform is another runner producing an artifact nobody here
+    # can verify on real hardware. Publishing an untested darwin-x64 build
+    # would be worse than publishing none — install.sh says so explicitly
+    # rather than failing obscurely.
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Resolve the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          # The version names a directory on every user's disk, so its shape is
+          # checked here rather than discovered by a failing install later.
+          case "$tag" in
+            v*) version="${tag#v}" ;;
+            *) echo "::error::Tag must start with 'v', got '$tag'"; exit 1 ;;
+          esac
+          if ! printf '%s' "$version" | grep -Eq '^[0-9A-Za-z][0-9A-Za-z._-]*$'; then
+            echo "::error::'$version' is not a usable version string"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          # Full history: scripts/build.ts asks git for the revision it stamps,
+          # and a shallow clone answers with less than it should.
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned to the version declared in package.json's `packageManager`
+          # and `engines`. Not floating: `--bytecode` output is coupled to the
+          # bun version, so a runner silently moving to a new one changes the
+          # artifact without anything in this repo changing.
+          bun-version: '1.4.0'
+
+      - name: Check the tag matches package.json
+        run: |
+          set -euo pipefail
+          pkg="$(bun --print 'require("./package.json").version')"
+          if [ "$pkg" != "${{ steps.tag.outputs.version }}" ]; then
+            echo "::error::Tag says ${{ steps.tag.outputs.version }} but package.json says $pkg."
+            echo "::error::Bump package.json in the commit the tag points at, so that the"
+            echo "::error::version a user sees and the version they downloaded are the same."
+            exit 1
+          fi
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          # Pins the two wall-clock stamps compiled into the binary to the
+          # tagged commit's own date, so rebuilding a tag does not change them.
+          # Taken from git rather than from the event payload, which spells
+          # `pushed_at` as an integer on some events and an ISO string on
+          # others — and build.ts rejects anything that is not whole seconds.
+          #
+          # It does NOT make the build byte-reproducible: `--bytecode` output
+          # varies run to run by tens of kilobytes, measured. Pinning buys
+          # stamp stability and nothing more.
+          AXA_SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export AXA_SOURCE_DATE_EPOCH
+          # --outfile to a staging name, then move: `bun build --outfile`
+          # truncates its target in place. Nothing is running ./axa here, but
+          # the habit is the one the repo relies on everywhere else and this is
+          # not the file to make an exception in.
+          bun run build:release \
+            --version-tag "${{ steps.tag.outputs.version }}" \
+            --outfile ./axa.next
+          mv -f ./axa.next ./axa
+          chmod 755 ./axa
+
+      - name: Verify the binary runs and reports the tagged version
+        run: |
+          set -euo pipefail
+          reported="$(./axa --version 2>&1 | tr -d '[:space:]' || true)"
+          echo "axa --version -> $reported"
+          case "$reported" in
+            *"${{ steps.tag.outputs.version }}"*) ;;
+            *)
+              echo "::error::The built binary does not report ${{ steps.tag.outputs.version }}."
+              echo "::error::Refusing to publish an artifact that cannot identify itself."
+              exit 1
+              ;;
+          esac
+
+      - name: Package, checksum and write the manifest
+        id: package
+        run: |
+          set -euo pipefail
+          version="${{ steps.tag.outputs.version }}"
+          tag="${{ steps.tag.outputs.tag }}"
+          archive="axa-${version}-${PLATFORM}.tar.gz"
+
+          mkdir -p out
+          # Archive the single executable under the bare name `axa`, with no
+          # wrapper directory: install.sh extracts into a staging directory and
+          # expects exactly `axa` beside it.
+          tar -czf "out/${archive}" axa
+
+          ( cd out && shasum -a 256 "${archive}" > "${archive}.sha256" )
+          sha="$(awk '{print $1}' "out/${archive}.sha256")"
+          size="$(wc -c < "out/${archive}" | tr -d ' ')"
+
+          # Written with jq so that a path or a hash containing anything
+          # awkward is escaped rather than pasted into a heredoc.
+          jq -n \
+            --argjson schema 1 \
+            --arg channel "$CHANNEL" \
+            --arg version "$version" \
+            --arg platform "$PLATFORM" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${archive}" \
+            --arg sha256 "$sha" \
+            --argjson size "$size" \
+            '{schema:$schema, channel:$channel, version:$version,
+              platforms: {($platform): {url:$url, sha256:$sha256, size:$size}}}' \
+            > out/manifest.json
+
+          printf '%s\n' "$version" > out/VERSION
+
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "--- manifest.json ---"
+          cat out/manifest.json
+
+      - name: Publish the versioned release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          archive="${{ steps.package.outputs.archive }}"
+
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --title "$tag" \
+              --generate-notes \
+              --notes-start-tag "$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || echo '')" \
+              || gh release create "$tag" --title "$tag" --generate-notes
+          fi
+          gh release upload "$tag" \
+            "out/${archive}" \
+            "out/${archive}.sha256" \
+            "out/manifest.json" \
+            --clobber
+
+      - name: Move the channel pointer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Last, and only once the versioned release is fully uploaded: this
+          # is the step that makes the new version visible to every installed
+          # copy, and it must never point at assets that are not there yet.
+          if ! gh release view "$CHANNEL" >/dev/null 2>&1; then
+            gh release create "$CHANNEL" \
+              --title "Channel: $CHANNEL" \
+              --notes "Rolling pointer to the latest $CHANNEL release. The assets here are a plain-text VERSION and a manifest.json; the binaries live on the versioned releases. Not a source snapshot — this tag moves." \
+              --latest=false
+          fi
+          gh release upload "$CHANNEL" out/VERSION out/manifest.json --clobber
+
+      - name: Smoke-test the published channel end to end
+        run: |
+          set -euo pipefail
+          # Installs from the real URLs into a throwaway prefix on the runner.
+          # This is the step that would have caught a manifest pointing at an
+          # asset that does not exist, which is invisible to every check above.
+          prefix="$(mktemp -d)"
+          AXA_BIN_DIR="$prefix/bin" AXA_DATA_DIR="$prefix/share/axa" \
+            bash ./install.sh
+          "$prefix/bin/axa" --version
+          test -L "$prefix/bin/axa"
