@@ -62,10 +62,23 @@ VERSIONS_DIR="$DATA_DIR/versions"
 # Staging sits inside DATA_DIR, not in ~/.cache, so that the move into
 # versions/ is a rename(2) on one filesystem and therefore atomic. It is still
 # outside versions/, so a half-downloaded file is never a candidate version.
-STAGING_DIR="$DATA_DIR/staging"
+#
+# Per-process, because the first thing download_and_verify does is `rm -rf` it.
+# A fixed path means a second installer — or an in-session `/update` — deletes
+# the first one's verified binary in the window between the smoke test and the
+# rename, and the first one then fails on a file that passed every check it
+# ran. Two runs at once are not a supported workflow, but they are a plausible
+# accident, and the failure they produce is unexplainable from the output.
+STAGING_DIR="$DATA_DIR/staging/$$"
 PREVIOUS_FILE="$DATA_DIR/previous"
 LAUNCHER="$BIN_DIR/axa"
 RETAIN=3
+
+# Now that staging is per-process, nothing else will ever clean it up. A ctrl-c
+# part way through a 173 MB download would otherwise leave that much behind with
+# a name nobody recognises. Covers every exit except SIGKILL.
+cleanup_staging() { rm -rf "$STAGING_DIR"; }
+trap cleanup_staging EXIT INT TERM
 
 # How to invoke this script again, in a form the reader can actually paste.
 # `$0` is a usable path when the file was downloaded, and the useless string
@@ -172,27 +185,55 @@ check_tools() {
 # parser it can rely on, and hand-rolling one in bash for the single file that
 # must never fail is how installers break. The machine-readable manifest.json is
 # published beside it and is what the in-process updater reads.
+# A version names a FILE inside versions/, so it is validated before it is ever
+# interpolated into a path. Applied to `--version` as well as to the channel
+# pointer: the operator typing the flag is trusted, their typo is not, and
+# `--version ../../elsewhere/thing` otherwise points the launcher outside
+# versions/ at something that was never downloaded and never smoke-tested —
+# while printing "already downloaded".
+assert_version_shape() {
+  local v="$1" origin="$2"
+  if [[ ! "$v" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]] || [[ "$v" == *..* ]]; then
+    fail "$origin is not a usable version: \"$v\"
+    A version may contain letters, digits, dot, dash and underscore only, and
+    must not contain \"..\". Nothing on this machine was changed."
+  fi
+}
+
 resolve_version() {
   if [ -n "${REQUESTED_VERSION:-}" ]; then
+    assert_version_shape "$REQUESTED_VERSION" "--version"
     VERSION="$REQUESTED_VERSION"
     ok "Version: $VERSION (requested)"
     return
   fi
 
-  local url raw
+  local url raw status stderr_file
   url="${RELEASE_BASE}/${CHANNEL}/VERSION"
   info "Resolving the latest ${CHANNEL} release..."
-  raw="$(curl -fsSL --max-time 60 "$url" 2>/dev/null || true)"
+  # curl's own diagnosis is kept. "There is no release yet" and "your proxy
+  # returned 403" and "DNS does not resolve" are three different problems with
+  # three different answers, and collapsing them into one sentence sends the
+  # reader to look at the wrong one.
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/axa-resolve.XXXXXX")"
+  status=0
+  raw="$(curl -fsSL --max-time 60 "$url" 2>"$stderr_file")" || status=$?
   # Strip whitespace/CR rather than trusting the file to be exact: it is
   # produced by CI, and a stray newline would end up in a directory name.
   raw="$(printf '%s' "$raw" | tr -d '[:space:]')"
 
-  if [ -z "$raw" ]; then
+  if [ "$status" -ne 0 ] || [ -z "$raw" ]; then
+    local why
+    why="$(head -c 300 "$stderr_file" 2>/dev/null || true)"
+    rm -f "$stderr_file"
     fail "Could not read the ${CHANNEL} channel pointer at
       $url
-    Either there is no published release on this channel yet, or the network
+${why:+      $why
+}${status:+      curl exited $status
+}    Either there is no published release on this channel yet, or the network
     is blocked. Nothing on this machine was changed."
   fi
+  rm -f "$stderr_file"
   # A version is what names a directory below, so validate its shape before it
   # is ever interpolated into a path.
   if [[ ! "$raw" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
@@ -207,6 +248,47 @@ resolve_version() {
 # -------------------------------------------------------------------
 # Download, verify, stage
 # -------------------------------------------------------------------
+
+# Run a binary once and report whether it starts. Every path that is about to
+# make a binary reachable as `axa` goes through here, including the one that
+# reuses bytes already on disk: a checksum proves the download, and `[ -f ]`
+# proves nothing at all. On failure the first 500 bytes of stderr are left in
+# SMOKE_WHY for the caller to quote.
+# stdin is closed and the run is bounded. Both matter: the binary is untrusted
+# by construction at this point, and a build that reads stdin — or a Gatekeeper
+# prompt — would otherwise wedge the installer forever under a line that reads
+# like progress ("Checking it runs..."), with nothing to interrupt it. macOS has
+# no `timeout(1)`, so the watchdog is a background sleep-and-kill.
+SMOKE_WHY=""
+SMOKE_TIMEOUT=60
+assert_binary_starts() {
+  local bin="$1" errfile pid watchdog status=0
+  SMOKE_WHY=""
+  errfile="$(mktemp "${TMPDIR:-/tmp}/axa-smoke.XXXXXX")"
+
+  "$bin" --version </dev/null >/dev/null 2>"$errfile" &
+  pid=$!
+  ( sleep "$SMOKE_TIMEOUT"; kill -9 "$pid" 2>/dev/null ) &
+  watchdog=$!
+  # stderr silenced: when the watchdog fires, bash reports the reaped job as a
+  # raw "Killed: 9" line that lands above our own message and reads like a crash
+  # in the installer rather than the deliberate timeout it is.
+  wait "$pid" 2>/dev/null || status=$?
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+
+  if [ "$status" -eq 0 ]; then
+    rm -f "$errfile"
+    return 0
+  fi
+  SMOKE_WHY="$(head -c 500 "$errfile" 2>/dev/null || true)"
+  # 137 = SIGKILL, which here is only ever the watchdog above.
+  if [ "$status" -eq 137 ] && [ -z "$SMOKE_WHY" ]; then
+    SMOKE_WHY="it did not exit within ${SMOKE_TIMEOUT}s and was killed"
+  fi
+  rm -f "$errfile"
+  return 1
+}
 
 download_and_verify() {
   local tag="v${VERSION}"
@@ -269,16 +351,13 @@ download_and_verify() {
   # Gatekeeper killing the process, a wrong architecture, and a build that was
   # published broken all pass the hash and fail here.
   info "Checking it runs..."
-  if ! "$STAGING_DIR/axa" --version >/dev/null 2>"$STAGING_DIR/smoke.err"; then
-    local why
-    why="$(head -c 500 "$STAGING_DIR/smoke.err" 2>/dev/null || true)"
+  if ! assert_binary_starts "$STAGING_DIR/axa"; then
     rm -rf "$STAGING_DIR"
     fail "The downloaded ${VERSION} binary does not start on this machine.
-${why:+      $why
+${SMOKE_WHY:+      $SMOKE_WHY
 }    It was discarded rather than installed, and nothing that was working
     before has been touched."
   fi
-  rm -f "$STAGING_DIR/smoke.err"
 }
 
 # Move the staged binary into versions/<version>. rename(2) is atomic and both
@@ -344,13 +423,43 @@ assert_launcher_is_ours() {
 # Flip the launcher by renaming a fresh symlink over it. `ln -sfn` unlinks and
 # re-links, so there is a window in which `axa` does not exist; rename(2) has no
 # such window. The window is short and the cost of closing it is one line.
+# Every step is checked. Unchecked, `set -e` aborts mid-function and the raw
+# `ln: Permission denied` from the shell is the entire story the user gets: no
+# statement that the launcher was not moved, and — because the abort skips the
+# reporting at the end — no statement about which version `axa` still runs. That
+# is the worst possible half-state to leave silently, because the version WAS
+# installed, so the next run takes the "already downloaded" branch and looks
+# even more like a success.
 point_launcher_at() {
   local version="$1"
-  mkdir -p "$BIN_DIR"
+  local still
+  still="$(current_linked_version)"
+  still="${still:-none — \`axa\` will not run at all}"
+
+  mkdir -p "$BIN_DIR" || fail "Could not create $BIN_DIR.
+    $version is installed at $VERSIONS_DIR/$version but nothing points at it.
+    Active version: $still"
+
   local tmp="$BIN_DIR/.axa.$$.tmp"
   rm -f "$tmp"
-  ln -s "$VERSIONS_DIR/$version" "$tmp"
-  mv -f "$tmp" "$LAUNCHER"
+  if ! ln -s "$VERSIONS_DIR/$version" "$tmp"; then
+    rm -f "$tmp"
+    fail "Could not create a symlink in $BIN_DIR (check its permissions).
+    $version is installed at $VERSIONS_DIR/$version but nothing points at it.
+    Active version: $still
+    To finish by hand:
+      ln -sfn $VERSIONS_DIR/$version $LAUNCHER"
+  fi
+  # rename(2) over the real name: either the old target or the new one, never
+  # a missing launcher.
+  if ! mv -f "$tmp" "$LAUNCHER"; then
+    rm -f "$tmp"
+    fail "Could not replace $LAUNCHER.
+    $version is installed at $VERSIONS_DIR/$version but nothing points at it.
+    Active version: $still
+    To finish by hand:
+      ln -sfn $VERSIONS_DIR/$version $LAUNCHER"
+  fi
 }
 
 # -------------------------------------------------------------------
@@ -485,9 +594,21 @@ rollback() {
       $SELF --list-versions
       ln -sfn $VERSIONS_DIR/<version> $LAUNCHER"
   fi
+  # The file is on disk and therefore editable by hand. Same guard as the
+  # `--version` flag, for the same reason: it names a path below.
+  assert_version_shape "$previous" "$PREVIOUS_FILE"
   if [ ! -f "$VERSIONS_DIR/$previous" ]; then
     fail "The recorded previous version ($previous) is no longer on disk.
     Pick another:
+      $SELF --list-versions
+      ln -sfn $VERSIONS_DIR/<version> $LAUNCHER"
+  fi
+  # Refusing before the flip, not after: a rollback onto a binary that does not
+  # start leaves the user with neither version working and no obvious way back.
+  if ! assert_binary_starts "$VERSIONS_DIR/$previous"; then
+    fail "The recorded previous version ($previous) is on disk but does not start.
+${SMOKE_WHY:+      $SMOKE_WHY
+}    Nothing was changed. Pick another:
       $SELF --list-versions
       ln -sfn $VERSIONS_DIR/<version> $LAUNCHER"
   fi
@@ -496,10 +617,15 @@ rollback() {
   point_launcher_at "$previous"
   # Swap, rather than clear: rolling back twice should return you to where you
   # started instead of stranding you with no target.
+  # Same reasoning as the install path, and sharper here: this is run by someone
+  # already in trouble, so exiting before the checks below — after the rollback
+  # itself succeeded — is the worst possible moment to go quiet.
   if [ -n "$active" ]; then
-    printf '%s\n' "$active" > "$PREVIOUS_FILE"
+    printf '%s\n' "$active" > "$PREVIOUS_FILE" || \
+      warn "Rolled back, but could not record $active in $PREVIOUS_FILE.
+    Rolling back again will not return you to it."
   else
-    rm -f "$PREVIOUS_FILE"
+    rm -f "$PREVIOUS_FILE" || true
   fi
 
   ok "Rolled back to $previous${active:+ (from $active)}"
@@ -608,9 +734,20 @@ PREVIOUS_ACTIVE="$(current_linked_version)"
 if [ -f "$VERSIONS_DIR/$VERSION" ] && [ "$PREVIOUS_ACTIVE" = "$VERSION" ]; then
   ok "$VERSION is already installed and active"
 else
-  if [ -f "$VERSIONS_DIR/$VERSION" ]; then
+  # Present on disk is not the same as usable. A run interrupted between the
+  # download and the rename, a half-written copy, or a binary that started on
+  # the day it was installed and no longer does all satisfy `[ -f ]`. This is
+  # the one branch that can point the launcher at bytes nothing ever executed,
+  # so it smoke-tests them exactly as the download path does, and discards them
+  # and re-downloads rather than adopting them.
+  if [ -f "$VERSIONS_DIR/$VERSION" ] && assert_binary_starts "$VERSIONS_DIR/$VERSION"; then
     ok "$VERSION is already downloaded"
   else
+    if [ -f "$VERSIONS_DIR/$VERSION" ]; then
+      warn "The copy of $VERSION already on disk does not start${SMOKE_WHY:+: $SMOKE_WHY}"
+      info "Discarding it and downloading again"
+      rm -f "$VERSIONS_DIR/$VERSION"
+    fi
     download_and_verify
     install_version
   fi
@@ -618,8 +755,15 @@ else
   # Recorded only when the launcher actually moved, so that re-running the
   # installer on the version you are already on does not destroy your rollback
   # target by setting it to itself.
+  #
+  # Failing to record it must not abort the run. The flip has already happened
+  # and is not undone by exiting here; what an abort does lose is the PATH and
+  # shadowing checks below, which is the loud half the user needs and the whole
+  # reason this script prints anything after the install.
   if [ -n "$PREVIOUS_ACTIVE" ] && [ "$PREVIOUS_ACTIVE" != "$VERSION" ]; then
-    printf '%s\n' "$PREVIOUS_ACTIVE" > "$PREVIOUS_FILE"
+    printf '%s\n' "$PREVIOUS_ACTIVE" > "$PREVIOUS_FILE" || \
+      warn "Could not record the rollback target in $PREVIOUS_FILE.
+    The install is fine; \`$SELF --rollback\` will not know where to go back to."
   fi
   ok "Launcher: $LAUNCHER -> $VERSIONS_DIR/$VERSION"
 fi
