@@ -141,7 +141,7 @@ function buildLogMetadata(log: LogOption, options?: {
   return childPadding + baseMetadata + projectSuffix;
 }
 export function LogSelector(t0) {
-  const $ = _c(257);
+  const $ = _c(258);
   const {
     logs,
     maxHeight: t1,
@@ -409,7 +409,14 @@ export function LogSelector(t0) {
     }
     filtered = t22;
   }
-  if (branchFilterEnabled && currentBranch) {
+  // Favorites is a deliberate escape hatch from branch/worktree scoping: the
+  // whole point of starring a session is to jump back to it regardless of
+  // which branch or worktree you're currently in. Scoping it the same as the
+  // other tabs made a starred session invisible on its own tab the moment you
+  // switched branches or worktrees, while "All" kept showing plenty of other
+  // (unstarred) results from the current context — masking the same filter
+  // silently doing the same thing there.
+  if (!favoritesOnly && branchFilterEnabled && currentBranch) {
     let t22;
     if ($[31] !== currentBranch || $[32] !== filtered) {
       let t23;
@@ -429,7 +436,7 @@ export function LogSelector(t0) {
     }
     filtered = t22;
   }
-  if (hasMultipleWorktrees && !showAllWorktrees) {
+  if (!favoritesOnly && hasMultipleWorktrees && !showAllWorktrees) {
     let t22;
     if ($[36] !== filtered) {
       let t23;
@@ -1227,18 +1234,22 @@ export function LogSelector(t0) {
   }
   useInput(t53, t54);
   let filterIndicators;
-  if ($[149] !== branchFilterEnabled || $[150] !== currentBranch || $[151] !== hasMultipleWorktrees || $[152] !== showAllWorktrees) {
+  if ($[149] !== branchFilterEnabled || $[150] !== currentBranch || $[151] !== hasMultipleWorktrees || $[152] !== showAllWorktrees || $[257] !== favoritesOnly) {
     filterIndicators = [];
-    if (branchFilterEnabled && currentBranch) {
+    // Favorites tab shows sessions regardless of branch/worktree (see the
+    // matching guards on the filter pipeline above), so it must not claim
+    // scoping it isn't applying.
+    if (!favoritesOnly && branchFilterEnabled && currentBranch) {
       filterIndicators.push(currentBranch);
     }
-    if (hasMultipleWorktrees && !showAllWorktrees) {
+    if (!favoritesOnly && hasMultipleWorktrees && !showAllWorktrees) {
       filterIndicators.push("current worktree");
     }
     $[149] = branchFilterEnabled;
     $[150] = currentBranch;
     $[151] = hasMultipleWorktrees;
     $[152] = showAllWorktrees;
+    $[257] = favoritesOnly;
     $[153] = filterIndicators;
   } else {
     filterIndicators = $[153];
