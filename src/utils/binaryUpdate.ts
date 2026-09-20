@@ -334,9 +334,12 @@ async function fetchManifestViaApi(channel: string): Promise<unknown> {
       (entry as { name?: unknown }).name === 'manifest.json',
   )
   const id = (asset as { id?: unknown } | undefined)?.id
-  // `Number.isInteger`, not `typeof id === 'number'`: that admits NaN and 1e21,
-  // which interpolate into the url as the literal "NaN" and "1e+21".
-  if (!Number.isInteger(id) || (id as number) <= 0) {
+  // `Number.isSafeInteger`, not `Number.isInteger`: the latter admits NaN
+  // (false, fine) but also 1e21 (true — it IS a mathematical integer), which
+  // interpolates into the url as the literal "1e+21". Copilot caught this;
+  // the comment this replaces claimed `Number.isInteger` already excluded it,
+  // which is false — measured: `Number.isInteger(1e21) === true`.
+  if (!Number.isSafeInteger(id) || (id as number) <= 0) {
     throw new Error(
       `the ${channel} release has no manifest.json asset with a usable id`,
     )
@@ -828,11 +831,16 @@ export async function runBinaryUpdate(options?: {
       try {
         pointLauncherAt(install, install.version)
       } catch (error) {
-        const reason =
+        // Caught by Copilot: this is a failure downstream of the manifest fetch
+        // exactly like the three below it, and had been left out of
+        // `withManifestNotes` because it sits earlier in the function, above
+        // where that helper is defined at the time this branch was written.
+        const reason = withManifestNotes(
           `You are on the latest release (${install.version}), but ${install.launcher} ` +
-          `points at ${active ?? 'nothing this installer recognises'} and could not be ` +
-          `repaired: ${(error as Error).message}\n` +
-          `Fix it with: ln -sfn ${join(install.versionsDir, install.version)} ${install.launcher}`
+            `points at ${active ?? 'nothing this installer recognises'} and could not be ` +
+            `repaired: ${(error as Error).message}\n` +
+            `Fix it with: ln -sfn ${join(install.versionsDir, install.version)} ${install.launcher}`,
+        )
         recordResult({ outcome: 'failed', from: install.version, reason })
         return { kind: 'failed', reason }
       }

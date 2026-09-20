@@ -120,7 +120,19 @@ beforeEach(() => {
 
   seedInstalled('1.0.0')
   pointAt('1.0.0')
+  apiRequests = []
 })
+
+/**
+ * Every request the fixture has answered, in order — path plus headers.
+ *
+ * Caught by Copilot: the fixture originally discarded the request and handed
+ * the handler only the path, so no test could tell "the manifest route sent
+ * the wrong Accept header" apart from "it sent the right one" — both look
+ * identical once the fixture answers with the same body either way. This is
+ * reset per-test in `beforeEach` alongside the other fixture state.
+ */
+let apiRequests: { path: string; headers: Record<string, string> }[] = []
 
 /**
  * Stand in for api.github.com.
@@ -134,7 +146,9 @@ function serveApi(handler: (path: string) => unknown | null): void {
   apiServer = Bun.serve({
     port: 0,
     fetch(request) {
-      const body = handler(new URL(request.url).pathname)
+      const path = new URL(request.url).pathname
+      apiRequests.push({ path, headers: Object.fromEntries(request.headers) })
+      const body = handler(path)
       if (body === null) return new Response('nope', { status: 500 })
       return Response.json(body)
     },
@@ -256,6 +270,31 @@ test('"already latest" repairs a launcher that points somewhere else', async () 
   expect(describeOutcome(outcome, install)).toContain('repointed')
 })
 
+test('a stale-route note survives a launcher repair that fails, not just one that succeeds', async () => {
+  // Caught by Copilot: the note had only been threaded into the *successful*
+  // repair result, three lines below this test. This scenario reaches the
+  // catch beside it instead — the launcher points at a real file this
+  // installer did not create, which `pointLauncherAt` correctly refuses to
+  // overwrite — and checks the note survives that path too.
+  publish('1.0.0')
+  const cached = readFileSync(join(origin, 'stable', 'manifest.json'), 'utf8')
+  writeFileSync(join(origin, 'stable', 'manifest.json'), cached)
+  serveApi(() => null) // API unreachable, so this route falls back and notes it
+
+  const foreign = join(root, 'not-ours')
+  writeFileSync(foreign, 'x')
+  rmSync(install.launcher, { force: true })
+  symlinkSync(foreign, install.launcher)
+
+  const outcome = await run()
+
+  expect(outcome.kind).toBe('failed')
+  if (outcome.kind === 'failed') {
+    expect(outcome.reason).toContain('could not be')
+    expect(outcome.reason).toContain('cached copy')
+  }
+})
+
 test('"already latest" says nothing extra when the launcher is correct', async () => {
   publish('1.0.0')
   const outcome = await run()
@@ -303,6 +342,22 @@ test('the API route is preferred over the cached url, and says nothing when it w
     expect(outcome.notes).toBeUndefined()
   }
   expect(readlinkSync(install.launcher)).toBe(join(install.versionsDir, '3.0.0'))
+})
+
+test('the asset fetch asks for bytes, not metadata, and the release lookup asks for GitHub JSON', async () => {
+  // The endpoint returns the asset's *metadata* rather than its bytes without
+  // `Accept: application/octet-stream` — a 200 carrying valid JSON, so nothing
+  // about the response shape would ever fail this test if the header were
+  // dropped. Only inspecting the outgoing request can catch that regression.
+  publish('2.0.0')
+  serveApi(() => RELEASE_WITH_MANIFEST)
+
+  await run()
+
+  const tags = apiRequests.find(r => r.path.includes('/tags/'))
+  const asset = apiRequests.find(r => r.path.endsWith('/assets/42'))
+  expect(tags?.headers.accept).toBe('application/vnd.github+json')
+  expect(asset?.headers.accept).toBe('application/octet-stream')
 })
 
 test('an unreachable API falls back to the cached url and SAYS the answer may be stale', async () => {
