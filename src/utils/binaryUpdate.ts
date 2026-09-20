@@ -94,7 +94,7 @@ export const SUPPORTED_PLATFORM = 'darwin-arm64'
 
 export type UpdateOutcome =
   | { kind: 'not-a-binary-install' }
-  | { kind: 'already-latest'; version: string }
+  | { kind: 'already-latest'; version: string; notes?: string[] }
   | { kind: 'updated'; from: string; to: string; notes?: string[] }
   | { kind: 'failed'; reason: string }
 
@@ -177,7 +177,11 @@ export function currentBinaryInstall(): BinaryInstall | null {
     version,
     dataDir: dataDir(),
     versionsDir,
-    stagingDir: join(dataDir(), 'staging'),
+    // Per-process. The update flow clears its staging dir before using it, so a
+    // path shared with a second updater — another session, or install.sh run
+    // from a terminal — means one of them deletes the other's verified binary
+    // in the window between the smoke test and the rename into versions/.
+    stagingDir: join(dataDir(), 'staging', String(process.pid)),
     previousFile: join(dataDir(), 'previous'),
     launcher: join(binDir(), 'axa'),
   }
@@ -192,7 +196,24 @@ function isSafeVersion(version: string): boolean {
   return /^[0-9A-Za-z][0-9A-Za-z._-]*$/.test(version) && !version.includes('..')
 }
 
-async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+/**
+ * Fetch `url` and hand the response to `consume`, with the timeout covering
+ * both.
+ *
+ * The consumer is a callback rather than the returned value on purpose. `fetch`
+ * resolves as soon as the response *headers* arrive, so clearing the timer at
+ * that point disarms it for the entire body — which for the release archive is
+ * ~173 MB and the only part that takes any real time. A server that answers and
+ * then stalls mid-stream would hang the update indefinitely with no timeout
+ * left to fire and nothing printed. Keeping the timer and the abort signal live
+ * until the body has been read is what makes DOWNLOAD_TIMEOUT_MS mean what its
+ * name says.
+ */
+async function fetchWithTimeout<T>(
+  url: string,
+  timeoutMs: number,
+  consume: (response: Response) => Promise<T>,
+): Promise<T> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
@@ -200,7 +221,14 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
     if (!response.ok) {
       throw new Error(`${response.status} ${response.statusText} for ${url}`)
     }
-    return response
+    return await consume(response)
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(
+        `Timed out after ${Math.round(timeoutMs / 1000)}s fetching ${url}.`,
+      )
+    }
+    throw error
   } finally {
     clearTimeout(timer)
   }
@@ -208,17 +236,22 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
 
 export async function fetchManifest(channel: string): Promise<Manifest> {
   const url = `${releaseBase()}/${channel}/manifest.json`
-  const response = await fetchWithTimeout(url, METADATA_TIMEOUT_MS)
-
-  let parsed: unknown
-  try {
-    parsed = await response.json()
-  } catch (error) {
-    // The URL, always. A bare "Failed to parse JSON" tells the reader nothing
-    // about which of the two published metadata files is the broken one, and
-    // this is the kind of failure that gets reported second-hand.
-    throw new Error(`${url} did not return JSON: ${(error as Error).message}`)
-  }
+  const parsed: unknown = await fetchWithTimeout(
+    url,
+    METADATA_TIMEOUT_MS,
+    async response => {
+      try {
+        return await response.json()
+      } catch (error) {
+        // The URL, always. A bare "Failed to parse JSON" tells the reader
+        // nothing about which of the two published metadata files is the broken
+        // one, and this is the kind of failure that gets reported second-hand.
+        throw new Error(
+          `${url} did not return JSON: ${(error as Error).message}`,
+        )
+      }
+    },
+  )
 
   // Validated rather than cast. This object decides what gets downloaded and
   // what it is checked against, so a malformed field must stop the update
@@ -260,25 +293,31 @@ async function downloadAndHash(
   dest: string,
   onProgress?: (received: number, total: number | null) => void,
 ): Promise<string> {
-  const response = await fetchWithTimeout(url, DOWNLOAD_TIMEOUT_MS)
-  const lengthHeader = response.headers.get('content-length')
-  const total = lengthHeader ? Number(lengthHeader) : null
+  const chunks = await fetchWithTimeout(
+    url,
+    DOWNLOAD_TIMEOUT_MS,
+    async response => {
+      const lengthHeader = response.headers.get('content-length')
+      const total = lengthHeader ? Number(lengthHeader) : null
 
-  const body = response.body
-  if (!body) throw new Error(`No response body for ${url}`)
+      const body = response.body
+      if (!body) throw new Error(`No response body for ${url}`)
 
-  const chunks: Uint8Array[] = []
-  let received = 0
-  const reader = body.getReader()
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (value) {
-      chunks.push(value)
-      received += value.byteLength
-      onProgress?.(received, total && Number.isFinite(total) ? total : null)
-    }
-  }
+      const collected: Uint8Array[] = []
+      let received = 0
+      const reader = body.getReader()
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value) {
+          collected.push(value)
+          received += value.byteLength
+          onProgress?.(received, total && Number.isFinite(total) ? total : null)
+        }
+      }
+      return collected
+    },
+  )
 
   await Bun.write(dest, new Blob(chunks as BlobPart[]))
 
@@ -368,6 +407,27 @@ async function assertBinaryStarts(path: string, version: string): Promise<void> 
  * directory. Something else put it there, and overwriting a launcher we do not
  * own is not recoverable with this tool.
  */
+/**
+ * The version the launcher points at right now, or null if it points nowhere or
+ * outside `versions/`.
+ *
+ * Not the same thing as `install.version`, which is the version of the process
+ * asking. They diverge whenever a session was started before an update, or
+ * after a `--rollback` run from another terminal, and the difference matters in
+ * both places it is used: the rollback target is "what was active", and pruning
+ * must spare "what is running".
+ */
+function activeVersion(install: BinaryInstall): string | null {
+  try {
+    const target = realpathSync(install.launcher)
+    if (dirname(target) !== realpathSync(install.versionsDir)) return null
+    const version = basename(target)
+    return isSafeVersion(version) ? version : null
+  } catch {
+    return null
+  }
+}
+
 export function pointLauncherAt(install: BinaryInstall, version: string): void {
   const target = join(install.versionsDir, version)
 
@@ -406,7 +466,11 @@ export function pointLauncherAt(install: BinaryInstall, version: string): void {
  * Best-effort: a version that cannot be removed is a disk-space problem, not a
  * reason to fail an update that has already succeeded.
  */
-function pruneVersions(install: BinaryInstall, active: string): void {
+function pruneVersions(
+  install: BinaryInstall,
+  active: string,
+  running: string,
+): void {
   let previous = ''
   try {
     previous = readFileSync(install.previousFile, 'utf8').trim()
@@ -427,8 +491,12 @@ function pruneVersions(install: BinaryInstall, active: string): void {
     return
   }
 
+  // `running` is exempt on top of the other two. A session started before an
+  // earlier update is executing that file, and deleting it takes away the one
+  // version the user has just demonstrated works on this machine — which is
+  // exactly what they would want to go back to if the new one misbehaves.
   const prunable = entries
-    .filter(v => v !== active && v !== previous)
+    .filter(v => v !== active && v !== previous && v !== running)
     .sort(compareVersionsDescending)
 
   for (const version of prunable.slice(RETAIN)) {
@@ -497,8 +565,16 @@ function recordResult(result: Record<string, unknown>): void {
 export async function runBinaryUpdate(options?: {
   channel?: string
   onProgress?: (received: number, total: number | null) => void
+  /**
+   * Which install to operate on. Production never passes this — it is here so
+   * the flow can be exercised at all. `currentBinaryInstall()` returns null
+   * unless the process is a compiled binary living in `versions/`, which is
+   * never true under a test runner, so without this seam the entire download →
+   * verify → flip sequence is unreachable outside a real release.
+   */
+  install?: BinaryInstall
 }): Promise<UpdateOutcome> {
-  const install = currentBinaryInstall()
+  const install = options?.install ?? currentBinaryInstall()
   if (!install) return { kind: 'not-a-binary-install' }
 
   const channel = options?.channel ?? process.env.AXA_CHANNEL ?? DEFAULT_CHANNEL
@@ -513,6 +589,34 @@ export async function runBinaryUpdate(options?: {
   }
 
   if (manifest.version === install.version) {
+    // "Latest" is a claim about what the next launch runs, not about this
+    // process. They come apart whenever an earlier attempt installed a version
+    // and failed before, or during, the flip — and that is precisely the state
+    // the failure paths below can leave. Reporting "you are current" on top of
+    // it is the one answer that stops the user looking, so the launcher is
+    // repaired here rather than assumed.
+    const active = activeVersion(install)
+    if (active !== install.version) {
+      try {
+        pointLauncherAt(install, install.version)
+      } catch (error) {
+        const reason =
+          `You are on the latest release (${install.version}), but ${install.launcher} ` +
+          `points at ${active ?? 'nothing this installer recognises'} and could not be ` +
+          `repaired: ${(error as Error).message}\n` +
+          `Fix it with: ln -sfn ${join(install.versionsDir, install.version)} ${install.launcher}`
+        recordResult({ outcome: 'failed', from: install.version, reason })
+        return { kind: 'failed', reason }
+      }
+      return {
+        kind: 'already-latest',
+        version: install.version,
+        notes: [
+          `${install.launcher} was pointing at ${active ?? 'nothing'} rather than ` +
+            `${install.version}; it has been repointed.`,
+        ],
+      }
+    }
     return { kind: 'already-latest', version: install.version }
   }
 
@@ -528,6 +632,13 @@ export async function runBinaryUpdate(options?: {
   }
 
   const staging = install.stagingDir
+  // How far the sequence below got, because the catch at the end covers all of
+  // it and the three states are not interchangeable to the user: nothing
+  // written, written-but-not-active, and active. Asserting the first one
+  // unconditionally is a statement about which binary the next launch runs, and
+  // it is wrong in the other two cases.
+  let installed = false
+  let flipped = false
   try {
     rmSync(staging, { recursive: true, force: true })
     mkdirSync(staging, { recursive: true })
@@ -573,15 +684,24 @@ export async function runBinaryUpdate(options?: {
     // under the data dir. Until this line lands there is no such version.
     const target = join(install.versionsDir, manifest.version)
     renameSync(extracted, target)
+    installed = true
+
+    // Read before the flip, because after it the launcher points at the new
+    // version. This is the version being *replaced*, which is not necessarily
+    // the version running this code: a session opened before a previous update
+    // is older than what the launcher currently serves, and recording it would
+    // send `--rollback` one version further back than the user asked for.
+    const replaced = activeVersion(install) ?? install.version
 
     pointLauncherAt(install, manifest.version)
+    flipped = true
 
     // Written only after the flip: the rollback target is "what was active
     // before", and recording it earlier would leave a pointer to a version that
     // was never replaced if the flip failed.
     const notes: string[] = []
     try {
-      writeFileSync(install.previousFile, `${install.version}\n`)
+      writeFileSync(install.previousFile, `${replaced}\n`)
     } catch (error) {
       logError(error)
       // Surfaced, not swallowed. The update itself succeeded, so failing it
@@ -594,7 +714,7 @@ export async function runBinaryUpdate(options?: {
       )
     }
 
-    pruneVersions(install, manifest.version)
+    pruneVersions(install, manifest.version, install.version)
     rmSync(staging, { recursive: true, force: true })
 
     recordResult({
@@ -612,9 +732,26 @@ export async function runBinaryUpdate(options?: {
     }
   } catch (error) {
     rmSync(staging, { recursive: true, force: true })
-    const reason =
-      `${(error as Error).message}\n` +
-      `Nothing was replaced; you are still on ${install.version}.`
+
+    let state: string
+    if (flipped) {
+      // Everything that matters already happened; only the bookkeeping after it
+      // failed. Saying "nothing was replaced" here would be a flat lie about
+      // which binary the next launch runs.
+      state =
+        `${manifest.version} is installed and \`axa\` now runs it; the step that ` +
+        `failed came after that.\n` +
+        `To undo: ln -sfn ${join(install.versionsDir, install.version)} ${install.launcher}`
+    } else if (installed) {
+      state =
+        `${join(install.versionsDir, manifest.version)} was written, but the ` +
+        `launcher was not repointed — \`axa\` still runs ${install.version}.\n` +
+        `To finish by hand: ln -sfn ${join(install.versionsDir, manifest.version)} ${install.launcher}`
+    } else {
+      state = `Nothing was replaced; you are still on ${install.version}.`
+    }
+
+    const reason = `${(error as Error).message}\n${state}`
     recordResult({ outcome: 'failed', from: install.version, to: manifest.version, reason })
     return { kind: 'failed', reason }
   }
@@ -627,7 +764,12 @@ export function describeOutcome(
 ): string {
   switch (outcome.kind) {
     case 'already-latest':
-      return `Already on the latest release (${outcome.version}).`
+      return (
+        `Already on the latest release (${outcome.version}).` +
+        (outcome.notes?.length
+          ? `\n${outcome.notes.map(n => `Note: ${n}`).join('\n')}`
+          : '')
+      )
     case 'updated':
       return (
         `Updated ${outcome.from} → ${outcome.to}.\n` +
