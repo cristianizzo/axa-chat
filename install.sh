@@ -511,6 +511,7 @@ prune_versions() {
 # -------------------------------------------------------------------
 
 SHADOWED_BY=""
+SHADOW_DELEGATES=""
 PATH_MISSING=0
 
 check_path() {
@@ -532,16 +533,45 @@ check_path() {
 # profile has arbitrary side effects, and an rc file that blocks on input would
 # hang the installer. Reading is enough to find the case that actually occurs.
 check_shadowing() {
-  local rc found=""
+  local rc found="" delegating=""
   for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.zshenv" \
             "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
     [ -f "$rc" ] || continue
     # A function definition (`axa()` / `function axa`) or an alias. Not a bare
     # mention: rc files legitimately export AXA_* variables and add paths.
-    if grep -Eq '^[[:space:]]*(function[[:space:]]+axa\b|axa[[:space:]]*\(\)|alias[[:space:]]+axa=)' "$rc" 2>/dev/null; then
+    grep -Eq '^[[:space:]]*(function[[:space:]]+axa\b|axa[[:space:]]*\(\)|alias[[:space:]]+axa=)' "$rc" 2>/dev/null || continue
+
+    # Defining `axa` is not the same as hijacking it. The common case is a
+    # wrapper that sets CLAUDE_CONFIG_DIR or starts tmux and *then* runs this
+    # very launcher, which is the arrangement this script tells people to build
+    # a few lines below — reporting it as "axa will NOT run what was just
+    # installed" is a false statement about their machine, and the one that
+    # survives is the red block, so it gets believed.
+    #
+    # Whether the file names $LAUNCHER is a heuristic, not proof: the function
+    # could name it in a dead branch. It is chosen because it is wrong in the
+    # recoverable direction — a wrapper that really is broken still gets a
+    # visible note telling the reader how to check, whereas the reverse mistake
+    # sends someone editing a shell config that was already correct.
+    #
+    # All three spellings, because $LAUNCHER is fully expanded and a shell config
+    # almost never is: this repo's own README writes the launcher as
+    # `~/.local/bin/axa` in every example, so matching only the absolute path
+    # sends exactly the reader who followed the documentation into the red block.
+    # The tilde and $HOME forms are only meaningful when the launcher is under
+    # $HOME — with AXA_BIN_DIR pointing elsewhere, `${LAUNCHER#$HOME}` is the
+    # unchanged absolute path and the extra alternates are harmless duplicates.
+    local tail_path="${LAUNCHER#$HOME}"
+    if grep -Fq "$LAUNCHER" "$rc" 2>/dev/null ||
+       grep -Fq "~${tail_path}" "$rc" 2>/dev/null ||
+       grep -Fq "\$HOME${tail_path}" "$rc" 2>/dev/null ||
+       grep -Fq "\${HOME}${tail_path}" "$rc" 2>/dev/null; then
+      delegating="${delegating}${delegating:+, }${rc}"
+    else
       found="${found}${found:+, }${rc}"
     fi
   done
+  SHADOW_DELEGATES="$delegating"
 
   # Second, independent signal: whatever this shell would run for `axa` right
   # now. It catches another install earlier on PATH, which the rc scan cannot.
@@ -673,6 +703,26 @@ report_launcher_state() {
     printf "  If it is a function that also sets environment variables or wraps\n"
     printf "  tmux, keep the function and change only the command it runs — do\n"
     printf "  not delete it.\n"
+  fi
+
+  # Deliberately does not clear `clean`: nothing is known to be wrong here, and
+  # this note exists so the reader can confirm rather than be alarmed. It is
+  # still printed, because the check behind it is a heuristic and a silent
+  # "everything is fine" would be the one outcome they could not check.
+  # Suppressed when the red block above also fired. Something IS claiming the
+  # name in that case, and printing "nothing needs doing" underneath "axa will
+  # NOT run what was just installed" contradicts it — the reader then has to
+  # guess which of the two to act on.
+  if [ -n "$SHADOW_DELEGATES" ] && [ -z "$SHADOWED_BY" ]; then
+    echo ""
+    printf "${YELLOW}  \`axa\` is defined in your shell config, and it points here:${RESET}\n"
+    printf "${BOLD}    %s${RESET}\n" "$SHADOW_DELEGATES"
+    echo ""
+    printf "  That is the recommended arrangement — a wrapper that sets variables\n"
+    printf "  or starts tmux and then runs this launcher — so nothing needs doing.\n"
+    printf "  Confirm with:\n"
+    echo ""
+    printf "${CYAN}    command -v axa; axa --version${RESET}\n"
   fi
 
   echo ""

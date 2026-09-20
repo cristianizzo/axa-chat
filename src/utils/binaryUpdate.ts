@@ -74,6 +74,21 @@ function releaseBase(): string {
 }
 
 /**
+ * Where the *API* route reads the channel manifest from — deliberately a
+ * different override from `AXA_RELEASE_BASE`.
+ *
+ * Two knobs rather than one because they answer different questions.
+ * `AXA_RELEASE_BASE` chooses an origin and is set to a `file://` tree by the
+ * tests, which have no API to talk to; folding the API onto it would mean the
+ * API route is *disabled* in every test and so never executed anywhere. A
+ * separate name lets a fixture server stand in for api.github.com without
+ * disturbing the origin.
+ */
+function releaseApiBase(): string {
+  return process.env.AXA_RELEASE_API_BASE || 'https://api.github.com'
+}
+
+/**
  * Versions kept on disk, not counting the active one and the rollback target,
  * which are never pruned. 173 MB each, and they are the only recovery that
  * exists when a release will not start.
@@ -82,6 +97,21 @@ const RETAIN = 3
 
 const DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000
 const METADATA_TIMEOUT_MS = 60 * 1000
+/**
+ * The whole API route — both calls — not each one, and deliberately far shorter
+ * than `METADATA_TIMEOUT_MS`.
+ *
+ * The two budgets are asymmetric because the routes are: the download url is the
+ * route that *must* succeed, so it gets the generous 60s, while the API route is
+ * only ever a preference that can save the caller from a stale answer. A
+ * preference must not be able to cost more than it can save. Measured live
+ * against api.github.com the whole route answers in ~850ms, and the failure this
+ * bounds is the one that does not answer at all — a proxy that drops rather than
+ * refuses, which is the first scenario this route exists for. Without the bound
+ * that is 60s per call, twice, before the route that used to be the only one
+ * even starts, with no progress output: indistinguishable from a hang.
+ */
+const API_BUDGET_MS = 10 * 1000
 /** Generous: a first run of a 173 MB binary is cold-cache and page-faults in. */
 const SMOKE_TIMEOUT_MS = 60 * 1000
 
@@ -213,11 +243,12 @@ async function fetchWithTimeout<T>(
   url: string,
   timeoutMs: number,
   consume: (response: Response) => Promise<T>,
+  headers?: Record<string, string>,
 ): Promise<T> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const response = await fetch(url, { signal: controller.signal })
+    const response = await fetch(url, { signal: controller.signal, headers })
     if (!response.ok) {
       throw new Error(`${response.status} ${response.statusText} for ${url}`)
     }
@@ -228,45 +259,126 @@ async function fetchWithTimeout<T>(
         `Timed out after ${Math.round(timeoutMs / 1000)}s fetching ${url}.`,
       )
     }
+    // `fetch` reports a connection failure as a bare "Unable to connect. Is the
+    // computer able to access the url?" — which names no url. Measured with both
+    // manifest routes broken, the whole report was that one sentence twice over,
+    // with nothing to say whether the API host, the download host or both were
+    // unreachable. `includes` rather than an unconditional append, so the
+    // messages that already carry their url are not given it a second time.
+    const message = (error as Error | undefined)?.message
+    if (typeof message === 'string' && !message.includes(url)) {
+      throw new Error(`${message} (${url})`)
+    }
     throw error
   } finally {
     clearTimeout(timer)
   }
 }
 
-export async function fetchManifest(channel: string): Promise<Manifest> {
-  const url = `${releaseBase()}/${channel}/manifest.json`
-  const parsed: unknown = await fetchWithTimeout(
-    url,
-    METADATA_TIMEOUT_MS,
-    async response => {
-      try {
-        return await response.json()
-      } catch (error) {
-        // The URL, always. A bare "Failed to parse JSON" tells the reader
-        // nothing about which of the two published metadata files is the broken
-        // one, and this is the kind of failure that gets reported second-hand.
-        throw new Error(
-          `${url} did not return JSON: ${(error as Error).message}`,
-        )
-      }
+/**
+ * Read the channel manifest through the GitHub API instead of the download URL.
+ *
+ * The channel pointer is a *fixed* URL whose content changes on every release,
+ * which is the one shape a CDN handles worst. Measured against GitHub: a copy
+ * from before the release is served for an opaque TTL — the response carries an
+ * `age` and no `cache-control` at all — and neither `?t=<now>` nor a
+ * `Cache-Control: no-cache` request header displaces it. All three spellings
+ * came back with the same `age`, so there is no cache-buster to add. A user
+ * running `/update` shortly after a release is told they are already current.
+ *
+ * This sidesteps caching rather than fighting it. A release asset's id is minted
+ * when the asset is uploaded, so `releases/assets/<id>` is a different URL for
+ * every published manifest, and a cached entry for one id can only ever hold the
+ * bytes uploaded under that id. Freshness stops being load-bearing: correctness
+ * comes from the id. Only the id lookup itself can be stale, and that response
+ * carries an explicit `max-age=60`.
+ *
+ * It is a preference, not a requirement, and the caller falls back to the
+ * download URL on any failure here: api.github.com is a second host a proxy may
+ * block while allowing github.com, it is rate limited to 60 requests an hour for
+ * an unauthenticated caller, and `AXA_RELEASE_BASE` points the tests at a
+ * `file://` origin that has no API at all.
+ */
+async function fetchManifestViaApi(channel: string): Promise<unknown> {
+  // Encoded, unlike the download url built from the same channel. That one
+  // addresses a release asset and a bad channel 404s; this one addresses
+  // api.github.com, which has a far larger surface reachable through a path
+  // segment, and the channel arrives from the environment.
+  const api = `${releaseApiBase()}/repos/${REPO_SLUG}/releases`
+  // One deadline spanning both calls rather than a budget each, so the route's
+  // worst case is what `API_BUDGET_MS` says it is instead of twice it.
+  const deadline = Date.now() + API_BUDGET_MS
+  const remaining = () => Math.max(1, deadline - Date.now())
+
+  const release: unknown = await fetchWithTimeout(
+    `${api}/tags/${encodeURIComponent(channel)}`,
+    remaining(),
+    response => response.json(),
+    // The user-agent matches `resolveLatestCommit` in sourceUpdate.ts, the
+    // other caller of this host. Bun sends one by default so this works either
+    // way; naming ourselves is what makes a rate-limit answer attributable.
+    {
+      accept: 'application/vnd.github+json',
+      'user-agent': 'axa-chat-updater',
     },
   )
 
-  // Validated rather than cast. This object decides what gets downloaded and
-  // what it is checked against, so a malformed field must stop the update
-  // rather than flow into a path or a comparison.
+  const assets = (release as { assets?: unknown }).assets
+  if (!Array.isArray(assets)) {
+    throw new Error(`the ${channel} release carries no assets array`)
+  }
+  const asset = assets.find(
+    entry =>
+      typeof entry === 'object' &&
+      entry !== null &&
+      (entry as { name?: unknown }).name === 'manifest.json',
+  )
+  const id = (asset as { id?: unknown } | undefined)?.id
+  // `Number.isInteger`, not `typeof id === 'number'`: that admits NaN and 1e21,
+  // which interpolate into the url as the literal "NaN" and "1e+21".
+  if (!Number.isInteger(id) || (id as number) <= 0) {
+    throw new Error(
+      `the ${channel} release has no manifest.json asset with a usable id`,
+    )
+  }
+
+  // Without this Accept header the endpoint returns the asset's *metadata*
+  // rather than its bytes. That is a 200 carrying valid JSON, so it is caught
+  // by validating this route's answer before accepting it, not by the fetch.
+  return await fetchWithTimeout(
+    `${api}/assets/${id as number}`,
+    remaining(),
+    response => response.json(),
+    {
+      accept: 'application/octet-stream',
+      'user-agent': 'axa-chat-updater',
+    },
+  )
+}
+
+/**
+ * Validated rather than cast. This object decides what gets downloaded and what
+ * it is checked against, so a malformed field must stop the update rather than
+ * flow into a path or a comparison.
+ *
+ * Separate from the fetching so it can run *per route*: a route that answers 200
+ * with a JSON body that is not a manifest — an API error envelope, or the asset
+ * metadata that comes back when the Accept header is wrong — has not produced a
+ * manifest, and must be treated as a failed route rather than as an answer that
+ * then fails validation for everyone.
+ */
+function validateManifest(parsed: unknown, channel: string): Manifest {
   if (typeof parsed !== 'object' || parsed === null) {
-    throw new Error(`The ${channel} manifest is not a JSON object.`)
+    throw new Error(`the ${channel} manifest is not a JSON object`)
   }
   const m = parsed as Partial<Manifest>
   if (typeof m.version !== 'string' || !isSafeVersion(m.version)) {
     throw new Error(
-      `The ${channel} manifest has no usable version field (got ${JSON.stringify(m.version)}).`,
+      `the ${channel} manifest has no usable version field (got ${JSON.stringify(m.version)})`,
     )
   }
   if (typeof m.platforms !== 'object' || m.platforms === null) {
-    throw new Error(`The ${channel} manifest has no platforms map.`)
+    throw new Error(`the ${channel} manifest has no platforms map`)
   }
   return {
     schema: typeof m.schema === 'number' ? m.schema : 1,
@@ -274,6 +386,97 @@ export async function fetchManifest(channel: string): Promise<Manifest> {
     version: m.version,
     platforms: m.platforms,
   }
+}
+
+type ManifestRoute = { label: string; fetch: () => Promise<unknown> }
+
+/**
+ * The routes to the channel manifest, freshest first.
+ *
+ * The API route is omitted when `AXA_RELEASE_BASE` is set *and*
+ * `AXA_RELEASE_API_BASE` is not — both halves matter, and stating only the
+ * first would describe a function that no test could reach the API route
+ * through. An origin override on its own points at a local tree that has no API
+ * and trying one there spends a timeout to learn nothing; setting the second
+ * alongside it is how a fixture stands in for api.github.com.
+ *
+ * They are two overrides rather than one because they answer different
+ * questions: folding them together would conflate "which origin" with "which
+ * protocol", and the arm added to fix a live defect would then be disabled in
+ * every test and so exercised nowhere.
+ */
+function manifestRoutes(channel: string): ManifestRoute[] {
+  const url = `${releaseBase()}/${channel}/manifest.json`
+  const download: ManifestRoute = {
+    label: url,
+    fetch: () =>
+      fetchWithTimeout(url, METADATA_TIMEOUT_MS, async response => {
+        try {
+          return await response.json()
+        } catch (error) {
+          // Not prefixed with the url: this route's `label` already is the url,
+          // and `fetchManifest` prints `<label> — <message>`. Naming it here too
+          // printed it twice on one line. The identification the old comment
+          // here was protecting is still there, it just comes from the label.
+          throw new Error(`did not return JSON: ${(error as Error).message}`)
+        }
+      }),
+  }
+  // An origin override with no API override is a local tree: there is no API
+  // there, and trying one spends a timeout to learn nothing. Setting both is
+  // how a test puts a fixture in the API's place.
+  if (process.env.AXA_RELEASE_BASE && !process.env.AXA_RELEASE_API_BASE) {
+    return [download]
+  }
+  return [
+    { label: releaseApiBase(), fetch: () => fetchManifestViaApi(channel) },
+    download,
+  ]
+}
+
+export async function fetchManifest(
+  channel: string,
+): Promise<{ manifest: Manifest; notes: string[] }> {
+  const failures: string[] = []
+
+  for (const route of manifestRoutes(channel)) {
+    let manifest: Manifest
+    try {
+      manifest = validateManifest(await route.fetch(), channel)
+    } catch (error) {
+      // The label identifies the route; the message often identifies it too, and
+      // more precisely — `fetchWithTimeout` names the exact url it was on, which
+      // for the API route is the specific endpoint rather than just the host.
+      // Prefixing unconditionally printed the download route's url twice on one
+      // line, since there the label *is* the url.
+      const message = (error as Error).message
+      failures.push(
+        message.includes(route.label) ? message : `${route.label} — ${message}`,
+      )
+      continue
+    }
+
+    // Falling back is not free, and staying quiet about it would reinstate the
+    // exact defect this route list exists to fix: the cached copy answers
+    // "you are already on the latest release" with a version that was current
+    // before the release being looked for. Succeeding on the first route is the
+    // only case that says nothing.
+    const notes =
+      failures.length === 0
+        ? []
+        : [
+            `The freshest route to the ${channel} manifest did not answer, so this ` +
+              `came from a cached copy that can be a few minutes behind. If a release ` +
+              `was just published, try again shortly.\n` +
+              failures.map(f => `  ${f}`).join('\n'),
+          ]
+    return { manifest, notes }
+  }
+
+  throw new Error(
+    `Could not read the ${channel} release manifest. Every route failed:\n` +
+      failures.map(f => `  ${f}`).join('\n'),
+  )
 }
 
 function platformKey(): string {
@@ -580,13 +783,38 @@ export async function runBinaryUpdate(options?: {
   const channel = options?.channel ?? process.env.AXA_CHANNEL ?? DEFAULT_CHANNEL
 
   let manifest: Manifest
+  // Carried all the way to the outcome. The only thing a stale manifest can say
+  // is "you are already on the latest release", which is also what a correct one
+  // says — so if the fresh route was skipped, the note is the user's only signal
+  // that the answer is worth repeating in a minute.
+  let manifestNotes: string[]
   try {
-    manifest = await fetchManifest(channel)
+    const fetched = await fetchManifest(channel)
+    manifest = fetched.manifest
+    manifestNotes = fetched.notes
   } catch (error) {
-    const reason = `Could not read the ${channel} release manifest: ${(error as Error).message}`
+    // Passed through rather than prefixed. `fetchManifest` is the only thing
+    // that throws here and its message already opens with this exact sentence,
+    // so a wrapper printed it twice — once as a prefix and once as the body.
+    const reason = (error as Error).message
     recordResult({ outcome: 'failed', from: install.version, reason })
     return { kind: 'failed', reason }
   }
+
+  /**
+   * Append the staleness note to a failure downstream of the manifest fetch.
+   *
+   * Every such failure — no artifact for this platform, a checksum that does not
+   * match — is a complaint about the *contents* of the manifest, and if those
+   * contents came from the cached route they can name an asset that has since
+   * been clobbered. That is the single fact which explains the failure, and
+   * without it the report accuses a release that is actually fine. The `failed`
+   * outcome carries no notes field, so it goes into the reason itself.
+   */
+  const withManifestNotes = (reason: string): string =>
+    manifestNotes.length === 0
+      ? reason
+      : `${reason}\n\n${manifestNotes.join('\n')}`
 
   if (manifest.version === install.version) {
     // "Latest" is a claim about what the next launch runs, not about this
@@ -612,21 +840,27 @@ export async function runBinaryUpdate(options?: {
         kind: 'already-latest',
         version: install.version,
         notes: [
+          ...manifestNotes,
           `${install.launcher} was pointing at ${active ?? 'nothing'} rather than ` +
             `${install.version}; it has been repointed.`,
         ],
       }
     }
-    return { kind: 'already-latest', version: install.version }
+    return {
+      kind: 'already-latest',
+      version: install.version,
+      ...(manifestNotes.length > 0 ? { notes: manifestNotes } : {}),
+    }
   }
 
   const key = platformKey()
   const platform = manifest.platforms[key]
   if (!platform || typeof platform.url !== 'string' || typeof platform.sha256 !== 'string') {
-    const reason =
+    const reason = withManifestNotes(
       `Release ${manifest.version} publishes no artifact for ${key}. ` +
-      `Published platforms: ${Object.keys(manifest.platforms).join(', ') || 'none'}. ` +
-      `Nothing was changed; you are still on ${install.version}.`
+        `Published platforms: ${Object.keys(manifest.platforms).join(', ') || 'none'}. ` +
+        `Nothing was changed; you are still on ${install.version}.`,
+    )
     recordResult({ outcome: 'failed', from: install.version, to: manifest.version, reason })
     return { kind: 'failed', reason }
   }
@@ -650,9 +884,15 @@ export async function runBinaryUpdate(options?: {
     } catch (error) {
       // Rethrown with the URL attached. Some transports lose it — a `file://`
       // ENOENT from Bun does, measured — and "which URL" is the first thing
-      // anyone asks about a download that failed.
+      // anyone asks about a download that failed. Skipped when the message
+      // already carries it, which it now does for anything that came through
+      // `fetchWithTimeout`: naming the same URL twice in one sentence reads
+      // like two different failures.
+      const message = (error as Error).message
       throw new Error(
-        `Could not download ${platform.url}: ${(error as Error).message}`,
+        message.includes(platform.url)
+          ? `Could not download: ${message}`
+          : `Could not download ${platform.url}: ${message}`,
       )
     }
     const expected = platform.sha256.trim().toLowerCase()
@@ -661,11 +901,12 @@ export async function runBinaryUpdate(options?: {
       // Deleted rather than kept for inspection: a file that failed its
       // checksum is the one thing that must not survive to be run by accident.
       rmSync(staging, { recursive: true, force: true })
-      const reason =
+      const reason = withManifestNotes(
         `Checksum mismatch for ${basename(platform.url)}.\n` +
-        `  expected  ${expected}\n` +
-        `  actual    ${actual}\n` +
-        `The download was discarded and nothing was installed. You are still on ${install.version}.`
+          `  expected  ${expected}\n` +
+          `  actual    ${actual}\n` +
+          `The download was discarded and nothing was installed. You are still on ${install.version}.`,
+      )
       recordResult({ outcome: 'failed', from: install.version, to: manifest.version, reason })
       return { kind: 'failed', reason }
     }
@@ -699,7 +940,10 @@ export async function runBinaryUpdate(options?: {
     // Written only after the flip: the rollback target is "what was active
     // before", and recording it earlier would leave a pointer to a version that
     // was never replaced if the flip failed.
-    const notes: string[] = []
+    // Seeded with whatever the manifest fetch had to say. An update that
+    // *succeeded* off a cached manifest is not wrong, but it may have installed
+    // a version that is already one behind, and that is worth knowing here too.
+    const notes: string[] = [...manifestNotes]
     try {
       writeFileSync(install.previousFile, `${replaced}\n`)
     } catch (error) {
@@ -751,7 +995,7 @@ export async function runBinaryUpdate(options?: {
       state = `Nothing was replaced; you are still on ${install.version}.`
     }
 
-    const reason = `${(error as Error).message}\n${state}`
+    const reason = withManifestNotes(`${(error as Error).message}\n${state}`)
     recordResult({ outcome: 'failed', from: install.version, to: manifest.version, reason })
     return { kind: 'failed', reason }
   }
