@@ -95,6 +95,90 @@ ok()    { printf "${GREEN}[+]${RESET} %s\n" "$*"; }
 warn()  { printf "${YELLOW}[!]${RESET} %s\n" "$*"; }
 fail()  { printf "${RED}[x]${RESET} %s\n" "$*" >&2; exit 1; }
 
+# Escapes ERE metacharacters so a literal path can be dropped into a
+# `grep -E` pattern without any of its characters (`.`, `$`, etc., all
+# legal in a path) being read as regex syntax. `}` was missing from this
+# class — caught by Copilot: paired with an unescaped `{` it forms a
+# regex interval, and even alone its behavior in ERE is implementation-
+# defined rather than guaranteed literal, so a launcher path containing it
+# (a possible HOME or AXA_BIN_DIR character) could misparse the pattern.
+escape_ere() { printf '%s' "$1" | sed -e 's/[][\.*^$()+?{}|]/\\&/g'; }
+
+# Prints just the `axa` function/alias definition out of an rc file, not the
+# whole file. Caught by Copilot: a path search over the entire file matches
+# an unrelated comment or a variable assignment that happens to mention the
+# launcher path anywhere else in the rc file, and reads that as the
+# definition delegating — a real hijack sitting a few lines away from an
+# innocent mention still gets classified as safe.
+#
+# Brace-depth tracked line by line rather than parsed properly: this rc file
+# is the user's own, arbitrary shell, and a heuristic that fails toward
+# capturing too much (a few extra lines around the real definition) is the
+# safe direction — the match still has to name the launcher path afterward,
+# so extra context can only add false "delegating" positives back in, never
+# remove a real one. An alias line has no braces, so it is captured and
+# printed on its own.
+#
+# The block stays open until an opening brace has actually been SEEN, not
+# just until depth returns to 0 — `axa()` legally puts the brace on the next
+# line, and depth is 0 on the header either way (no brace yet vs. balanced).
+# Stopping on that shared value cut the capture off before the body, so a
+# real delegating wrapper written that way was read as an empty definition
+# and misclassified as a hijack. Caught by Copilot.
+#
+# Only the LAST matching definition survives to be printed, not every one
+# concatenated — also caught by Copilot: a profile that defines a delegating
+# `axa` and later redefines it to a real hijack (the shell keeps only the
+# second one) previously had both texts joined together, so the delegating
+# text's mention of the launcher path kept the hijack hidden. `buf` is
+# discarded and restarted on every new match for exactly that reason.
+#
+# Braces are counted on a `#`-comment-stripped copy of each line, not on the
+# raw line: counting every literal `}` meant a valid wrapper with a `# }` (or
+# any brace inside a comment) before the real closing brace was truncated
+# there, read as an incomplete/hijacking definition, and given the red
+# warning — the wrong direction for this heuristic's own stated safety bias
+# (over-capturing is safe; stopping early is not). Caught by Copilot. A
+# brace inside a quoted string is not handled the same way — that needs real
+# tokenizing, which the design note above already rules out — so this closes
+# the comment case, not every case.
+extract_axa_def() {
+  awk '
+    $0 ~ /^[[:space:]]*alias[[:space:]]+axa=/ {
+      buf = $0 "\n"
+      inblock = 0
+      next
+    }
+    $0 ~ /^[[:space:]]*(function[[:space:]]+axa([[:space:]]|\(|$)|axa[[:space:]]*\(\))/ {
+      buf = $0 "\n"
+      inblock = 1
+      depth = 0
+      seen_brace = 0
+      line = $0
+      sub(/^#.*$/, "", line)
+      sub(/[[:space:]]#.*$/, "", line)
+      opens = gsub(/\{/, "{", line)
+      closes = gsub(/\}/, "}", line)
+      depth += opens - closes
+      if (opens > 0) { seen_brace = 1 }
+      if (seen_brace && depth <= 0) { inblock = 0 }
+      next
+    }
+    inblock {
+      buf = buf $0 "\n"
+      line = $0
+      sub(/^#.*$/, "", line)
+      sub(/[[:space:]]#.*$/, "", line)
+      opens = gsub(/\{/, "{", line)
+      closes = gsub(/\}/, "}", line)
+      depth += opens - closes
+      if (opens > 0) { seen_brace = 1 }
+      if (seen_brace && depth <= 0) { inblock = 0 }
+    }
+    END { printf "%s", buf }
+  ' "$1"
+}
+
 header() {
   echo ""
   printf "${BOLD}${CYAN}"
@@ -511,6 +595,7 @@ prune_versions() {
 # -------------------------------------------------------------------
 
 SHADOWED_BY=""
+SHADOW_DELEGATES=""
 PATH_MISSING=0
 
 check_path() {
@@ -532,16 +617,120 @@ check_path() {
 # profile has arbitrary side effects, and an rc file that blocks on input would
 # hang the installer. Reading is enough to find the case that actually occurs.
 check_shadowing() {
-  local rc found=""
+  local rc found="" delegating=""
   for rc in "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.zshenv" \
             "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
     [ -f "$rc" ] || continue
     # A function definition (`axa()` / `function axa`) or an alias. Not a bare
     # mention: rc files legitimately export AXA_* variables and add paths.
-    if grep -Eq '^[[:space:]]*(function[[:space:]]+axa\b|axa[[:space:]]*\(\)|alias[[:space:]]+axa=)' "$rc" 2>/dev/null; then
+    grep -Eq '^[[:space:]]*(function[[:space:]]+axa\b|axa[[:space:]]*\(\)|alias[[:space:]]+axa=)' "$rc" 2>/dev/null || continue
+
+    # Defining `axa` is not the same as hijacking it. The common case is a
+    # wrapper that sets CLAUDE_CONFIG_DIR or starts tmux and *then* runs this
+    # very launcher, which is the arrangement this script tells people to build
+    # a few lines below — reporting it as "axa will NOT run what was just
+    # installed" is a false statement about their machine, and the one that
+    # survives is the red block, so it gets believed.
+    #
+    # Whether the file names $LAUNCHER is a heuristic, not proof: the function
+    # could name it in a dead branch. It is chosen because it is wrong in the
+    # recoverable direction — a wrapper that really is broken still gets a
+    # visible note telling the reader how to check, whereas the reverse mistake
+    # sends someone editing a shell config that was already correct.
+    #
+    # All three spellings, because $LAUNCHER is fully expanded and a shell config
+    # almost never is: this repo's own README writes the launcher as
+    # `~/.local/bin/axa` in every example, so matching only the absolute path
+    # sends exactly the reader who followed the documentation into the red block.
+    # The tilde and $HOME forms are only meaningful when the launcher is under
+    # $HOME — with AXA_BIN_DIR pointing elsewhere, `${LAUNCHER#$HOME}` is the
+    # unchanged absolute path and the extra alternates are harmless duplicates.
+    # Matched as a path token, not an unbounded substring: `-Fq "$LAUNCHER"`
+    # alone treats `~/.local/bin/axa` as present inside `~/.local/bin/axa-dev`,
+    # so a real hijack — `axa() { ~/.local/bin/axa-dev "$@"; }` — read as
+    # delegating and suppressed the red warning for it. Caught by Copilot.
+    # `[^A-Za-z0-9_.-]|$` requires whatever follows the path to not be able to
+    # continue the same filename; a space, quote, or end of line all satisfy
+    # it, a trailing `-dev` does not.
+    #
+    # Searched within just the matched definition, not the whole rc file —
+    # also caught by Copilot: an unrelated comment or export elsewhere in the
+    # file that happens to name the launcher path used to make a genuine
+    # hijack read as delegating.
+    #
+    # A trailing boundary alone still lets `grep` start the match mid-token:
+    # a real hijack like `/tmp${LAUNCHER}` has the launcher path as a
+    # *suffix*, which the trailing check alone waves through as delegating.
+    # `lead` requires the character immediately before the candidate — or
+    # start of line — to not be able to extend a different, longer path into
+    # this one. Caught by Copilot.
+    #
+    # `/` was missing from both negated classes, so it counted as a valid
+    # boundary itself: with LAUNCHER=/home/me/.local/bin/axa, a hijack like
+    # `/tmp/home/me/.local/bin/axa` still classified as delegating, because
+    # the `/` right before `home/...` satisfied `lead`. Including `/` in the
+    # excluded set requires a complete path component, not just any substring
+    # bounded by slashes. Caught by Copilot.
+    #
+    # The search ran over the raw definition text, comments included, so a
+    # real hijack that merely mentions the launcher in a `#` comment —
+    # `axa() { # delegate through ~/.local/bin/axa\n  echo hijacked; }` —
+    # still classified as delegating; nothing here confirms the path is being
+    # invoked rather than just named. Stripping `#...`-to-end-of-line before
+    # matching removes that. Caught by Copilot.
+    #
+    # The same problem survives in a string literal instead of a comment:
+    # `echo "not using ~/.local/bin/axa"; hijack_cmd` names the path in an
+    # argument to a command that only prints text, never runs it. A full fix
+    # needs real tokenizing — ruled out by this function's own design note —
+    # but the concrete shape is always "the entire line is a call to a
+    # text-printing builtin", so dropping whole lines that start with one of
+    # those closes the demonstrated case without parsing arbitrary strings.
+    # Caught by Copilot.
+    local def
+    def="$(extract_axa_def "$rc")"
+    # `|| true`: under `set -e -o pipefail`, `grep -v` returning 1 because
+    # every line was a narrative line it dropped would abort the whole
+    # installer on this bare assignment, not just fail this one check.
+    # A `#` only starts a shell comment as the first character of a word — at
+    # the start of the line, or preceded by whitespace. A `#` glued to other
+    # characters, like `AXA_BIN_DIR=/tmp/a#b`, is a literal character in that
+    # path. Stripping unconditionally from every `#` onward truncated the
+    # launcher path itself in that case, so a genuinely delegating wrapper
+    # lost its match and was reported as a red hijack. Caught by Copilot.
+    local def_nc
+    def_nc="$(printf '%s\n' "$def" |
+      sed -E 's/(^|[[:space:]])#.*$//' |
+      grep -Ev '^[[:space:]]*(echo|printf|print)([[:space:]]|$)' || true)"
+    # The tilde/$HOME/${HOME} alternates are only meaningful spellings of
+    # LAUNCHER when it actually sits under $HOME at a path-component
+    # boundary. When AXA_BIN_DIR points elsewhere, `${LAUNCHER#$HOME}`
+    # doesn't strip anything, so tail_path is the unchanged absolute
+    # LAUNCHER — and a wrapper naming an unrelated path like
+    # `~/tmp/foo/axa` matched here as "~" + that same unchanged string,
+    # even though it has nothing to do with the real launcher. Only run
+    # those three checks when the prefix removal actually took effect.
+    # Caught by Copilot.
+    local under_home=0
+    case "$LAUNCHER" in
+      "$HOME") under_home=1 ;;
+      "$HOME"/*) under_home=1 ;;
+    esac
+    local tail_path="${LAUNCHER#$HOME}"
+    local lead='(^|[^A-Za-z0-9_./-])'
+    local boundary='([^A-Za-z0-9_./-]|$)'
+    if printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "$LAUNCHER")${boundary}" 2>/dev/null ||
+       { [ "$under_home" -eq 1 ] && {
+           printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "~${tail_path}")${boundary}" 2>/dev/null ||
+           printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "\$HOME${tail_path}")${boundary}" 2>/dev/null ||
+           printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "\${HOME}${tail_path}")${boundary}" 2>/dev/null
+         }; }; then
+      delegating="${delegating}${delegating:+, }${rc}"
+    else
       found="${found}${found:+, }${rc}"
     fi
   done
+  SHADOW_DELEGATES="$delegating"
 
   # Second, independent signal: whatever this shell would run for `axa` right
   # now. It catches another install earlier on PATH, which the rc scan cannot.
@@ -673,6 +862,26 @@ report_launcher_state() {
     printf "  If it is a function that also sets environment variables or wraps\n"
     printf "  tmux, keep the function and change only the command it runs — do\n"
     printf "  not delete it.\n"
+  fi
+
+  # Deliberately does not clear `clean`: nothing is known to be wrong here, and
+  # this note exists so the reader can confirm rather than be alarmed. It is
+  # still printed, because the check behind it is a heuristic and a silent
+  # "everything is fine" would be the one outcome they could not check.
+  # Suppressed when the red block above also fired. Something IS claiming the
+  # name in that case, and printing "nothing needs doing" underneath "axa will
+  # NOT run what was just installed" contradicts it — the reader then has to
+  # guess which of the two to act on.
+  if [ -n "$SHADOW_DELEGATES" ] && [ -z "$SHADOWED_BY" ]; then
+    echo ""
+    printf "${YELLOW}  \`axa\` is defined in your shell config, and it points here:${RESET}\n"
+    printf "${BOLD}    %s${RESET}\n" "$SHADOW_DELEGATES"
+    echo ""
+    printf "  That is the recommended arrangement — a wrapper that sets variables\n"
+    printf "  or starts tmux and then runs this launcher — so nothing needs doing.\n"
+    printf "  Confirm with:\n"
+    echo ""
+    printf "${CYAN}    command -v axa; axa --version${RESET}\n"
   fi
 
   echo ""
