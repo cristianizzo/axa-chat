@@ -408,7 +408,7 @@ type ManifestRoute = { label: string; fetch: () => Promise<unknown> }
  * protocol", and the arm added to fix a live defect would then be disabled in
  * every test and so exercised nowhere.
  */
-function manifestRoutes(channel: string): ManifestRoute[] {
+function manifestRoutes(channel: string): { routes: ManifestRoute[]; skipped: string[] } {
   const url = `${releaseBase()}/${channel}/manifest.json`
   const download: ManifestRoute = {
     label: url,
@@ -428,21 +428,37 @@ function manifestRoutes(channel: string): ManifestRoute[] {
   // An origin override with no API override is a local tree: there is no API
   // there, and trying one spends a timeout to learn nothing. Setting both is
   // how a test puts a fixture in the API's place.
+  //
+  // Returned as a `skipped` note rather than just omitting the route: an
+  // unannotated success on `download` here would say the exact same thing a
+  // genuinely stale CDN answer says. Caught by Copilot — the fallback
+  // contract this file exists to keep is "any answer that didn't come from
+  // the freshest route says so," and a skip is one more way to not come from
+  // the freshest route, same as a failure.
   if (process.env.AXA_RELEASE_BASE && !process.env.AXA_RELEASE_API_BASE) {
-    return [download]
+    return {
+      routes: [download],
+      skipped: [
+        `${releaseApiBase()} — skipped: AXA_RELEASE_BASE is set without AXA_RELEASE_API_BASE`,
+      ],
+    }
   }
-  return [
-    { label: releaseApiBase(), fetch: () => fetchManifestViaApi(channel) },
-    download,
-  ]
+  return {
+    routes: [
+      { label: releaseApiBase(), fetch: () => fetchManifestViaApi(channel) },
+      download,
+    ],
+    skipped: [],
+  }
 }
 
 export async function fetchManifest(
   channel: string,
 ): Promise<{ manifest: Manifest; notes: string[] }> {
-  const failures: string[] = []
+  const { routes, skipped } = manifestRoutes(channel)
+  const failures: string[] = [...skipped]
 
-  for (const route of manifestRoutes(channel)) {
+  for (const route of routes) {
     let manifest: Manifest
     try {
       manifest = validateManifest(await route.fetch(), channel)

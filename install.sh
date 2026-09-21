@@ -95,6 +95,11 @@ ok()    { printf "${GREEN}[+]${RESET} %s\n" "$*"; }
 warn()  { printf "${YELLOW}[!]${RESET} %s\n" "$*"; }
 fail()  { printf "${RED}[x]${RESET} %s\n" "$*" >&2; exit 1; }
 
+# Escapes ERE metacharacters so a literal path can be dropped into a
+# `grep -E` pattern without any of its characters (`.`, `$`, etc., all
+# legal in a path) being read as regex syntax.
+escape_ere() { printf '%s' "$1" | sed -e 's/[][\.*^$()+?{|]/\\&/g'; }
+
 header() {
   echo ""
   printf "${BOLD}${CYAN}"
@@ -561,11 +566,19 @@ check_shadowing() {
     # The tilde and $HOME forms are only meaningful when the launcher is under
     # $HOME — with AXA_BIN_DIR pointing elsewhere, `${LAUNCHER#$HOME}` is the
     # unchanged absolute path and the extra alternates are harmless duplicates.
+    # Matched as a path token, not an unbounded substring: `-Fq "$LAUNCHER"`
+    # alone treats `~/.local/bin/axa` as present inside `~/.local/bin/axa-dev`,
+    # so a real hijack — `axa() { ~/.local/bin/axa-dev "$@"; }` — read as
+    # delegating and suppressed the red warning for it. Caught by Copilot.
+    # `[^A-Za-z0-9_.-]|$` requires whatever follows the path to not be able to
+    # continue the same filename; a space, quote, or end of line all satisfy
+    # it, a trailing `-dev` does not.
     local tail_path="${LAUNCHER#$HOME}"
-    if grep -Fq "$LAUNCHER" "$rc" 2>/dev/null ||
-       grep -Fq "~${tail_path}" "$rc" 2>/dev/null ||
-       grep -Fq "\$HOME${tail_path}" "$rc" 2>/dev/null ||
-       grep -Fq "\${HOME}${tail_path}" "$rc" 2>/dev/null; then
+    local boundary='([^A-Za-z0-9_.-]|$)'
+    if grep -Eq "$(escape_ere "$LAUNCHER")${boundary}" "$rc" 2>/dev/null ||
+       grep -Eq "$(escape_ere "~${tail_path}")${boundary}" "$rc" 2>/dev/null ||
+       grep -Eq "$(escape_ere "\$HOME${tail_path}")${boundary}" "$rc" 2>/dev/null ||
+       grep -Eq "$(escape_ere "\${HOME}${tail_path}")${boundary}" "$rc" 2>/dev/null; then
       delegating="${delegating}${delegating:+, }${rc}"
     else
       found="${found}${found:+, }${rc}"

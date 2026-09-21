@@ -297,6 +297,15 @@ test('a stale-route note survives a launcher repair that fails, not just one tha
 
 test('"already latest" says nothing extra when the launcher is correct', async () => {
   publish('1.0.0')
+  const manifest = readFileSync(join(origin, 'stable', 'manifest.json'), 'utf8')
+  // Both routes configured and agreeing: the fully-working case, with nothing
+  // to fall back from and so nothing to note. Leaving AXA_RELEASE_API_BASE
+  // unset here would exercise the *skipped-route* fallback instead, which
+  // this test is not about — that has its own coverage below.
+  serveApi(path =>
+    path.endsWith('/assets/42') ? JSON.parse(manifest) : RELEASE_WITH_MANIFEST,
+  )
+
   const outcome = await run()
 
   expect(outcome.kind).toBe('already-latest')
