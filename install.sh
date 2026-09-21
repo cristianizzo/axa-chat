@@ -132,6 +132,16 @@ escape_ere() { printf '%s' "$1" | sed -e 's/[][\.*^$()+?{}|]/\\&/g'; }
 # second one) previously had both texts joined together, so the delegating
 # text's mention of the launcher path kept the hijack hidden. `buf` is
 # discarded and restarted on every new match for exactly that reason.
+#
+# Braces are counted on a `#`-comment-stripped copy of each line, not on the
+# raw line: counting every literal `}` meant a valid wrapper with a `# }` (or
+# any brace inside a comment) before the real closing brace was truncated
+# there, read as an incomplete/hijacking definition, and given the red
+# warning — the wrong direction for this heuristic's own stated safety bias
+# (over-capturing is safe; stopping early is not). Caught by Copilot. A
+# brace inside a quoted string is not handled the same way — that needs real
+# tokenizing, which the design note above already rules out — so this closes
+# the comment case, not every case.
 extract_axa_def() {
   awk '
     $0 ~ /^[[:space:]]*alias[[:space:]]+axa=/ {
@@ -144,8 +154,10 @@ extract_axa_def() {
       inblock = 1
       depth = 0
       seen_brace = 0
-      opens = gsub(/\{/, "{")
-      closes = gsub(/\}/, "}")
+      line = $0
+      sub(/#.*$/, "", line)
+      opens = gsub(/\{/, "{", line)
+      closes = gsub(/\}/, "}", line)
       depth += opens - closes
       if (opens > 0) { seen_brace = 1 }
       if (seen_brace && depth <= 0) { inblock = 0 }
@@ -153,8 +165,10 @@ extract_axa_def() {
     }
     inblock {
       buf = buf $0 "\n"
-      opens = gsub(/\{/, "{")
-      closes = gsub(/\}/, "}")
+      line = $0
+      sub(/#.*$/, "", line)
+      opens = gsub(/\{/, "{", line)
+      closes = gsub(/\}/, "}", line)
       depth += opens - closes
       if (opens > 0) { seen_brace = 1 }
       if (seen_brace && depth <= 0) { inblock = 0 }
@@ -661,15 +675,25 @@ check_shadowing() {
     # `axa() { # delegate through ~/.local/bin/axa\n  echo hijacked; }` —
     # still classified as delegating; nothing here confirms the path is being
     # invoked rather than just named. Stripping `#...`-to-end-of-line before
-    # matching removes the easy version of that gap. It is not a full
-    # parser — a path quoted inside a string literal for illustration would
-    # still pass — but going further means parsing shell commands, which is
-    # exactly what "reading is enough to find the case that actually occurs"
-    # above rules out. Caught by Copilot.
+    # matching removes that. Caught by Copilot.
+    #
+    # The same problem survives in a string literal instead of a comment:
+    # `echo "not using ~/.local/bin/axa"; hijack_cmd` names the path in an
+    # argument to a command that only prints text, never runs it. A full fix
+    # needs real tokenizing — ruled out by this function's own design note —
+    # but the concrete shape is always "the entire line is a call to a
+    # text-printing builtin", so dropping whole lines that start with one of
+    # those closes the demonstrated case without parsing arbitrary strings.
+    # Caught by Copilot.
     local def
     def="$(extract_axa_def "$rc")"
+    # `|| true`: under `set -e -o pipefail`, `grep -v` returning 1 because
+    # every line was a narrative line it dropped would abort the whole
+    # installer on this bare assignment, not just fail this one check.
     local def_nc
-    def_nc="$(printf '%s\n' "$def" | sed -E 's/#.*$//')"
+    def_nc="$(printf '%s\n' "$def" |
+      sed -E 's/#.*$//' |
+      grep -Ev '^[[:space:]]*(echo|printf|print)([[:space:]]|$)' || true)"
     local tail_path="${LAUNCHER#$HOME}"
     local lead='(^|[^A-Za-z0-9_./-])'
     local boundary='([^A-Za-z0-9_./-]|$)'
