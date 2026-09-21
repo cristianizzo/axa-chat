@@ -301,7 +301,7 @@ test('"already latest" says nothing extra when the launcher is correct', async (
   // Both routes configured and agreeing: the fully-working case, with nothing
   // to fall back from and so nothing to note. Leaving AXA_RELEASE_API_BASE
   // unset here would exercise the *skipped-route* fallback instead, which
-  // this test is not about — that has its own coverage below.
+  // this test is not about — see the test right below for that.
   serveApi(path =>
     path.endsWith('/assets/42') ? JSON.parse(manifest) : RELEASE_WITH_MANIFEST,
   )
@@ -312,6 +312,28 @@ test('"already latest" says nothing extra when the launcher is correct', async (
   expect(describeOutcome(outcome, install)).toBe(
     'Already on the latest release (1.0.0).',
   )
+})
+
+test('a successful skipped-route fallback still carries the staleness note', async () => {
+  // Caught by Copilot: this is the production-facing path whenever
+  // AXA_RELEASE_BASE is configured without an API override — every other test
+  // above either fails the API route or configures both, so a regression that
+  // stopped `skipped` from reaching `failures`/`notes` in `fetchManifest`
+  // would pass every existing test while silently reintroducing the original
+  // stale-manifest bug for this exact configuration.
+  publish('1.0.0')
+  // beforeEach already set AXA_RELEASE_BASE and left AXA_RELEASE_API_BASE
+  // unset — not calling serveApi() here is what exercises the skip.
+
+  const outcome = await run()
+
+  expect(outcome.kind).toBe('already-latest')
+  if (outcome.kind === 'already-latest') {
+    expect(outcome.notes?.join('\n')).toContain('may be stale')
+    expect(outcome.notes?.join('\n')).toContain(
+      'skipped: AXA_RELEASE_BASE is set without AXA_RELEASE_API_BASE',
+    )
+  }
 })
 
 /*

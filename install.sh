@@ -648,11 +648,18 @@ check_shadowing() {
     # `lead` requires the character immediately before the candidate — or
     # start of line — to not be able to extend a different, longer path into
     # this one. Caught by Copilot.
+    #
+    # `/` was missing from both negated classes, so it counted as a valid
+    # boundary itself: with LAUNCHER=/home/me/.local/bin/axa, a hijack like
+    # `/tmp/home/me/.local/bin/axa` still classified as delegating, because
+    # the `/` right before `home/...` satisfied `lead`. Including `/` in the
+    # excluded set requires a complete path component, not just any substring
+    # bounded by slashes. Caught by Copilot.
     local def
     def="$(extract_axa_def "$rc")"
     local tail_path="${LAUNCHER#$HOME}"
-    local lead='(^|[^A-Za-z0-9_.-])'
-    local boundary='([^A-Za-z0-9_.-]|$)'
+    local lead='(^|[^A-Za-z0-9_./-])'
+    local boundary='([^A-Za-z0-9_./-]|$)'
     if printf '%s\n' "$def" | grep -Eq "${lead}$(escape_ere "$LAUNCHER")${boundary}" 2>/dev/null ||
        printf '%s\n' "$def" | grep -Eq "${lead}$(escape_ere "~${tail_path}")${boundary}" 2>/dev/null ||
        printf '%s\n' "$def" | grep -Eq "${lead}$(escape_ere "\$HOME${tail_path}")${boundary}" 2>/dev/null ||
