@@ -291,7 +291,7 @@ test('a stale-route note survives a launcher repair that fails, not just one tha
   expect(outcome.kind).toBe('failed')
   if (outcome.kind === 'failed') {
     expect(outcome.reason).toContain('could not be')
-    expect(outcome.reason).toContain('cached copy')
+    expect(outcome.reason).toContain('may be stale')
   }
 })
 
@@ -369,6 +369,51 @@ test('the asset fetch asks for bytes, not metadata, and the release lookup asks 
   expect(asset?.headers.accept).toBe('application/octet-stream')
 })
 
+test(
+  'the 10s API budget is one deadline shared by both calls, not one each',
+  async () => {
+    // Every other API-route test fails its fixture instantly, so all of them
+    // would still pass if `remaining()` reset the clock per call instead of
+    // sharing one deadline across both — the bug this proves against is
+    // invisible unless a call actually takes real time. Caught by Copilot.
+    //
+    // The tag lookup answers slow-but-within-budget (6s), then the asset
+    // fetch hangs forever. A per-call budget would let the asset fetch run
+    // its own full 10s after that, landing around 16s total; the shared
+    // deadline instead has ~4s left for it and must give up near the
+    // original 10s mark.
+    publish('2.0.0')
+    apiServer = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const path = new URL(request.url).pathname
+        if (path.includes('/tags/')) {
+          return new Promise<Response>(resolve => {
+            setTimeout(() => resolve(Response.json(RELEASE_WITH_MANIFEST)), 6000)
+          })
+        }
+        // The asset fetch: never resolves, so whatever answers first is
+        // whichever budget — shared or per-call — is real.
+        return new Promise<Response>(() => {})
+      },
+    })
+    setEnv('AXA_RELEASE_API_BASE', `http://localhost:${apiServer.port}`)
+
+    const start = Date.now()
+    const outcome = await run()
+    const elapsed = Date.now() - start
+
+    // Falls back to the download route, same as any other API failure.
+    expect(outcome.kind).toBe('updated')
+    // A per-call budget would land near 16s (6s + a fresh 10s); the shared
+    // deadline lands near the original 10s. Bounded well clear of both so
+    // ordinary scheduling jitter can't flip the result either way.
+    expect(elapsed).toBeGreaterThan(8_000)
+    expect(elapsed).toBeLessThan(13_000)
+  },
+  15_000,
+)
+
 test('an unreachable API falls back to the cached url and SAYS the answer may be stale', async () => {
   // The whole point of the note. Falling back silently reinstates the defect
   // this route list was added to fix: the cached copy answers "already on the
@@ -381,7 +426,7 @@ test('an unreachable API falls back to the cached url and SAYS the answer may be
 
   expect(outcome.kind).toBe('updated')
   if (outcome.kind === 'updated') {
-    expect(outcome.notes?.join('\n')).toContain('cached copy')
+    expect(outcome.notes?.join('\n')).toContain('may be stale')
   }
   expect(readlinkSync(install.launcher)).toBe(join(install.versionsDir, '2.0.0'))
 })

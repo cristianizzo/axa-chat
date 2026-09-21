@@ -112,20 +112,33 @@ escape_ere() { printf '%s' "$1" | sed -e 's/[][\.*^$()+?{|]/\\&/g'; }
 # capturing too much (a few extra lines around the real definition) is the
 # safe direction — the match still has to name the launcher path afterward,
 # so extra context can only add false "delegating" positives back in, never
-# remove a real one. An alias line has no braces, so depth never goes above
-# 0 and exactly that one line is captured.
+# remove a real one. An alias line has no braces, so it is captured and
+# printed on its own.
+#
+# The block stays open until an opening brace has actually been SEEN, not
+# just until depth returns to 0 — `axa()` legally puts the brace on the next
+# line, and depth is 0 on the header either way (no brace yet vs. balanced).
+# Stopping on that shared value cut the capture off before the body, so a
+# real delegating wrapper written that way was read as an empty definition
+# and misclassified as a hijack. Caught by Copilot.
 extract_axa_def() {
   awk '
-    $0 ~ /^[[:space:]]*(function[[:space:]]+axa([[:space:]]|\(|$)|axa[[:space:]]*\(\)|alias[[:space:]]+axa=)/ {
+    $0 ~ /^[[:space:]]*alias[[:space:]]+axa=/ {
+      print
+      next
+    }
+    $0 ~ /^[[:space:]]*(function[[:space:]]+axa([[:space:]]|\(|$)|axa[[:space:]]*\(\))/ {
       inblock = 1
       depth = 0
+      seen_brace = 0
     }
     inblock {
       print
       opens = gsub(/\{/, "{")
       closes = gsub(/\}/, "}")
       depth += opens - closes
-      if (depth <= 0) { inblock = 0 }
+      if (opens > 0) { seen_brace = 1 }
+      if (seen_brace && depth <= 0) { inblock = 0 }
     }
   ' "$1"
 }

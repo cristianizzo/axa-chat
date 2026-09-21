@@ -491,13 +491,19 @@ export async function fetchManifest(
     // "you are already on the latest release" with a version that was current
     // before the release being looked for. Succeeding on the first route is the
     // only case that says nothing.
+    // "may be stale," not "came from a cached copy": that phrasing is only
+    // true of the real download route, which sits behind a CDN. The other
+    // way this note fires is AXA_RELEASE_BASE set without an API override,
+    // where the fallback can be a local file:// tree or another uncached
+    // test origin — nothing to call "cached" there, only "not the route this
+    // code trusts most." Caught by Copilot.
     const notes =
       failures.length === 0
         ? []
         : [
             `The freshest route to the ${channel} manifest did not answer, so this ` +
-              `came from a cached copy that can be a few minutes behind. If a release ` +
-              `was just published, try again shortly.\n` +
+              `answer may be stale. If a release was just published, try again ` +
+              `shortly.\n` +
               failures.map(f => `  ${f}`).join('\n'),
           ]
     return { manifest, notes }
