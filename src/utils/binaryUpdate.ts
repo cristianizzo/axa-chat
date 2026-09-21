@@ -317,9 +317,20 @@ async function fetchManifestViaApi(channel: string): Promise<unknown> {
     // The user-agent matches `resolveLatestCommit` in sourceUpdate.ts, the
     // other caller of this host. Bun sends one by default so this works either
     // way; naming ourselves is what makes a rate-limit answer attributable.
+    //
+    // `cache-control: no-cache`, unlike the raw release-asset CDN this whole
+    // route exists to route around: that one ignored the same header when
+    // measured directly (no `cache-control` in the response at all), but this
+    // is api.github.com, a real API host in front of `max-age=60` caching —
+    // not a static file CDN — and the point of this route is specifically to
+    // not be the thing that answers from a minute-old cache. Caught by
+    // Copilot: without it, the tag lookup itself can return the asset id from
+    // before the release, which then fetches a valid but stale manifest and
+    // the API route reports it as fresh.
     {
       accept: 'application/vnd.github+json',
       'user-agent': 'axa-chat-updater',
+      'cache-control': 'no-cache',
     },
   )
 

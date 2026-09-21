@@ -100,6 +100,36 @@ fail()  { printf "${RED}[x]${RESET} %s\n" "$*" >&2; exit 1; }
 # legal in a path) being read as regex syntax.
 escape_ere() { printf '%s' "$1" | sed -e 's/[][\.*^$()+?{|]/\\&/g'; }
 
+# Prints just the `axa` function/alias definition out of an rc file, not the
+# whole file. Caught by Copilot: a path search over the entire file matches
+# an unrelated comment or a variable assignment that happens to mention the
+# launcher path anywhere else in the rc file, and reads that as the
+# definition delegating — a real hijack sitting a few lines away from an
+# innocent mention still gets classified as safe.
+#
+# Brace-depth tracked line by line rather than parsed properly: this rc file
+# is the user's own, arbitrary shell, and a heuristic that fails toward
+# capturing too much (a few extra lines around the real definition) is the
+# safe direction — the match still has to name the launcher path afterward,
+# so extra context can only add false "delegating" positives back in, never
+# remove a real one. An alias line has no braces, so depth never goes above
+# 0 and exactly that one line is captured.
+extract_axa_def() {
+  awk '
+    $0 ~ /^[[:space:]]*(function[[:space:]]+axa([[:space:]]|$)|axa[[:space:]]*\(\)|alias[[:space:]]+axa=)/ {
+      inblock = 1
+      depth = 0
+    }
+    inblock {
+      print
+      opens = gsub(/\{/, "{")
+      closes = gsub(/\}/, "}")
+      depth += opens - closes
+      if (depth <= 0) { inblock = 0 }
+    }
+  ' "$1"
+}
+
 header() {
   echo ""
   printf "${BOLD}${CYAN}"
@@ -573,12 +603,19 @@ check_shadowing() {
     # `[^A-Za-z0-9_.-]|$` requires whatever follows the path to not be able to
     # continue the same filename; a space, quote, or end of line all satisfy
     # it, a trailing `-dev` does not.
+    #
+    # Searched within just the matched definition, not the whole rc file —
+    # also caught by Copilot: an unrelated comment or export elsewhere in the
+    # file that happens to name the launcher path used to make a genuine
+    # hijack read as delegating.
+    local def
+    def="$(extract_axa_def "$rc")"
     local tail_path="${LAUNCHER#$HOME}"
     local boundary='([^A-Za-z0-9_.-]|$)'
-    if grep -Eq "$(escape_ere "$LAUNCHER")${boundary}" "$rc" 2>/dev/null ||
-       grep -Eq "$(escape_ere "~${tail_path}")${boundary}" "$rc" 2>/dev/null ||
-       grep -Eq "$(escape_ere "\$HOME${tail_path}")${boundary}" "$rc" 2>/dev/null ||
-       grep -Eq "$(escape_ere "\${HOME}${tail_path}")${boundary}" "$rc" 2>/dev/null; then
+    if printf '%s\n' "$def" | grep -Eq "$(escape_ere "$LAUNCHER")${boundary}" 2>/dev/null ||
+       printf '%s\n' "$def" | grep -Eq "$(escape_ere "~${tail_path}")${boundary}" 2>/dev/null ||
+       printf '%s\n' "$def" | grep -Eq "$(escape_ere "\$HOME${tail_path}")${boundary}" 2>/dev/null ||
+       printf '%s\n' "$def" | grep -Eq "$(escape_ere "\${HOME}${tail_path}")${boundary}" 2>/dev/null; then
       delegating="${delegating}${delegating:+, }${rc}"
     else
       found="${found}${found:+, }${rc}"
