@@ -155,7 +155,8 @@ extract_axa_def() {
       depth = 0
       seen_brace = 0
       line = $0
-      sub(/#.*$/, "", line)
+      sub(/^#.*$/, "", line)
+      sub(/[[:space:]]#.*$/, "", line)
       opens = gsub(/\{/, "{", line)
       closes = gsub(/\}/, "}", line)
       depth += opens - closes
@@ -166,7 +167,8 @@ extract_axa_def() {
     inblock {
       buf = buf $0 "\n"
       line = $0
-      sub(/#.*$/, "", line)
+      sub(/^#.*$/, "", line)
+      sub(/[[:space:]]#.*$/, "", line)
       opens = gsub(/\{/, "{", line)
       closes = gsub(/\}/, "}", line)
       depth += opens - closes
@@ -690,9 +692,15 @@ check_shadowing() {
     # `|| true`: under `set -e -o pipefail`, `grep -v` returning 1 because
     # every line was a narrative line it dropped would abort the whole
     # installer on this bare assignment, not just fail this one check.
+    # A `#` only starts a shell comment as the first character of a word — at
+    # the start of the line, or preceded by whitespace. A `#` glued to other
+    # characters, like `AXA_BIN_DIR=/tmp/a#b`, is a literal character in that
+    # path. Stripping unconditionally from every `#` onward truncated the
+    # launcher path itself in that case, so a genuinely delegating wrapper
+    # lost its match and was reported as a red hijack. Caught by Copilot.
     local def_nc
     def_nc="$(printf '%s\n' "$def" |
-      sed -E 's/#.*$//' |
+      sed -E 's/(^|[[:space:]])#.*$//' |
       grep -Ev '^[[:space:]]*(echo|printf|print)([[:space:]]|$)' || true)"
     local tail_path="${LAUNCHER#$HOME}"
     local lead='(^|[^A-Za-z0-9_./-])'
