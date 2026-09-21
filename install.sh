@@ -655,15 +655,28 @@ check_shadowing() {
     # the `/` right before `home/...` satisfied `lead`. Including `/` in the
     # excluded set requires a complete path component, not just any substring
     # bounded by slashes. Caught by Copilot.
+    #
+    # The search ran over the raw definition text, comments included, so a
+    # real hijack that merely mentions the launcher in a `#` comment —
+    # `axa() { # delegate through ~/.local/bin/axa\n  echo hijacked; }` —
+    # still classified as delegating; nothing here confirms the path is being
+    # invoked rather than just named. Stripping `#...`-to-end-of-line before
+    # matching removes the easy version of that gap. It is not a full
+    # parser — a path quoted inside a string literal for illustration would
+    # still pass — but going further means parsing shell commands, which is
+    # exactly what "reading is enough to find the case that actually occurs"
+    # above rules out. Caught by Copilot.
     local def
     def="$(extract_axa_def "$rc")"
+    local def_nc
+    def_nc="$(printf '%s\n' "$def" | sed -E 's/#.*$//')"
     local tail_path="${LAUNCHER#$HOME}"
     local lead='(^|[^A-Za-z0-9_./-])'
     local boundary='([^A-Za-z0-9_./-]|$)'
-    if printf '%s\n' "$def" | grep -Eq "${lead}$(escape_ere "$LAUNCHER")${boundary}" 2>/dev/null ||
-       printf '%s\n' "$def" | grep -Eq "${lead}$(escape_ere "~${tail_path}")${boundary}" 2>/dev/null ||
-       printf '%s\n' "$def" | grep -Eq "${lead}$(escape_ere "\$HOME${tail_path}")${boundary}" 2>/dev/null ||
-       printf '%s\n' "$def" | grep -Eq "${lead}$(escape_ere "\${HOME}${tail_path}")${boundary}" 2>/dev/null; then
+    if printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "$LAUNCHER")${boundary}" 2>/dev/null ||
+       printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "~${tail_path}")${boundary}" 2>/dev/null ||
+       printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "\$HOME${tail_path}")${boundary}" 2>/dev/null ||
+       printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "\${HOME}${tail_path}")${boundary}" 2>/dev/null; then
       delegating="${delegating}${delegating:+, }${rc}"
     else
       found="${found}${found:+, }${rc}"
