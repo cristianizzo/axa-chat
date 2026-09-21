@@ -116,7 +116,7 @@ escape_ere() { printf '%s' "$1" | sed -e 's/[][\.*^$()+?{|]/\\&/g'; }
 # 0 and exactly that one line is captured.
 extract_axa_def() {
   awk '
-    $0 ~ /^[[:space:]]*(function[[:space:]]+axa([[:space:]]|$)|axa[[:space:]]*\(\)|alias[[:space:]]+axa=)/ {
+    $0 ~ /^[[:space:]]*(function[[:space:]]+axa([[:space:]]|\(|$)|axa[[:space:]]*\(\)|alias[[:space:]]+axa=)/ {
       inblock = 1
       depth = 0
     }
