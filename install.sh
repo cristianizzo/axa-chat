@@ -121,25 +121,41 @@ escape_ere() { printf '%s' "$1" | sed -e 's/[][\.*^$()+?{|]/\\&/g'; }
 # Stopping on that shared value cut the capture off before the body, so a
 # real delegating wrapper written that way was read as an empty definition
 # and misclassified as a hijack. Caught by Copilot.
+#
+# Only the LAST matching definition survives to be printed, not every one
+# concatenated — also caught by Copilot: a profile that defines a delegating
+# `axa` and later redefines it to a real hijack (the shell keeps only the
+# second one) previously had both texts joined together, so the delegating
+# text's mention of the launcher path kept the hijack hidden. `buf` is
+# discarded and restarted on every new match for exactly that reason.
 extract_axa_def() {
   awk '
     $0 ~ /^[[:space:]]*alias[[:space:]]+axa=/ {
-      print
+      buf = $0 "\n"
+      inblock = 0
       next
     }
     $0 ~ /^[[:space:]]*(function[[:space:]]+axa([[:space:]]|\(|$)|axa[[:space:]]*\(\))/ {
+      buf = $0 "\n"
       inblock = 1
       depth = 0
       seen_brace = 0
+      opens = gsub(/\{/, "{")
+      closes = gsub(/\}/, "}")
+      depth += opens - closes
+      if (opens > 0) { seen_brace = 1 }
+      if (seen_brace && depth <= 0) { inblock = 0 }
+      next
     }
     inblock {
-      print
+      buf = buf $0 "\n"
       opens = gsub(/\{/, "{")
       closes = gsub(/\}/, "}")
       depth += opens - closes
       if (opens > 0) { seen_brace = 1 }
       if (seen_brace && depth <= 0) { inblock = 0 }
     }
+    END { printf "%s", buf }
   ' "$1"
 }
 
