@@ -97,8 +97,12 @@ fail()  { printf "${RED}[x]${RESET} %s\n" "$*" >&2; exit 1; }
 
 # Escapes ERE metacharacters so a literal path can be dropped into a
 # `grep -E` pattern without any of its characters (`.`, `$`, etc., all
-# legal in a path) being read as regex syntax.
-escape_ere() { printf '%s' "$1" | sed -e 's/[][\.*^$()+?{|]/\\&/g'; }
+# legal in a path) being read as regex syntax. `}` was missing from this
+# class — caught by Copilot: paired with an unescaped `{` it forms a
+# regex interval, and even alone its behavior in ERE is implementation-
+# defined rather than guaranteed literal, so a launcher path containing it
+# (a possible HOME or AXA_BIN_DIR character) could misparse the pattern.
+escape_ere() { printf '%s' "$1" | sed -e 's/[][\.*^$()+?{}|]/\\&/g'; }
 
 # Prints just the `axa` function/alias definition out of an rc file, not the
 # whole file. Caught by Copilot: a path search over the entire file matches
@@ -637,14 +641,22 @@ check_shadowing() {
     # also caught by Copilot: an unrelated comment or export elsewhere in the
     # file that happens to name the launcher path used to make a genuine
     # hijack read as delegating.
+    #
+    # A trailing boundary alone still lets `grep` start the match mid-token:
+    # a real hijack like `/tmp${LAUNCHER}` has the launcher path as a
+    # *suffix*, which the trailing check alone waves through as delegating.
+    # `lead` requires the character immediately before the candidate — or
+    # start of line — to not be able to extend a different, longer path into
+    # this one. Caught by Copilot.
     local def
     def="$(extract_axa_def "$rc")"
     local tail_path="${LAUNCHER#$HOME}"
+    local lead='(^|[^A-Za-z0-9_.-])'
     local boundary='([^A-Za-z0-9_.-]|$)'
-    if printf '%s\n' "$def" | grep -Eq "$(escape_ere "$LAUNCHER")${boundary}" 2>/dev/null ||
-       printf '%s\n' "$def" | grep -Eq "$(escape_ere "~${tail_path}")${boundary}" 2>/dev/null ||
-       printf '%s\n' "$def" | grep -Eq "$(escape_ere "\$HOME${tail_path}")${boundary}" 2>/dev/null ||
-       printf '%s\n' "$def" | grep -Eq "$(escape_ere "\${HOME}${tail_path}")${boundary}" 2>/dev/null; then
+    if printf '%s\n' "$def" | grep -Eq "${lead}$(escape_ere "$LAUNCHER")${boundary}" 2>/dev/null ||
+       printf '%s\n' "$def" | grep -Eq "${lead}$(escape_ere "~${tail_path}")${boundary}" 2>/dev/null ||
+       printf '%s\n' "$def" | grep -Eq "${lead}$(escape_ere "\$HOME${tail_path}")${boundary}" 2>/dev/null ||
+       printf '%s\n' "$def" | grep -Eq "${lead}$(escape_ere "\${HOME}${tail_path}")${boundary}" 2>/dev/null; then
       delegating="${delegating}${delegating:+, }${rc}"
     else
       found="${found}${found:+, }${rc}"
