@@ -702,13 +702,29 @@ check_shadowing() {
     def_nc="$(printf '%s\n' "$def" |
       sed -E 's/(^|[[:space:]])#.*$//' |
       grep -Ev '^[[:space:]]*(echo|printf|print)([[:space:]]|$)' || true)"
+    # The tilde/$HOME/${HOME} alternates are only meaningful spellings of
+    # LAUNCHER when it actually sits under $HOME at a path-component
+    # boundary. When AXA_BIN_DIR points elsewhere, `${LAUNCHER#$HOME}`
+    # doesn't strip anything, so tail_path is the unchanged absolute
+    # LAUNCHER — and a wrapper naming an unrelated path like
+    # `~/tmp/foo/axa` matched here as "~" + that same unchanged string,
+    # even though it has nothing to do with the real launcher. Only run
+    # those three checks when the prefix removal actually took effect.
+    # Caught by Copilot.
+    local under_home=0
+    case "$LAUNCHER" in
+      "$HOME") under_home=1 ;;
+      "$HOME"/*) under_home=1 ;;
+    esac
     local tail_path="${LAUNCHER#$HOME}"
     local lead='(^|[^A-Za-z0-9_./-])'
     local boundary='([^A-Za-z0-9_./-]|$)'
     if printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "$LAUNCHER")${boundary}" 2>/dev/null ||
-       printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "~${tail_path}")${boundary}" 2>/dev/null ||
-       printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "\$HOME${tail_path}")${boundary}" 2>/dev/null ||
-       printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "\${HOME}${tail_path}")${boundary}" 2>/dev/null; then
+       { [ "$under_home" -eq 1 ] && {
+           printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "~${tail_path}")${boundary}" 2>/dev/null ||
+           printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "\$HOME${tail_path}")${boundary}" 2>/dev/null ||
+           printf '%s\n' "$def_nc" | grep -Eq "${lead}$(escape_ere "\${HOME}${tail_path}")${boundary}" 2>/dev/null
+         }; }; then
       delegating="${delegating}${delegating:+, }${rc}"
     else
       found="${found}${found:+, }${rc}"
