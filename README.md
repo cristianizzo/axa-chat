@@ -48,6 +48,27 @@ The `xattr` line is not optional. A browser marks its downloads with `com.apple.
 
 </details>
 
+### Optional: macOS Automation Tool (`gui`)
+
+An optional, off-by-default `gui` command for driving the Mac's mouse, keyboard,
+and AppleScript directly from a session — useful for tasks that need to control
+another app's UI. It ships as plain scripts, not part of the `axa` binary, and is
+gated behind an explicit on/off switch so it never runs without being asked to.
+
+Install it alongside axa:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cristianizzo/axa-chat/main/install.sh | bash -s -- --with-gui-tools
+```
+
+Or install it on its own, any time, without re-running the main installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cristianizzo/axa-chat/main/install-gui-tools.sh | bash
+```
+
+Both are safe to re-run — existing config is merged, not overwritten.
+
 ### Updating
 
 ```

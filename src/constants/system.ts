@@ -5,6 +5,7 @@ import { logForDebugging } from '../utils/debug.js'
 import { isEnvDefinedFalsy } from '../utils/envUtils.js'
 import { getAPIProvider } from '../utils/model/providers.js'
 import { getWorkload } from '../utils/workloadContext.js'
+import { ANTHROPIC_COMPAT_CLAUDE_CODE_VERSION } from './anthropicClientVersion.js'
 
 const DEFAULT_PREFIX = `You are Claude Code, Anthropic's official CLI for Claude.`
 const AGENT_SDK_CLAUDE_CODE_PRESET_PREFIX = `You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.`
@@ -70,7 +71,7 @@ export function getAttributionHeader(fingerprint: string): string {
     return ''
   }
 
-  const version = `${MACRO.VERSION}.${fingerprint}`
+  const version = `${ANTHROPIC_COMPAT_CLAUDE_CODE_VERSION}.${fingerprint}`
   const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT ?? 'unknown'
 
   const cch = ' cch=00000;'
