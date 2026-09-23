@@ -599,9 +599,19 @@ fi
 # human-only gate for the state-changing subcommands is only achievable by
 # keeping the model from ever seeing an allow/auto-approve for them, and
 # handing the actual toggle back to something only a human can type.
-GUI_SAFE_SUBCOMMANDS="frontmost status badge doctor off move click type key as"
-GUI_DENY_SUBCOMMANDS="on toggle"
+GUI_SAFE_SUBCOMMANDS="frontmost status badge doctor off move click type key"
+GUI_DENY_SUBCOMMANDS="on toggle as"
 
+# `as` is deny-listed for a different reason than `on`/`toggle`: its guards
+# (the `do shell script` scan and the DEFAULT_DENY_NAMES/DEFAULT_DENY_URL
+# scans above) are static text scans over the literal script argument. Any
+# AppleScript that builds the sensitive string at runtime instead of
+# spelling it literally — string concatenation, `run script` on an
+# assembled value, etc. — produces a script whose text never contains
+# "do shell script" or a denied app/URL substring, so it sails past every
+# scan undetected. No amount of pattern-matching closes this class of bug;
+# the only real fix is not letting the model auto-invoke `as` at all.
+#
 # KNOWN LIMITATION, not fixable at this layer: axa's permission patterns
 # ("Bash(gui on:*)", "Bash($CLAUDE_DIR/bin/gui on:*)") match the literal
 # command string as typed, not the resolved executable. A wrapped
@@ -611,17 +621,30 @@ GUI_DENY_SUBCOMMANDS="on toggle"
 # axa's allow-conversion in auto-approval modes would not be blocked by
 # this list alone. No finite set of deny patterns closes this: any new
 # wrapper spelling needs its own literal entry, so the list is inherently
-# incomplete against a *deliberate* attempt to dodge it.
+# incomplete against a *deliberate* attempt to dodge it. This is a gap in
+# axa's core permission engine (src/utils/permissions/) — it matches
+# literal command strings instead of resolving/canonicalizing the
+# executable first — and is out of scope for this installer to fix.
 #
-# This is why `on`/`toggle` are not actually gated by the permission
-# system alone: require_on()'s state-file check (read_state, a
-# short-lived TTL a human must set by literally typing `!gui on 30m` at
-# the prompt — see the comment above GUI_SAFE_SUBCOMMANDS) is the real
-# human-only gate, and it applies regardless of how the subcommand was
-# invoked or spelled. The deny patterns here are defense-in-depth against
-# the model picking up an *accidental* auto-approve for the common
-# spellings, not a complete sandbox against a human wrapping the call on
-# purpose.
+# The deny entries for `on`/`toggle`/`as` are NOT what makes them
+# human-only. `require_on()`'s state-file TTL check (read_state) is a
+# precondition on `as`/`move`/`click`/`type`/`key` — it doesn't gate `on`
+# itself, since `on` is the command that *creates* that state file
+# (touch_state) in the first place. The actual human-only gate is the one
+# path in axa proven to bypass permission checks entirely: a command the
+# user *types* at the prompt in bash mode goes straight to
+# BashTool.call() with no hasPermissionsToUseTool() check
+# (processUserInput/processBashCommand.tsx) — never something the model
+# can trigger, since the model only ever emits tool_use blocks, which are
+# always permission-checked. There's also no TTY/stdio signal in
+# BashTool.tsx that could distinguish a human-typed `!gui on` from a
+# model-issued Bash call at runtime, so a check like that isn't a viable
+# alternative fix either — verified by grepping BashTool.tsx for
+# isTTY/stdio/process.stdin (no matches). So the deny entries here are
+# defense-in-depth against the model picking up an *accidental*
+# auto-approve for the common spellings, and the literal-typed-command
+# path is the only thing that makes `on`/`toggle`/`as` actually
+# human-only.
 
 # Space-separated bash words -> JSON array of strings, via jq -R/-s so no
 # manual quoting/escaping of the words themselves is needed. Only called
