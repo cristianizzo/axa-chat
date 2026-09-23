@@ -9,7 +9,7 @@ import { Box, Link, Text } from '../../ink.js';
 import { useKeybinding } from '../../keybindings/useKeybinding.js';
 import { getMcpConfigsByScope } from '../../services/mcp/config.js';
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js';
-import { checkHasTrustDialogAccepted, saveCurrentProjectConfig } from '../../utils/config.js';
+import { acceptTrustForCurrentWorkspace, checkHasTrustDialogAccepted } from '../../utils/config.js';
 import { getCwd } from '../../utils/cwd.js';
 import { getFsImplementation } from '../../utils/fsOperations.js';
 import { gracefulShutdownSync } from '../../utils/gracefulShutdown.js';
@@ -171,11 +171,14 @@ export function TrustDialog(t0) {
         hasOtelHeadersHelper,
         hasDangerousEnvVars
       });
-      if (isHomeDir_0) {
-        setSessionTrustAccepted(true);
-      } else {
-        saveCurrentProjectConfig(_temp5);
-      }
+      // Persist trust for every directory, $HOME included. $HOME used to be
+      // session-only, which made the dialog reappear on every launch for anyone
+      // whose workspace is their home directory. The reason it was session-only
+      // — that trusting ~ would blanket-trust every project ever created under
+      // it — is handled in checkHasTrustDialogAccepted instead: the $HOME entry
+      // is honoured only as an exact match, never as an inherited ancestor.
+      setSessionTrustAccepted(true);
+      acceptTrustForCurrentWorkspace();
       onDone();
     };
     $[16] = hasAnyBashExecution;
@@ -268,12 +271,6 @@ function _temp7() {
 }
 function _temp6() {
   return gracefulShutdownSync(1);
-}
-function _temp5(current) {
-  return {
-    ...current,
-    hasTrustDialogAccepted: true
-  };
 }
 function _temp4(command_0) {
   return command_0.type === "prompt" && (command_0.loadedFrom === "skills" || command_0.loadedFrom === "plugin") && (command_0.source === "projectSettings" || command_0.source === "localSettings" || command_0.source === "plugin") && command_0.allowedTools?.some(_temp3);
