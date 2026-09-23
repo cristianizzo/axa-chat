@@ -127,7 +127,10 @@ read_state() {
 touch_state() { echo "$(( $(date +%s) + WINDOW )) $WINDOW" >"$STATE"; }
 
 require_on() {
-  read_state || die "disabilitato. Attivalo tu dal prompt:  !gui on 30m"
+  # Absolute path, not bare "gui": $CLAUDE_DIR/bin is only symlinked onto
+  # AXA_BIN_DIR (default ~/.local/bin), which this script has no way to know
+  # is actually on the user's PATH — the absolute path always works.
+  read_state || die "disabilitato. Attivalo tu dal prompt:  !$CLAUDE_DIR/bin/gui on 30m"
 }
 
 # ---------------------------------------------------------------- guardie
@@ -202,7 +205,7 @@ case "$cmd" in
     if read_state; then
       echo "gui ACCESO — restano $(( (EXPIRY - $(date +%s) + 59) / 60 )) min (finestra $((WINDOW/60))m, si rinnova a ogni uso)"
     else
-      echo "gui spento — attiva con:  !gui on 30m"
+      echo "gui spento — attiva con:  !$CLAUDE_DIR/bin/gui on 30m"
     fi
     ;;
 
@@ -505,4 +508,6 @@ echo "     (System Settings > Privacy & Security)"
 echo "  3. $CLAUDE_DIR/bin/gui doctor    to verify"
 echo "  4. Restart axa/claude so the new statusLine + keybinding take effect"
 echo ""
-echo "gui stays off until you turn it on:  !gui on 30m   (or ctrl+g / \`/gui-toggle\`)"
+# Absolute path here too, for the same reason as the require_on hint above:
+# this installer can't know AXA_BIN_DIR is actually on the user's PATH.
+echo "gui stays off until you turn it on:  !$CLAUDE_DIR/bin/gui on 30m   (or ctrl+g / \`/gui-toggle\`)"
