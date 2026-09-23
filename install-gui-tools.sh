@@ -48,7 +48,13 @@ info "Installing into $CLAUDE_DIR"
 CLAUDE_DIR_Q="$(printf '%q' "$CLAUDE_DIR")"
 
 # ---------------------------------------------------------------- gui
-cat > "$CLAUDE_DIR/bin/gui" <<'GUI_EOF'
+# mktemp in the same dir + mv, not a plain `cat >`: a plain redirection
+# follows a pre-existing symlink at this path and overwrites whatever it
+# points to, unlike the settings.json/keybindings.json merges elsewhere in
+# this installer, which already use the atomic mktemp+mv pattern that
+# breaks rather than follows a symlink.
+GUI_BIN_TMP="$(mktemp "$CLAUDE_DIR/bin/.gui.XXXXXX")"
+cat > "$GUI_BIN_TMP" <<'GUI_EOF'
 #!/bin/bash
 # gui — interruttore + wrapper per il controllo GUI del Mac (mouse, tastiera, AppleScript).
 #
@@ -142,7 +148,14 @@ parse_dur() {
 read_state() {
   [ -f "$STATE" ] || return 1
   read -r EXPIRY WINDOW <"$STATE" 2>/dev/null || return 1
-  [ -n "${EXPIRY:-}" ] || return 1
+  # Digits-only, not just non-empty: WINDOW flows into touch_state()'s
+  # arithmetic expansion below, and $STATE is a plain file under
+  # $CLAUDE_DIR that anything with filesystem access can write. An
+  # unvalidated non-numeric WINDOW there would be a command-substitution
+  # injection into $(( )), same class of bug parse_dur() already guards
+  # against for the user-supplied duration argument.
+  case "${EXPIRY:-}" in '' | *[!0-9]*) rm -f "$STATE"; return 1 ;; esac
+  case "${WINDOW:-}" in '' | *[!0-9]*) rm -f "$STATE"; return 1 ;; esac
   [ "$(date +%s)" -lt "$EXPIRY" ] || { rm -f "$STATE"; return 1; }
 }
 
@@ -165,6 +178,10 @@ chrome_url() {
   osascript -e 'tell application "Google Chrome" to return URL of active tab of front window' 2>/dev/null
 }
 
+safari_url() {
+  osascript -e 'tell application "Safari" to return URL of current tab of front window' 2>/dev/null
+}
+
 guard() {
   local app url
   app="$(frontmost_bundle)"
@@ -175,8 +192,14 @@ guard() {
     [ "$app" = "$bad" ] && die "app protetta in primo piano ($app) — azione rifiutata"
   done <<<"$(denylist)"
 
-  if [ "$app" = "com.google.Chrome" ]; then
-    url="$(chrome_url)"
+  # Was Chrome-only, which let the same protected-URL check be bypassed
+  # simply by doing the banking/payment browsing in Safari instead.
+  case "$app" in
+    com.google.Chrome) url="$(chrome_url)" ;;
+    com.apple.Safari) url="$(safari_url)" ;;
+    *) url="" ;;
+  esac
+  if [ -n "$url" ]; then
     while IFS= read -r bad; do
       [ -z "$bad" ] && continue
       case "$url" in *"$bad"*) die "URL protetto in primo piano — azione rifiutata" ;; esac
@@ -302,7 +325,11 @@ case "$cmd" in
   # contenuto dello script.
   as)    require_on
          script="${1:?serve lo script}"
-         case "$script" in
+         # AppleScript's own keyword parsing is case-insensitive, so a
+         # literal-text-case-sensitive bash `case` match here would be
+         # bypassed by "DO SHELL SCRIPT" or any mixed-case variant. Fold
+         # both sides to lowercase before comparing.
+         case "$(printf '%s' "$script" | tr '[:upper:]' '[:lower:]')" in
            *"do shell script"*) die "AppleScript con 'do shell script' rifiutato — esce dal sandboxing" ;;
          esac
          # `tell application id "com.apple.mail"` bersaglia un'app protetta
@@ -334,7 +361,12 @@ case "$cmd" in
   *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
 GUI_EOF
-chmod +x "$CLAUDE_DIR/bin/gui"
+# chmod 755, not +x: mktemp creates the tmp file at 0600, so a bare +x
+# would yield 0711 (no group/other read) instead of matching the
+# world-readable-executable mode the old `cat >`+chmod+x produced under a
+# typical 022 umask.
+chmod 755 "$GUI_BIN_TMP"
+mv "$GUI_BIN_TMP" "$CLAUDE_DIR/bin/gui" || { rm -f "$GUI_BIN_TMP"; die "impossibile scrivere $CLAUDE_DIR/bin/gui"; }
 ok "$CLAUDE_DIR/bin/gui"
 
 # Symlink into the same bin dir install.sh uses for the `axa` launcher, so a
@@ -557,6 +589,27 @@ fi
 GUI_SAFE_SUBCOMMANDS="frontmost status badge doctor off move click type key as"
 GUI_DENY_SUBCOMMANDS="on toggle"
 
+# KNOWN LIMITATION, not fixable at this layer: axa's permission patterns
+# ("Bash(gui on:*)", "Bash($CLAUDE_DIR/bin/gui on:*)") match the literal
+# command string as typed, not the resolved executable. A wrapped
+# invocation with a different literal spelling — e.g. `bash
+# $CLAUDE_DIR/bin/gui on`, `sh -c "gui on"`, a shell alias, or `command gui
+# on` — produces a command string that matches neither deny pattern, so
+# axa's allow-conversion in auto-approval modes would not be blocked by
+# this list alone. No finite set of deny patterns closes this: any new
+# wrapper spelling needs its own literal entry, so the list is inherently
+# incomplete against a *deliberate* attempt to dodge it.
+#
+# This is why `on`/`toggle` are not actually gated by the permission
+# system alone: require_on()'s state-file check (read_state, a
+# short-lived TTL a human must set by literally typing `!gui on 30m` at
+# the prompt — see the comment above GUI_SAFE_SUBCOMMANDS) is the real
+# human-only gate, and it applies regardless of how the subcommand was
+# invoked or spelled. The deny patterns here are defense-in-depth against
+# the model picking up an *accidental* auto-approve for the common
+# spellings, not a complete sandbox against a human wrapping the call on
+# purpose.
+
 # Space-separated bash words -> JSON array of strings, via jq -R/-s so no
 # manual quoting/escaping of the words themselves is needed. Only called
 # from inside the `command -v jq` branch below — none of these subcommand
@@ -571,7 +624,15 @@ json_array_from_words() {
 # CLAUDE_CODE_USE_COWORK_PLUGINS truthiness, mirroring isEnvTruthy()
 # (src/utils/envUtils.ts): lowercase, match against 1/true/yes/on.
 is_env_truthy() {
-  case "$(printf '%s' "${1:-}" | tr '[:upper:][:blank:]' '[:lower:]')" in
+  # tr's SET1 ('[:upper:][:blank:]', 28 chars: A-Z + space/tab) is longer
+  # than SET2 ('[:lower:]', 26 chars) — tr pads SET2 by repeating its last
+  # char, so blanks map to a garbage char instead of passing through. That
+  # left leading/trailing whitespace (e.g. " true ") unmatched below. Strip
+  # whitespace with a shell parameter expansion first, then lowercase only.
+  local v="${1:-}"
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  case "$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')" in
     1 | true | yes | on) return 0 ;;
     *) return 1 ;;
   esac
