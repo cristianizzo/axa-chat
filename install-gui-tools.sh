@@ -62,9 +62,10 @@ cat > "$CLAUDE_DIR/bin/gui" <<'GUI_EOF'
 
 set -uo pipefail
 
-STATE="$HOME/.claude/.gui-state"
-LOG="$HOME/.claude/logs/gui.log"
-DENY_CONF="$HOME/.claude/.gui-denylist"
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+STATE="$CLAUDE_DIR/.gui-state"
+LOG="$CLAUDE_DIR/logs/gui.log"
+DENY_CONF="$CLAUDE_DIR/.gui-denylist"
 
 mkdir -p "$(dirname "$LOG")"
 
@@ -242,17 +243,20 @@ case "$cmd" in
   key)   require_on; guard; guard_idle; need cliclick
          cliclick "kp:${1:?serve il tasto}" && touch_state && log KEY "$1 front=$FRONT_APP" ;;
 
-  # AppleScript sceglie il bersaglio da sé: qui conta cosa dice lo script,
-  # non chi è in primo piano. Tranne quando lo script inietta tasti — allora
-  # il bersaglio È il primo piano, e vale la denylist piena.
+  # AppleScript può bersagliare qualunque app per nome, non solo quella in
+  # primo piano — per questo la denylist per stringa resta, come ulteriore
+  # rete. Ma guard() (denylist app in primo piano + Secure Input) vale
+  # sempre, non solo quando lo script inietta tasti: saltarla per gli script
+  # "di sola lettura" apriva un bypass, perché "di sola lettura" non è
+  # verificabile dal contenuto dello script.
   as)    require_on
          script="${1:?serve lo script}"
          for bad in 1Password Keychain Messages Mail; do
            case "$script" in *"$bad"*) die "lo script punta a un'app protetta ($bad)" ;; esac
          done
+         guard
          case "$script" in
-           *keystroke*|*"key code"*) guard; guard_idle ;;
-           *) FRONT_APP="$(frontmost_bundle)" ;;
+           *keystroke*|*"key code"*) guard_idle ;;
          esac
          out="$(osascript -e "$script" 2>&1)"; rc=$?
          [ $rc -eq 0 ] && touch_state
@@ -264,6 +268,14 @@ esac
 GUI_EOF
 chmod +x "$CLAUDE_DIR/bin/gui"
 ok "$CLAUDE_DIR/bin/gui"
+
+# Symlink into the same bin dir install.sh uses for the `axa` launcher, so a
+# bare `gui` on the command line resolves the same way `axa` already does —
+# a fresh $CLAUDE_DIR/bin has nothing adding it to PATH on its own.
+AXA_BIN_DIR_RESOLVED="${AXA_BIN_DIR:-$HOME/.local/bin}"
+mkdir -p "$AXA_BIN_DIR_RESOLVED"
+ln -sf "$CLAUDE_DIR/bin/gui" "$AXA_BIN_DIR_RESOLVED/gui"
+ok "$AXA_BIN_DIR_RESOLVED/gui -> $CLAUDE_DIR/bin/gui"
 
 # ---------------------------------------------------------------- statusline
 cat > "$CLAUDE_DIR/bin/statusline" <<'SL_EOF'
@@ -285,7 +297,7 @@ if command -v jq >/dev/null 2>&1; then
 fi
 
 cwd="$(pwd | sed "s|^$HOME|~|")"
-badge="$($HOME/.claude/bin/gui badge 2>/dev/null)"
+badge="$("${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/gui" badge 2>/dev/null)"
 
 line="$cwd % $badge"
 [ -n "$sid" ] && line="$line · $sid"
@@ -341,6 +353,28 @@ if command -v jq >/dev/null 2>&1; then
 KB_EOF
     MERGED_KB=1
   fi
+elif command -v python3 >/dev/null 2>&1; then
+  if python3 - "$KB" <<'PY'
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        data = json.load(f)
+except FileNotFoundError:
+    data = {}
+bindings = data.setdefault("bindings", [])
+chat = next((b for b in bindings if b.get("context") == "Chat"), None)
+if chat is None:
+    bindings.append({"context": "Chat", "bindings": {"ctrl+g": "command:gui-toggle"}})
+else:
+    chat.setdefault("bindings", {})["ctrl+g"] = "command:gui-toggle"
+with open(path, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+PY
+  then
+    MERGED_KB=1
+  fi
 fi
 if [ "$MERGED_KB" = "1" ]; then
   ok "$KB (ctrl+g -> gui-toggle)"
@@ -356,13 +390,37 @@ MERGED_ST=0
 if command -v jq >/dev/null 2>&1 && [ -f "$ST" ]; then
   tmp="$(mktemp)"
   if jq '
-    .statusLine = (.statusLine // {"type":"command","command":"$HOME/.claude/bin/statusline"})
-    | .permissions.allow = ((.permissions.allow // []) + ["Bash(gui:*)", "Bash(~/.claude/bin/gui:*)"] | unique)
-    | .permissions.deny  = ((.permissions.deny  // []) + ["Bash(gui on:*)", "Bash(~/.claude/bin/gui on:*)"] | unique)
+    .statusLine = (.statusLine // {"type":"command","command":"'"$CLAUDE_DIR"'/bin/statusline"})
+    | .permissions.allow = ((.permissions.allow // []) + ["Bash(gui:*)", "Bash('"$CLAUDE_DIR"'/bin/gui:*)"] | unique)
+    | .permissions.deny  = ((.permissions.deny  // []) + ["Bash(gui on:*)", "Bash('"$CLAUDE_DIR"'/bin/gui on:*)", "Bash(gui toggle:*)", "Bash('"$CLAUDE_DIR"'/bin/gui toggle:*)"] | unique)
   ' "$ST" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$ST"; MERGED_ST=1
   else
     rm -f "$tmp"
+  fi
+elif command -v python3 >/dev/null 2>&1 && [ -f "$ST" ]; then
+  if CLAUDE_DIR="$CLAUDE_DIR" python3 - "$ST" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+claude_dir = os.environ["CLAUDE_DIR"]
+with open(path) as f:
+    data = json.load(f)
+data.setdefault("statusLine", {"type": "command", "command": f"{claude_dir}/bin/statusline"})
+perms = data.setdefault("permissions", {})
+allow = perms.setdefault("allow", [])
+deny = perms.setdefault("deny", [])
+for entry in ["Bash(gui:*)", f"Bash({claude_dir}/bin/gui:*)"]:
+    if entry not in allow:
+        allow.append(entry)
+for entry in ["Bash(gui on:*)", f"Bash({claude_dir}/bin/gui on:*)", "Bash(gui toggle:*)", f"Bash({claude_dir}/bin/gui toggle:*)"]:
+    if entry not in deny:
+        deny.append(entry)
+with open(path, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+PY
+  then
+    MERGED_ST=1
   fi
 fi
 if [ "$MERGED_ST" = "1" ]; then
@@ -370,10 +428,10 @@ if [ "$MERGED_ST" = "1" ]; then
 else
   warn "Could not merge $ST automatically (jq missing, file missing, or unreadable)."
   echo "    Add this by hand:"
-  echo '      "statusLine": { "type": "command", "command": "$HOME/.claude/bin/statusline" },'
+  echo "      \"statusLine\": { \"type\": \"command\", \"command\": \"$CLAUDE_DIR/bin/statusline\" },"
   echo '      "permissions": {'
-  echo '        "allow": ["Bash(gui:*)", "Bash(~/.claude/bin/gui:*)"],'
-  echo '        "deny":  ["Bash(gui on:*)", "Bash(~/.claude/bin/gui on:*)"]'
+  echo "        \"allow\": [\"Bash(gui:*)\", \"Bash($CLAUDE_DIR/bin/gui:*)\"],"
+  echo "        \"deny\":  [\"Bash(gui on:*)\", \"Bash($CLAUDE_DIR/bin/gui on:*)\", \"Bash(gui toggle:*)\", \"Bash($CLAUDE_DIR/bin/gui toggle:*)\"]"
   echo '      }'
 fi
 
