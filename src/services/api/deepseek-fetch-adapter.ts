@@ -16,7 +16,7 @@
  * Endpoint: https://api.deepseek.com/v1/chat/completions
  */
 
-import { DEEPSEEK_BASE_URL, DEEPSEEK_MAX_OUTPUT_TOKENS, DEEPSEEK_MESSAGES_PATH, DEFAULT_DEEPSEEK_MODEL } from '../../config/deepseek.js'
+import { DEEPSEEK_BASE_URL, DEEPSEEK_MAX_OUTPUT_TOKENS, DEEPSEEK_MESSAGES_PATH, resolveClaudeModelForDeepSeek } from '../../config/deepseek.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { estimateTokenCountResponse } from './count-tokens-shim.js'
 import { createBackpressuredSseStream } from './sse-backpressure.js'
@@ -217,7 +217,7 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
       .join('\n') || undefined
   }
 
-  const model = resolveModel(anthropicBody.model as string | undefined)
+  const model = resolveClaudeModelForDeepSeek(anthropicBody.model as string | undefined)
   const openAIMessages = translateMessages(messages, system)
   const anthropicTools = (anthropicBody.tools ?? []) as AnthropicTool[]
 
@@ -300,35 +300,6 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
   }
 
   return body
-}
-
-/**
- * Maps an Anthropic model name to the appropriate DeepSeek model.
- * Claude Opus/Fable/Mythos → deepseek-v4-pro, Claude Sonnet/Haiku →
- * deepseek-v4-flash.
- * Any already-valid DeepSeek model ID passes through untouched — including the
- * retired deepseek-chat/deepseek-reasoner aliases, which the API still serves.
- */
-function resolveModel(claudeModel: string | undefined): string {
-  if (!claudeModel) return DEFAULT_DEEPSEEK_MODEL
-
-  const lower = claudeModel.toLowerCase()
-
-  // Already a DeepSeek model — pass through
-  if (lower.startsWith('deepseek-')) return claudeModel
-
-  // Map Claude families to DeepSeek equivalents. Fable and Mythos take Pro
-  // alongside Opus: of the entries in MODEL_REGISTRY they carry the most
-  // expensive pricingTier, 'tier_10_50', above every Opus entry in it at
-  // 'tier_5_25'.
-  if (lower.includes('opus')) return 'deepseek-v4-pro'
-  if (lower.includes('fable')) return 'deepseek-v4-pro'
-  if (lower.includes('mythos')) return 'deepseek-v4-pro'
-  if (lower.includes('sonnet')) return 'deepseek-v4-flash'
-  if (lower.includes('haiku')) return 'deepseek-v4-flash'
-
-  logForDebugging(`DeepSeek resolveModel: unrecognised model '${claudeModel}', falling back to '${DEFAULT_DEEPSEEK_MODEL}'`, { level: 'warn' })
-  return DEFAULT_DEEPSEEK_MODEL
 }
 
 // ── Response translation: OpenAI SSE → Anthropic SSE ─────────────────────────
@@ -1064,7 +1035,7 @@ export function createDeepSeekFetch(
       return estimateTokenCountResponse(anthropicBody)
     }
 
-    const model = resolveModel(anthropicBody.model as string | undefined)
+    const model = resolveClaudeModelForDeepSeek(anthropicBody.model as string | undefined)
     const openAIBody = translateToOpenAIBody(anthropicBody)
 
     const deepSeekResponse = await inner(`${DEEPSEEK_BASE_URL}${DEEPSEEK_MESSAGES_PATH}`, {

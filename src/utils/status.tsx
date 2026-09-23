@@ -10,7 +10,7 @@ import { getAWSRegion, getDefaultVertexRegion, isEnvTruthy } from './envUtils.js
 import { getDisplayPath } from './file.js';
 import { formatNumber } from './format.js';
 import { getIdeClientName, type IDEExtensionInstallationStatus, isJetBrainsIde, toIDEDisplayName } from './ide.js';
-import { getClaudeAiUserDefaultModelDescription, modelDisplayString } from './model/model.js';
+import { getClaudeAiUserDefaultModelDescription, getDisplayModelForActiveProvider, modelDisplayString, parseUserSpecifiedModel } from './model/model.js';
 import { getAPIProvider } from './model/providers.js';
 import { getMTLSConfig } from './mtls.js';
 import { checkInstall } from './nativeInstaller/index.js';
@@ -352,10 +352,20 @@ export function buildAPIProviderProperties(): Property[] {
   return properties;
 }
 export function getModelDisplayLabel(mainLoopModel: string | null): string {
-  let modelLabel = modelDisplayString(mainLoopModel);
-  if (mainLoopModel === null && isClaudeAISubscriber()) {
-    const description = getClaudeAiUserDefaultModelDescription();
-    modelLabel = `${chalk.bold('Default')} ${description}`;
+  if (mainLoopModel === null) {
+    if (isClaudeAISubscriber()) {
+      const description = getClaudeAiUserDefaultModelDescription();
+      return `${chalk.bold('Default')} ${description}`;
+    }
+    return modelDisplayString(null);
   }
-  return modelLabel;
+  const resolved = parseUserSpecifiedModel(mainLoopModel);
+  const served = getDisplayModelForActiveProvider(resolved);
+  // Identity translation (Anthropic, or an already-native provider ID) keeps
+  // the existing alias→resolved formatting; a translated ID is the provider
+  // model actually served, so show it verbatim rather than the Claude ID the
+  // session never sends.
+  return served === resolved
+    ? modelDisplayString(mainLoopModel)
+    : modelDisplayString(served);
 }
