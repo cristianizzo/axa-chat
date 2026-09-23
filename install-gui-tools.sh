@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-set -uo pipefail
 
 # gui-tools installer — optional companion to install.sh
 #
@@ -184,19 +183,30 @@ guard() {
     done <<<"$DEFAULT_DENY_URL"
   fi
 
-  # Secure Input va riletto adesso, non una volta in diagnosi.
-  if [ "$(ioreg -l -w 0 2>/dev/null | grep -c kCGSSessionSecureInputPID)" -gt 0 ]; then
-    die "Secure Input attivo (campo password a fuoco) — azione rifiutata"
+  # Secure Input va riletto adesso, non una volta in diagnosi. Fail-closed:
+  # se `ioreg` stesso fallisce (permesso, formato cambiato) non possiamo
+  # distinguerlo da "0 match legittimi" guardando solo l'output — quindi un
+  # ioreg fallito è trattato come "non verificabile" e nega, invece di
+  # lasciar passare l'azione silenziosamente.
+  local secure_input_out
+  if ! secure_input_out="$(ioreg -l -w 0 2>&1)"; then
+    die "impossibile verificare Secure Input (ioreg fallito) — azione rifiutata"
   fi
+  case "$secure_input_out" in
+    *kCGSSessionSecureInputPID*) die "Secure Input attivo (campo password a fuoco) — azione rifiutata" ;;
+  esac
 
   FRONT_APP="$app"
 }
 
 # Se l'umano ha appena toccato mouse o tastiera, non gli rubo il focus.
+# Fail-closed come guard(): se ioreg non risponde o cambia formato, non
+# possiamo sapere se la macchina è in uso — nega invece di procedere alla
+# cieca.
 guard_idle() {
   local idle_ns idle_s
   idle_ns="$(ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/ {print $NF; exit}')"
-  [ -n "${idle_ns:-}" ] || return 0
+  [ -n "${idle_ns:-}" ] || die "impossibile leggere l'idle time (ioreg) — azione rifiutata"
   idle_s=$(( idle_ns / 1000000000 ))
   [ "$idle_s" -lt 3 ] && die "stai usando la macchina (idle ${idle_s}s) — azione rifiutata"
   return 0
@@ -295,6 +305,15 @@ case "$cmd" in
          case "$script" in
            *"do shell script"*) die "AppleScript con 'do shell script' rifiutato — esce dal sandboxing" ;;
          esac
+         # `tell application id "com.apple.mail"` bersaglia un'app protetta
+         # per bundle id senza mai comparire nel nome amichevole scansionato
+         # sotto — quindi lo stesso elenco (bundle id) usato da guard() per
+         # l'app in primo piano va scansionato anche qui, sul testo dello
+         # script, non solo confrontato contro FRONT_APP.
+         while IFS= read -r bad; do
+           [ -z "$bad" ] && continue
+           case "$script" in *"$bad"*) die "lo script punta a un'app protetta per bundle id ($bad)" ;; esac
+         done <<<"$(denylist)"
          while IFS= read -r bad; do
            [ -z "$bad" ] && continue
            case "$script" in *"$bad"*) die "lo script punta a un'app protetta ($bad)" ;; esac
@@ -312,7 +331,7 @@ case "$cmd" in
          log AS "rc=$rc front=$FRONT_APP"
          echo "$out"; exit $rc ;;
 
-  *) sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
 GUI_EOF
 chmod +x "$CLAUDE_DIR/bin/gui"
@@ -455,7 +474,7 @@ if command -v jq >/dev/null 2>&1; then
           end
       )
     ' "$KB" > "$tmp" 2>/dev/null; then
-      mv "$tmp" "$KB"; MERGED_KB=1
+      mv "$tmp" "$KB" && MERGED_KB=1 || rm -f "$tmp"
     else
       rm -f "$tmp"
     fi
@@ -538,13 +557,16 @@ fi
 GUI_SAFE_SUBCOMMANDS="frontmost status badge doctor off move click type key as"
 GUI_DENY_SUBCOMMANDS="on toggle"
 
+# Space-separated bash words -> JSON array of strings, via jq -R/-s so no
+# manual quoting/escaping of the words themselves is needed. Only called
+# from inside the `command -v jq` branch below — none of these subcommand
+# words ever contain a space, so building this eagerly at top level (as a
+# prior version did) meant an install with no `jq` on PATH died right here,
+# before ever reaching the python3 fallback further down. Keeping it lazy
+# and jq-only preserves that fallback.
 json_array_from_words() {
-  # Space-separated bash words -> JSON array of strings, via jq -R/-s so no
-  # manual quoting/escaping of the words themselves is needed.
   printf '%s\n' $1 | jq -R . | jq -s .
 }
-GUI_SAFE_JSON="$(json_array_from_words "$GUI_SAFE_SUBCOMMANDS")"
-GUI_DENY_JSON="$(json_array_from_words "$GUI_DENY_SUBCOMMANDS")"
 
 # CLAUDE_CODE_USE_COWORK_PLUGINS truthiness, mirroring isEnvTruthy()
 # (src/utils/envUtils.ts): lowercase, match against 1/true/yes/on.
@@ -567,9 +589,12 @@ is_env_truthy() {
 # first --cowork-flag-only run, with no env var set and no prior
 # cowork_settings.json on disk, is unobservable from a plain bash installer;
 # that run falls back to whatever's already in settings.json.
-SETTINGS_TARGETS="$CLAUDE_DIR/settings.json"
+# Array, not a space-joined string: $CLAUDE_DIR can legitimately contain a
+# space (CLAUDE_DIR_Q above exists for exactly that case), and an unquoted
+# iteration over a joined string would word-split it.
+SETTINGS_TARGETS=("$CLAUDE_DIR/settings.json")
 if is_env_truthy "${CLAUDE_CODE_USE_COWORK_PLUGINS:-}" || [ -f "$CLAUDE_DIR/cowork_settings.json" ]; then
-  SETTINGS_TARGETS="$SETTINGS_TARGETS $CLAUDE_DIR/cowork_settings.json"
+  SETTINGS_TARGETS+=("$CLAUDE_DIR/cowork_settings.json")
 fi
 
 # STATUSLINE_CMD is shell-quoted (via CLAUDE_DIR_Q, defined above) because
@@ -579,39 +604,53 @@ fi
 # downstream, so it needs its own escaping independent of jq's JSON quoting.
 STATUSLINE_CMD="${CLAUDE_DIR_Q}/bin/statusline"
 
+# Set by merge_gui_settings on jq failure, for a more useful warn message
+# than "missing or unreadable" when jq is present but the file is malformed.
+MERGE_LAST_ERROR=""
+
 merge_gui_settings() {
   # $1 = target settings file path
-  local st="$1" merged=0 tmp
+  local st="$1" merged=0 tmp jq_err
+  MERGE_LAST_ERROR=""
   # Mirror keybindings.json above: a missing file is not a failure, it's a
   # fresh install — merge against "{}" instead of skipping the whole step.
   [ -f "$st" ] || echo '{}' > "$st"
   if command -v jq >/dev/null 2>&1; then
     tmp="$(mktemp)"
+    jq_err="$(mktemp)"
+    # GUI_SAFE_JSON/GUI_DENY_JSON built here, not at top level: this whole
+    # branch is only reached once jq is confirmed present.
     if jq \
       --arg claude_dir "$CLAUDE_DIR" \
       --arg statusline_cmd "$STATUSLINE_CMD" \
-      --argjson safe_subs "$GUI_SAFE_JSON" \
-      --argjson deny_subs "$GUI_DENY_JSON" \
+      --argjson safe_subs "$(json_array_from_words "$GUI_SAFE_SUBCOMMANDS")" \
+      --argjson deny_subs "$(json_array_from_words "$GUI_DENY_SUBCOMMANDS")" \
       '
       def patterns(subs): [subs[] | "Bash(gui \(.):*)", "Bash(\($claude_dir)/bin/gui \(.):*)"];
-      .statusLine = (.statusLine // {"type":"command","command":$statusline_cmd})
+      # has(): a missing statusLine gets the default; an explicit
+      # "statusLine": null (or any other falsy-but-present value) is the
+      # user'"'"'s own choice and must survive, same reasoning as the
+      # ctrl+g has() check in keybindings.json above.
+      .statusLine = (if has("statusLine") then .statusLine else {"type":"command","command":$statusline_cmd} end)
       | .permissions.allow = ((.permissions.allow // []) + patterns($safe_subs) | unique)
       | .permissions.deny  = ((.permissions.deny  // []) + patterns($deny_subs) | unique)
-    ' "$st" > "$tmp" 2>/dev/null; then
-      mv "$tmp" "$st"; merged=1
+    ' "$st" > "$tmp" 2>"$jq_err"; then
+      mv "$tmp" "$st" && merged=1 || { MERGE_LAST_ERROR="mv to $st failed"; rm -f "$tmp"; }
     else
+      MERGE_LAST_ERROR="$(cat "$jq_err")"
       rm -f "$tmp"
     fi
+    rm -f "$jq_err"
   elif command -v python3 >/dev/null 2>&1; then
     if CLAUDE_DIR="$CLAUDE_DIR" STATUSLINE_CMD="$STATUSLINE_CMD" \
-      GUI_SAFE_JSON="$GUI_SAFE_JSON" GUI_DENY_JSON="$GUI_DENY_JSON" \
+      GUI_SAFE_SUBCOMMANDS="$GUI_SAFE_SUBCOMMANDS" GUI_DENY_SUBCOMMANDS="$GUI_DENY_SUBCOMMANDS" \
       python3 - "$st" <<'PY'
 import json, os, sys
 path = sys.argv[1]
 claude_dir = os.environ["CLAUDE_DIR"]
 statusline_cmd = os.environ["STATUSLINE_CMD"]
-safe_subs = json.loads(os.environ["GUI_SAFE_JSON"])
-deny_subs = json.loads(os.environ["GUI_DENY_JSON"])
+safe_subs = os.environ["GUI_SAFE_SUBCOMMANDS"].split()
+deny_subs = os.environ["GUI_DENY_SUBCOMMANDS"].split()
 
 def patterns(subs):
     out = []
@@ -645,13 +684,17 @@ PY
 
 MERGED_ANY=0
 MERGED_ALL=1
-for st in $SETTINGS_TARGETS; do
+for st in "${SETTINGS_TARGETS[@]}"; do
   if merge_gui_settings "$st"; then
     ok "$st (statusLine + gui permissions)"
     MERGED_ANY=1
   else
     MERGED_ALL=0
-    warn "Could not merge $st automatically (jq/python3 missing or file unreadable)."
+    if [ -n "$MERGE_LAST_ERROR" ]; then
+      warn "Could not merge $st automatically: $MERGE_LAST_ERROR"
+    else
+      warn "Could not merge $st automatically (jq/python3 missing or file unreadable)."
+    fi
   fi
 done
 if [ "$MERGED_ALL" != "1" ]; then
