@@ -38,6 +38,16 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 mkdir -p "$CLAUDE_DIR/bin" "$CLAUDE_DIR/commands"
 info "Installing into $CLAUDE_DIR"
 
+# Shell-safe (backslash-escaped) form of CLAUDE_DIR, for every place below
+# where the path is embedded into text that later gets *executed* as a shell
+# command line rather than just interpolated into this installer's own
+# already-parsed shell (the gui-toggle.md inline `!`...`` body, and the
+# statusLine command written into settings.json, which axa/claude spawns
+# through a shell). A path with a space or a shell metacharacter — a valid
+# CLAUDE_CONFIG_DIR — would otherwise split into extra words or change what
+# gets run.
+CLAUDE_DIR_Q="$(printf '%q' "$CLAUDE_DIR")"
+
 # ---------------------------------------------------------------- gui
 cat > "$CLAUDE_DIR/bin/gui" <<'GUI_EOF'
 #!/bin/bash
@@ -106,13 +116,27 @@ log() { printf '%s\t%s\tcc=%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "${CLAU
 die() { echo "gui: $1" >&2; log DENIED "$1"; exit 1; }
 
 # ---------------------------------------------------------------- durata
+# The suffix-stripped value is validated as digits-only BEFORE it ever
+# reaches arithmetic expansion. `$(( ... ))` evaluates its operand as a new
+# round of shell parsing, so an unvalidated value like "$(...)h" would run a
+# command substitution while parsing the duration — and `gui toggle` is the
+# model-reachable path that supplies this argument (via `gui on "$1"`).
+# `10#` forces base-10 so a value with a leading zero (e.g. "08") isn't
+# misread as an invalid octal literal.
 parse_dur() {
-  case "$1" in
-    *h) echo $(( ${1%h} * 3600 )) ;;
-    *m) echo $(( ${1%m} * 60 )) ;;
-    *s) echo "${1%s}" ;;
+  local raw="$1" val
+  case "$raw" in
+    *h) val="${raw%h}"
+        case "$val" in ''|*[!0-9]*) echo 1800; return ;; esac
+        echo $(( 10#$val * 3600 )) ;;
+    *m) val="${raw%m}"
+        case "$val" in ''|*[!0-9]*) echo 1800; return ;; esac
+        echo $(( 10#$val * 60 )) ;;
+    *s) val="${raw%s}"
+        case "$val" in ''|*[!0-9]*) echo 1800; return ;; esac
+        echo $(( 10#$val )) ;;
     ''|*[!0-9]*) echo 1800 ;;
-    *) echo $(( $1 * 60 )) ;;
+    *) echo $(( 10#$raw * 60 )) ;;
   esac
 }
 
@@ -211,9 +235,9 @@ case "$cmd" in
 
   badge)
     if read_state; then
-      echo "● gui on $(( (EXPIRY - $(date +%s) + 59) / 60 ))m (ctrl+g toggle)"
+      echo "● gui on $(( (EXPIRY - $(date +%s) + 59) / 60 ))m (ctrl+g status)"
     else
-      echo "○ gui off (ctrl+g toggle)"
+      echo "○ gui off (ctrl+g status)"
     fi
     ;;
 
@@ -297,10 +321,29 @@ ok "$CLAUDE_DIR/bin/gui"
 # Symlink into the same bin dir install.sh uses for the `axa` launcher, so a
 # bare `gui` on the command line resolves the same way `axa` already does —
 # a fresh $CLAUDE_DIR/bin has nothing adding it to PATH on its own.
+#
+# `ln -sf` unconditionally removes whatever is already at the destination —
+# including an unrelated user executable or symlink that happens to be named
+# `gui`. install.sh guards its own launcher with assert_launcher_is_ours
+# before ever touching it; this is the same check adapted for a plain
+# convenience symlink (rather than install.sh's versions-dir launcher): only
+# replace the target if it doesn't exist yet, or if it's already a symlink
+# this installer itself put there on a previous run.
 AXA_BIN_DIR_RESOLVED="${AXA_BIN_DIR:-$HOME/.local/bin}"
 mkdir -p "$AXA_BIN_DIR_RESOLVED"
-ln -sf "$CLAUDE_DIR/bin/gui" "$AXA_BIN_DIR_RESOLVED/gui"
-ok "$AXA_BIN_DIR_RESOLVED/gui -> $CLAUDE_DIR/bin/gui"
+GUI_LAUNCHER="$AXA_BIN_DIR_RESOLVED/gui"
+if [ -e "$GUI_LAUNCHER" ] || [ -L "$GUI_LAUNCHER" ]; then
+  if [ -L "$GUI_LAUNCHER" ] && [ "$(readlink "$GUI_LAUNCHER")" = "$CLAUDE_DIR/bin/gui" ]; then
+    ok "$GUI_LAUNCHER -> $CLAUDE_DIR/bin/gui (already ours)"
+  else
+    warn "$GUI_LAUNCHER already exists and was not put there by this installer — leaving it alone.
+    Use $CLAUDE_DIR/bin/gui directly (see the activation hints below), or move
+    the existing $GUI_LAUNCHER aside and re-run this installer to get the convenience symlink."
+  fi
+else
+  ln -s "$CLAUDE_DIR/bin/gui" "$GUI_LAUNCHER"
+  ok "$GUI_LAUNCHER -> $CLAUDE_DIR/bin/gui"
+fi
 
 # ---------------------------------------------------------------- statusline
 cat > "$CLAUDE_DIR/bin/statusline" <<'SL_EOF'
@@ -334,30 +377,60 @@ ok "$CLAUDE_DIR/bin/statusline"
 
 # ---------------------------------------------------------------- gui-toggle command
 #
-# Deliberately NO `allowed-tools` frontmatter here. That would pre-authorize
-# this exact Bash pattern globally — not just for this command's own
-# execution — which would let the model invoke the same toggle without ever
-# prompting, defeating the point of gating "on" behind explicit user action.
-# Leaving it undeclared means the first run (whether from ctrl+g or typing
-# /gui-toggle) asks for approval like any other new Bash command; the human
-# can then choose to always-allow it themselves, as their own explicit
-# decision, rather than the installer silently doing it on their behalf.
+# This command's body does NOT run `gui toggle`/`gui on` itself — it only
+# shows status. Verified against src/utils/promptShellExecution.ts: a slash
+# command's embedded `!`cmd`` body is executed through the exact same
+# hasPermissionsToUseTool() check as a model-issued Bash tool_use — same
+# tool, same command string, same permission context. Nothing at that layer
+# can tell "the user pressed ctrl+g" apart from "the model chose to run
+# this". That distinction matters because of `auto` mode
+# (src/utils/permissions/permissions.ts): an otherwise-asking Bash command
+# there silently becomes an allow unless isLocallyRiskyAction()
+# (src/utils/permissions/localAutoApprove.ts) flags it — and that function
+# only flags destructive commands (rm -rf, force-push, DROP TABLE, ...), not
+# `gui toggle`. So if this command ran the toggle directly, a user on auto
+# mode would get no real gate: the model could reach the identical
+# "allowed" outcome on its own, indistinguishable from ctrl+g. Leaving
+# `toggle` off the allow list (as before) doesn't close that — "ask" in auto
+# mode isn't a real ask, it's a default allow.
+#
+# `gui toggle`/`gui on` are therefore in the settings.json DENY list below
+# (see that section), which — unlike a missing allow rule — does hold in
+# auto mode. Because deny applies uniformly regardless of who triggered the
+# command, it would equally block this command's own body if it tried to run
+# the toggle, so this body sticks to the read-only, allow-listed `gui
+# status` and tells the human what to type. A literal `!command` typed
+# directly at the prompt (not from inside any command body, slash command or
+# otherwise) is the one path in this codebase that bypasses tool-permission
+# checks entirely — see src/utils/processUserInput/processBashCommand.tsx,
+# which calls BashTool.call() directly with no permission check at all — so
+# it is the only mechanism that stays out of the model's reach regardless of
+# permission mode. Still deliberately no `allowed-tools` frontmatter, for
+# the same reason as before: it would pre-authorize this Bash pattern
+# globally rather than leaving `gui status` to axa's normal approval flow.
 cat > "$CLAUDE_DIR/commands/gui-toggle.md" <<CMD_EOF
 ---
-description: Accende/spegne il controllo GUI del Mac (mouse, tastiera, AppleScript)
+description: Mostra lo stato del controllo GUI del Mac (accenderlo/spegnerlo richiede un comando digitato dall'utente, non eseguibile dal modello)
 ---
 
-!\`$CLAUDE_DIR/bin/gui toggle\`
+!\`${CLAUDE_DIR_Q}/bin/gui status\`
 
-Riporta solo lo stato qui sopra in una riga. Non fare altro.
+Riporta solo lo stato qui sopra in una riga. Per cambiarlo l'utente deve
+digitare lui stesso (non tu, e non da dentro questo comando):
+\`!${CLAUDE_DIR_Q}/bin/gui toggle\`
 CMD_EOF
 ok "$CLAUDE_DIR/commands/gui-toggle.md"
 
 # ---------------------------------------------------------------- keybindings.json (merge)
 #
-# `//=` (jq) / setdefault (python3 fallback below): only fill ctrl+g in if it's
-# unset. A pre-existing binding is the user's own choice and must not be
-# silently overwritten by this installer.
+# Only fill ctrl+g in if the key is genuinely absent. `null` is this schema's
+# explicit way to unbind a shortcut, and jq's `//=` treats `null` the same as
+# "missing" — it would silently overwrite a user's `"ctrl+g": null` unbind
+# with our default. `has("ctrl+g")` distinguishes "absent" from "present but
+# null", so an explicit unbind is left alone. (setdefault() in the python3
+# fallback below does not have this problem: Python's dict.setdefault only
+# sets the default when the key is *absent*, not when its value is None, so
+# it already preserves an explicit null.)
 KB="$CLAUDE_DIR/keybindings.json"
 MERGED_KB=0
 if command -v jq >/dev/null 2>&1; then
@@ -367,7 +440,16 @@ if command -v jq >/dev/null 2>&1; then
       .bindings |= (
         (map(select(.context == "Chat")) | length) as $n
         | if $n > 0 then
-            map(if .context == "Chat" then .bindings["ctrl+g"] //= "command:gui-toggle" else . end)
+            map(
+              if .context == "Chat" then
+                .bindings = (
+                  (.bindings // {}) as $b
+                  | if ($b | has("ctrl+g")) then $b
+                    else $b + {"ctrl+g": "command:gui-toggle"}
+                    end
+                )
+              else . end
+            )
           else
             . + [{"context":"Chat","bindings":{"ctrl+g":"command:gui-toggle"}}]
           end
@@ -424,80 +506,161 @@ fi
 # ---------------------------------------------------------------- settings.json (merge)
 #
 # Deliberately NOT a blanket "Bash(gui:*)" allow: that would auto-approve
-# `gui on`/`gui toggle` too, and "on" exec'd from inside "toggle" bypasses the
-# `gui on` deny rule below entirely (the permission check matches the command
-# string the model typed, not what the script does internally). Enumerating
-# the state-preserving subcommands here means "on"/"toggle" fall through to
-# axa's normal interactive approval instead of being silently pre-approved —
-# closing that bypass without a deny rule that would also block the
-# legitimate ctrl+g / /gui-toggle path (deny always wins over a command's own
-# allowed-tools, regardless of which one is user-triggered).
+# `gui on`/`gui toggle` too, and "on" exec'd from inside "toggle" bypasses a
+# hypothetical `gui on`-only deny rule entirely (the permission check matches
+# the command string the model typed, not what the script does internally).
+#
+# `on` and `toggle` are BOTH put in `permissions.deny` (not just left out of
+# allow). Leaving them merely un-allow-listed is not enough: axa's `auto`
+# permission mode (src/utils/permissions/permissions.ts, the fork-local "Auto
+# approvals" block) converts an `ask` result straight to `allow` unless
+# `isLocallyRiskyAction()` (src/utils/permissions/localAutoApprove.ts) flags
+# the command, and that function only flags destructive-shell/PowerShell/
+# safetyCheck cases — an unmatched `gui toggle` sails through silently in
+# that mode. A `deny` entry is the one thing that beats `auto` mode's
+# allow-conversion (deny is checked first and always wins), so it's the only
+# installer-side mechanism that actually closes the gap.
+#
+# Putting `toggle` in deny does mean /gui-toggle itself can no longer *run*
+# `gui toggle` for the model — see the gui-toggle.md generation above: that
+# command now only shows read-only `gui status` output and tells the human to
+# type the real toggle themselves. That's deliberate, not a gap: the one path
+# in axa proven to bypass permission checks entirely is a command the user
+# *types* at the prompt in bash mode (processBashCommand.tsx calls
+# BashTool.call() directly, no hasPermissionsToUseTool() in that path) —
+# never something the model can trigger, since the model only ever emits
+# tool_use blocks, and even a `command:gui-toggle` keybinding just submits
+# `/gui-toggle` through the same permission-checked slash-command path
+# (useCommandKeybindings.tsx -> promptShellExecution.ts). So a real,
+# human-only gate for the state-changing subcommands is only achievable by
+# keeping the model from ever seeing an allow/auto-approve for them, and
+# handing the actual toggle back to something only a human can type.
 GUI_SAFE_SUBCOMMANDS="frontmost status badge doctor off move click type key as"
-GUI_ALLOW_JSON="["
-first=1
-for sub in $GUI_SAFE_SUBCOMMANDS; do
-  for pattern in "Bash(gui $sub:*)" "Bash($CLAUDE_DIR/bin/gui $sub:*)"; do
-    [ "$first" = "1" ] || GUI_ALLOW_JSON="$GUI_ALLOW_JSON,"
-    GUI_ALLOW_JSON="$GUI_ALLOW_JSON\"$pattern\""
-    first=0
-  done
-done
-GUI_ALLOW_JSON="$GUI_ALLOW_JSON]"
+GUI_DENY_SUBCOMMANDS="on toggle"
 
-ST="$CLAUDE_DIR/settings.json"
-MERGED_ST=0
-# Mirror keybindings.json above: a missing file is not a failure, it's a fresh
-# install — merge against "{}" instead of skipping the whole step.
-[ -f "$ST" ] || echo '{}' > "$ST"
-if command -v jq >/dev/null 2>&1; then
-  tmp="$(mktemp)"
-  if jq '
-    .statusLine = (.statusLine // {"type":"command","command":"'"$CLAUDE_DIR"'/bin/statusline"})
-    | .permissions.allow = ((.permissions.allow // []) + '"$GUI_ALLOW_JSON"' | unique)
-    | .permissions.deny  = ((.permissions.deny  // []) + ["Bash(gui on:*)", "Bash('"$CLAUDE_DIR"'/bin/gui on:*)"] | unique)
-  ' "$ST" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$ST"; MERGED_ST=1
-  else
-    rm -f "$tmp"
-  fi
-elif command -v python3 >/dev/null 2>&1; then
-  if CLAUDE_DIR="$CLAUDE_DIR" GUI_ALLOW_JSON="$GUI_ALLOW_JSON" python3 - "$ST" <<'PY'
+json_array_from_words() {
+  # Space-separated bash words -> JSON array of strings, via jq -R/-s so no
+  # manual quoting/escaping of the words themselves is needed.
+  printf '%s\n' $1 | jq -R . | jq -s .
+}
+GUI_SAFE_JSON="$(json_array_from_words "$GUI_SAFE_SUBCOMMANDS")"
+GUI_DENY_JSON="$(json_array_from_words "$GUI_DENY_SUBCOMMANDS")"
+
+# CLAUDE_CODE_USE_COWORK_PLUGINS truthiness, mirroring isEnvTruthy()
+# (src/utils/envUtils.ts): lowercase, match against 1/true/yes/on.
+is_env_truthy() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:][:blank:]' '[:lower:]')" in
+    1 | true | yes | on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Which settings file(s) to merge into. axa's cowork mode
+# (getUserSettingsFilePath(), src/utils/settings/settings.ts) resolves to
+# cowork_settings.json when either the in-memory --cowork session flag is set
+# (never persisted to disk, so a static installer can't see it) or the
+# CLAUDE_CODE_USE_COWORK_PLUGINS env var is truthy. We can't observe the
+# session flag, but we CAN observe the env var and an already-existing
+# cowork_settings.json (itself evidence a previous cowork run created one) —
+# so merge into both files whenever either signal is present, and into plain
+# settings.json unconditionally. The one irreducible gap: a machine's very
+# first --cowork-flag-only run, with no env var set and no prior
+# cowork_settings.json on disk, is unobservable from a plain bash installer;
+# that run falls back to whatever's already in settings.json.
+SETTINGS_TARGETS="$CLAUDE_DIR/settings.json"
+if is_env_truthy "${CLAUDE_CODE_USE_COWORK_PLUGINS:-}" || [ -f "$CLAUDE_DIR/cowork_settings.json" ]; then
+  SETTINGS_TARGETS="$SETTINGS_TARGETS $CLAUDE_DIR/cowork_settings.json"
+fi
+
+# STATUSLINE_CMD is shell-quoted (via CLAUDE_DIR_Q, defined above) because
+# statusLine.command is later executed through spawn(..., {shell:true}) —
+# unlike the other paths embedded directly into this installer's own
+# already-parsed shell, this one becomes a shell command line *again*
+# downstream, so it needs its own escaping independent of jq's JSON quoting.
+STATUSLINE_CMD="${CLAUDE_DIR_Q}/bin/statusline"
+
+merge_gui_settings() {
+  # $1 = target settings file path
+  local st="$1" merged=0 tmp
+  # Mirror keybindings.json above: a missing file is not a failure, it's a
+  # fresh install — merge against "{}" instead of skipping the whole step.
+  [ -f "$st" ] || echo '{}' > "$st"
+  if command -v jq >/dev/null 2>&1; then
+    tmp="$(mktemp)"
+    if jq \
+      --arg claude_dir "$CLAUDE_DIR" \
+      --arg statusline_cmd "$STATUSLINE_CMD" \
+      --argjson safe_subs "$GUI_SAFE_JSON" \
+      --argjson deny_subs "$GUI_DENY_JSON" \
+      '
+      def patterns(subs): [subs[] | "Bash(gui \(.):*)", "Bash(\($claude_dir)/bin/gui \(.):*)"];
+      .statusLine = (.statusLine // {"type":"command","command":$statusline_cmd})
+      | .permissions.allow = ((.permissions.allow // []) + patterns($safe_subs) | unique)
+      | .permissions.deny  = ((.permissions.deny  // []) + patterns($deny_subs) | unique)
+    ' "$st" > "$tmp" 2>/dev/null; then
+      mv "$tmp" "$st"; merged=1
+    else
+      rm -f "$tmp"
+    fi
+  elif command -v python3 >/dev/null 2>&1; then
+    if CLAUDE_DIR="$CLAUDE_DIR" STATUSLINE_CMD="$STATUSLINE_CMD" \
+      GUI_SAFE_JSON="$GUI_SAFE_JSON" GUI_DENY_JSON="$GUI_DENY_JSON" \
+      python3 - "$st" <<'PY'
 import json, os, sys
 path = sys.argv[1]
 claude_dir = os.environ["CLAUDE_DIR"]
-allow_entries = json.loads(os.environ["GUI_ALLOW_JSON"])
+statusline_cmd = os.environ["STATUSLINE_CMD"]
+safe_subs = json.loads(os.environ["GUI_SAFE_JSON"])
+deny_subs = json.loads(os.environ["GUI_DENY_JSON"])
+
+def patterns(subs):
+    out = []
+    for sub in subs:
+        out.append(f"Bash(gui {sub}:*)")
+        out.append(f"Bash({claude_dir}/bin/gui {sub}:*)")
+    return out
+
 with open(path) as f:
     data = json.load(f)
-data.setdefault("statusLine", {"type": "command", "command": f"{claude_dir}/bin/statusline"})
+data.setdefault("statusLine", {"type": "command", "command": statusline_cmd})
 perms = data.setdefault("permissions", {})
 allow = perms.setdefault("allow", [])
 deny = perms.setdefault("deny", [])
-for entry in allow_entries:
+for entry in patterns(safe_subs):
     if entry not in allow:
         allow.append(entry)
-for entry in ["Bash(gui on:*)", f"Bash({claude_dir}/bin/gui on:*)"]:
+for entry in patterns(deny_subs):
     if entry not in deny:
         deny.append(entry)
 with open(path, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
-  then
-    MERGED_ST=1
+    then
+      merged=1
+    fi
   fi
-fi
-if [ "$MERGED_ST" = "1" ]; then
-  ok "$ST (statusLine + gui permissions)"
-else
-  warn "Could not merge $ST automatically (jq/python3 missing or file unreadable)."
-  echo "    Add this by hand:"
+  return $((1 - merged))
+}
+
+MERGED_ANY=0
+MERGED_ALL=1
+for st in $SETTINGS_TARGETS; do
+  if merge_gui_settings "$st"; then
+    ok "$st (statusLine + gui permissions)"
+    MERGED_ANY=1
+  else
+    MERGED_ALL=0
+    warn "Could not merge $st automatically (jq/python3 missing or file unreadable)."
+  fi
+done
+if [ "$MERGED_ALL" != "1" ]; then
+  echo "    Add this by hand to each file above:"
   echo "      \"statusLine\": { \"type\": \"command\", \"command\": \"$CLAUDE_DIR/bin/statusline\" },"
   echo '      "permissions": {'
   echo "        \"allow\": [\"Bash(gui <sub>:*)\", \"Bash($CLAUDE_DIR/bin/gui <sub>:*)\", ... for each of: $GUI_SAFE_SUBCOMMANDS],"
-  echo "        \"deny\":  [\"Bash(gui on:*)\", \"Bash($CLAUDE_DIR/bin/gui on:*)\"]"
+  echo "        \"deny\":  [\"Bash(gui <sub>:*)\", \"Bash($CLAUDE_DIR/bin/gui <sub>:*)\", ... for each of: $GUI_DENY_SUBCOMMANDS]"
   echo '      }'
-  echo "    (gui on / gui toggle deliberately not pre-approved or denied — they"
-  echo "     fall through to axa's normal interactive approval prompt.)"
 fi
 
 echo ""
@@ -510,4 +673,6 @@ echo "  4. Restart axa/claude so the new statusLine + keybinding take effect"
 echo ""
 # Absolute path here too, for the same reason as the require_on hint above:
 # this installer can't know AXA_BIN_DIR is actually on the user's PATH.
-echo "gui stays off until you turn it on:  !$CLAUDE_DIR/bin/gui on 30m   (or ctrl+g / \`/gui-toggle\`)"
+echo "gui stays off until you turn it on:  !$CLAUDE_DIR/bin/gui on 30m"
+echo "ctrl+g / \`/gui-toggle\` only show status now — turning it on/off must be"
+echo "typed by you: !$CLAUDE_DIR/bin/gui toggle   (gui on/toggle are denied for the model)"
