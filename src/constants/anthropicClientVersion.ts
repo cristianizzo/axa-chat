@@ -21,9 +21,16 @@
  * as a bug in axa's own versioning.
  *
  * Do NOT use this for anything that is axa's own real version — --version
- * output, update-checking (gte()/lt() against the changelog), telemetry,
- * fingerprinting, and MACRO.VERSION's other call sites must keep reporting
- * the true axa version.
+ * output, update-checking (gte()/lt() against the changelog), telemetry, and
+ * MACRO.VERSION's other call sites must keep reporting the true axa version.
+ *
+ * Fingerprinting IS a consumer of this constant, not an exception to the rule
+ * above: utils/fingerprint.ts computeFingerprint() and utils/sideQuery.ts
+ * both hash this value rather than MACRO.VERSION, because the backend
+ * validates the fingerprint against the version it was told in the
+ * attribution header (cc_version, itself sourced from this constant) — not
+ * against whatever version actually computed the hash. Hashing MACRO.VERSION
+ * there would make the fingerprint mismatch the header on every request.
  *
  * Kept in its own dependency-free file (rather than constants/system.ts,
  * where it conceptually belongs) because constants/system.ts imports

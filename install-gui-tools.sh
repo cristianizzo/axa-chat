@@ -88,6 +88,18 @@ binance
 kraken.com/u/
 metamask'
 
+# Friendly names for the same apps, matched against AppleScript source text —
+# `tell application "X"` can target an app without ever making it frontmost,
+# so the bundle-id frontmost check above can't be the only guard for `as`.
+DEFAULT_DENY_NAMES='1Password
+Keychain
+Messages
+Mail
+System Preferences
+System Settings
+Terminal
+iTerm'
+
 denylist() { [ -f "$DENY_CONF" ] && cat "$DENY_CONF" || echo "$DEFAULT_DENY"; }
 
 log() { printf '%s\t%s\tcc=%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "${CLAUDECODE:-0}" "$2" >>"$LOG"; }
@@ -244,16 +256,26 @@ case "$cmd" in
          cliclick "kp:${1:?serve il tasto}" && touch_state && log KEY "$1 front=$FRONT_APP" ;;
 
   # AppleScript può bersagliare qualunque app per nome, non solo quella in
-  # primo piano — per questo la denylist per stringa resta, come ulteriore
-  # rete. Ma guard() (denylist app in primo piano + Secure Input) vale
-  # sempre, non solo quando lo script inietta tasti: saltarla per gli script
-  # "di sola lettura" apriva un bypass, perché "di sola lettura" non è
-  # verificabile dal contenuto dello script.
+  # primo piano, e "do shell script" esce del tutto dal sandboxing di questo
+  # wrapper — per questo lo script viene scansionato per nome-app/URL protetti
+  # PRIMA di guardare cosa c'è in primo piano, non al posto di quello.
+  # guard() (denylist app in primo piano + Secure Input) vale sempre, non solo
+  # quando lo script inietta tasti: saltarla per gli script "di sola lettura"
+  # apriva un bypass, perché "di sola lettura" non è verificabile dal
+  # contenuto dello script.
   as)    require_on
          script="${1:?serve lo script}"
-         for bad in 1Password Keychain Messages Mail; do
+         case "$script" in
+           *"do shell script"*) die "AppleScript con 'do shell script' rifiutato — esce dal sandboxing" ;;
+         esac
+         while IFS= read -r bad; do
+           [ -z "$bad" ] && continue
            case "$script" in *"$bad"*) die "lo script punta a un'app protetta ($bad)" ;; esac
-         done
+         done <<<"$DEFAULT_DENY_NAMES"
+         while IFS= read -r bad; do
+           [ -z "$bad" ] && continue
+           case "$script" in *"$bad"*) die "lo script contiene un URL/servizio protetto ($bad)" ;; esac
+         done <<<"$DEFAULT_DENY_URL"
          guard
          case "$script" in
            *keystroke*|*"key code"*) guard_idle ;;
@@ -308,10 +330,18 @@ chmod +x "$CLAUDE_DIR/bin/statusline"
 ok "$CLAUDE_DIR/bin/statusline"
 
 # ---------------------------------------------------------------- gui-toggle command
+#
+# Deliberately NO `allowed-tools` frontmatter here. That would pre-authorize
+# this exact Bash pattern globally — not just for this command's own
+# execution — which would let the model invoke the same toggle without ever
+# prompting, defeating the point of gating "on" behind explicit user action.
+# Leaving it undeclared means the first run (whether from ctrl+g or typing
+# /gui-toggle) asks for approval like any other new Bash command; the human
+# can then choose to always-allow it themselves, as their own explicit
+# decision, rather than the installer silently doing it on their behalf.
 cat > "$CLAUDE_DIR/commands/gui-toggle.md" <<CMD_EOF
 ---
 description: Accende/spegne il controllo GUI del Mac (mouse, tastiera, AppleScript)
-allowed-tools: Bash($CLAUDE_DIR/bin/gui toggle:*)
 ---
 
 !\`$CLAUDE_DIR/bin/gui toggle\`
@@ -321,6 +351,10 @@ CMD_EOF
 ok "$CLAUDE_DIR/commands/gui-toggle.md"
 
 # ---------------------------------------------------------------- keybindings.json (merge)
+#
+# `//=` (jq) / setdefault (python3 fallback below): only fill ctrl+g in if it's
+# unset. A pre-existing binding is the user's own choice and must not be
+# silently overwritten by this installer.
 KB="$CLAUDE_DIR/keybindings.json"
 MERGED_KB=0
 if command -v jq >/dev/null 2>&1; then
@@ -330,7 +364,7 @@ if command -v jq >/dev/null 2>&1; then
       .bindings |= (
         (map(select(.context == "Chat")) | length) as $n
         | if $n > 0 then
-            map(if .context == "Chat" then .bindings["ctrl+g"] = "command:gui-toggle" else . end)
+            map(if .context == "Chat" then .bindings["ctrl+g"] //= "command:gui-toggle" else . end)
           else
             . + [{"context":"Chat","bindings":{"ctrl+g":"command:gui-toggle"}}]
           end
@@ -367,7 +401,7 @@ chat = next((b for b in bindings if b.get("context") == "Chat"), None)
 if chat is None:
     bindings.append({"context": "Chat", "bindings": {"ctrl+g": "command:gui-toggle"}})
 else:
-    chat.setdefault("bindings", {})["ctrl+g"] = "command:gui-toggle"
+    chat.setdefault("bindings", {}).setdefault("ctrl+g", "command:gui-toggle")
 with open(path, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
@@ -385,34 +419,60 @@ else
 fi
 
 # ---------------------------------------------------------------- settings.json (merge)
+#
+# Deliberately NOT a blanket "Bash(gui:*)" allow: that would auto-approve
+# `gui on`/`gui toggle` too, and "on" exec'd from inside "toggle" bypasses the
+# `gui on` deny rule below entirely (the permission check matches the command
+# string the model typed, not what the script does internally). Enumerating
+# the state-preserving subcommands here means "on"/"toggle" fall through to
+# axa's normal interactive approval instead of being silently pre-approved —
+# closing that bypass without a deny rule that would also block the
+# legitimate ctrl+g / /gui-toggle path (deny always wins over a command's own
+# allowed-tools, regardless of which one is user-triggered).
+GUI_SAFE_SUBCOMMANDS="frontmost status badge doctor off move click type key as"
+GUI_ALLOW_JSON="["
+first=1
+for sub in $GUI_SAFE_SUBCOMMANDS; do
+  for pattern in "Bash(gui $sub:*)" "Bash($CLAUDE_DIR/bin/gui $sub:*)"; do
+    [ "$first" = "1" ] || GUI_ALLOW_JSON="$GUI_ALLOW_JSON,"
+    GUI_ALLOW_JSON="$GUI_ALLOW_JSON\"$pattern\""
+    first=0
+  done
+done
+GUI_ALLOW_JSON="$GUI_ALLOW_JSON]"
+
 ST="$CLAUDE_DIR/settings.json"
 MERGED_ST=0
-if command -v jq >/dev/null 2>&1 && [ -f "$ST" ]; then
+# Mirror keybindings.json above: a missing file is not a failure, it's a fresh
+# install — merge against "{}" instead of skipping the whole step.
+[ -f "$ST" ] || echo '{}' > "$ST"
+if command -v jq >/dev/null 2>&1; then
   tmp="$(mktemp)"
   if jq '
     .statusLine = (.statusLine // {"type":"command","command":"'"$CLAUDE_DIR"'/bin/statusline"})
-    | .permissions.allow = ((.permissions.allow // []) + ["Bash(gui:*)", "Bash('"$CLAUDE_DIR"'/bin/gui:*)"] | unique)
-    | .permissions.deny  = ((.permissions.deny  // []) + ["Bash(gui on:*)", "Bash('"$CLAUDE_DIR"'/bin/gui on:*)", "Bash(gui toggle:*)", "Bash('"$CLAUDE_DIR"'/bin/gui toggle:*)"] | unique)
+    | .permissions.allow = ((.permissions.allow // []) + '"$GUI_ALLOW_JSON"' | unique)
+    | .permissions.deny  = ((.permissions.deny  // []) + ["Bash(gui on:*)", "Bash('"$CLAUDE_DIR"'/bin/gui on:*)"] | unique)
   ' "$ST" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$ST"; MERGED_ST=1
   else
     rm -f "$tmp"
   fi
-elif command -v python3 >/dev/null 2>&1 && [ -f "$ST" ]; then
-  if CLAUDE_DIR="$CLAUDE_DIR" python3 - "$ST" <<'PY'
+elif command -v python3 >/dev/null 2>&1; then
+  if CLAUDE_DIR="$CLAUDE_DIR" GUI_ALLOW_JSON="$GUI_ALLOW_JSON" python3 - "$ST" <<'PY'
 import json, os, sys
 path = sys.argv[1]
 claude_dir = os.environ["CLAUDE_DIR"]
+allow_entries = json.loads(os.environ["GUI_ALLOW_JSON"])
 with open(path) as f:
     data = json.load(f)
 data.setdefault("statusLine", {"type": "command", "command": f"{claude_dir}/bin/statusline"})
 perms = data.setdefault("permissions", {})
 allow = perms.setdefault("allow", [])
 deny = perms.setdefault("deny", [])
-for entry in ["Bash(gui:*)", f"Bash({claude_dir}/bin/gui:*)"]:
+for entry in allow_entries:
     if entry not in allow:
         allow.append(entry)
-for entry in ["Bash(gui on:*)", f"Bash({claude_dir}/bin/gui on:*)", "Bash(gui toggle:*)", f"Bash({claude_dir}/bin/gui toggle:*)"]:
+for entry in ["Bash(gui on:*)", f"Bash({claude_dir}/bin/gui on:*)"]:
     if entry not in deny:
         deny.append(entry)
 with open(path, "w") as f:
@@ -426,13 +486,15 @@ fi
 if [ "$MERGED_ST" = "1" ]; then
   ok "$ST (statusLine + gui permissions)"
 else
-  warn "Could not merge $ST automatically (jq missing, file missing, or unreadable)."
+  warn "Could not merge $ST automatically (jq/python3 missing or file unreadable)."
   echo "    Add this by hand:"
   echo "      \"statusLine\": { \"type\": \"command\", \"command\": \"$CLAUDE_DIR/bin/statusline\" },"
   echo '      "permissions": {'
-  echo "        \"allow\": [\"Bash(gui:*)\", \"Bash($CLAUDE_DIR/bin/gui:*)\"],"
-  echo "        \"deny\":  [\"Bash(gui on:*)\", \"Bash($CLAUDE_DIR/bin/gui on:*)\", \"Bash(gui toggle:*)\", \"Bash($CLAUDE_DIR/bin/gui toggle:*)\"]"
+  echo "        \"allow\": [\"Bash(gui <sub>:*)\", \"Bash($CLAUDE_DIR/bin/gui <sub>:*)\", ... for each of: $GUI_SAFE_SUBCOMMANDS],"
+  echo "        \"deny\":  [\"Bash(gui on:*)\", \"Bash($CLAUDE_DIR/bin/gui on:*)\"]"
   echo '      }'
+  echo "    (gui on / gui toggle deliberately not pre-approved or denied — they"
+  echo "     fall through to axa's normal interactive approval prompt.)"
 fi
 
 echo ""
