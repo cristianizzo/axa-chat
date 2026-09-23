@@ -341,9 +341,14 @@ case "$cmd" in
            [ -z "$bad" ] && continue
            case "$script" in *"$bad"*) die "lo script punta a un'app protetta per bundle id ($bad)" ;; esac
          done <<<"$(denylist)"
+         # AppleScript application-name matching is case-insensitive (same
+         # reasoning as the "do shell script" fold above), so both sides
+         # are folded to lowercase before comparing.
+         script_lc="$(printf '%s' "$script" | tr '[:upper:]' '[:lower:]')"
          while IFS= read -r bad; do
            [ -z "$bad" ] && continue
-           case "$script" in *"$bad"*) die "lo script punta a un'app protetta ($bad)" ;; esac
+           bad_lc="$(printf '%s' "$bad" | tr '[:upper:]' '[:lower:]')"
+           case "$script_lc" in *"$bad_lc"*) die "lo script punta a un'app protetta ($bad)" ;; esac
          done <<<"$DEFAULT_DENY_NAMES"
          while IFS= read -r bad; do
            [ -z "$bad" ] && continue
@@ -397,7 +402,11 @@ else
 fi
 
 # ---------------------------------------------------------------- statusline
-cat > "$CLAUDE_DIR/bin/statusline" <<'SL_EOF'
+# Same symlink-safety reasoning as the gui binary above: mktemp+mv instead
+# of a plain `cat >`, which would follow a pre-existing symlink at this
+# predictable path.
+STATUSLINE_TMP="$(mktemp "$CLAUDE_DIR/bin/.statusline.XXXXXX")"
+cat > "$STATUSLINE_TMP" <<'SL_EOF'
 #!/bin/bash
 # statusline — rendered by axa/claude below the prompt input.
 #
@@ -423,7 +432,8 @@ line="$cwd % $badge"
 
 printf '%s' "$line"
 SL_EOF
-chmod +x "$CLAUDE_DIR/bin/statusline"
+chmod 755 "$STATUSLINE_TMP"
+mv "$STATUSLINE_TMP" "$CLAUDE_DIR/bin/statusline" || { rm -f "$STATUSLINE_TMP"; die "impossibile scrivere $CLAUDE_DIR/bin/statusline"; }
 ok "$CLAUDE_DIR/bin/statusline"
 
 # ---------------------------------------------------------------- gui-toggle command
@@ -459,7 +469,9 @@ ok "$CLAUDE_DIR/bin/statusline"
 # permission mode. Still deliberately no `allowed-tools` frontmatter, for
 # the same reason as before: it would pre-authorize this Bash pattern
 # globally rather than leaving `gui status` to axa's normal approval flow.
-cat > "$CLAUDE_DIR/commands/gui-toggle.md" <<CMD_EOF
+# Same symlink-safety reasoning as gui/statusline above.
+GUI_TOGGLE_MD_TMP="$(mktemp "$CLAUDE_DIR/commands/.gui-toggle.XXXXXX")"
+cat > "$GUI_TOGGLE_MD_TMP" <<CMD_EOF
 ---
 description: Mostra lo stato del controllo GUI del Mac (accenderlo/spegnerlo richiede un comando digitato dall'utente, non eseguibile dal modello)
 ---
@@ -470,6 +482,7 @@ Riporta solo lo stato qui sopra in una riga. Per cambiarlo l'utente deve
 digitare lui stesso (non tu, e non da dentro questo comando):
 \`!${CLAUDE_DIR_Q}/bin/gui toggle\`
 CMD_EOF
+mv "$GUI_TOGGLE_MD_TMP" "$CLAUDE_DIR/commands/gui-toggle.md" || { rm -f "$GUI_TOGGLE_MD_TMP"; die "impossibile scrivere $CLAUDE_DIR/commands/gui-toggle.md"; }
 ok "$CLAUDE_DIR/commands/gui-toggle.md"
 
 # ---------------------------------------------------------------- keybindings.json (merge)
