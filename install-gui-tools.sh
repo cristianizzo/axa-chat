@@ -194,15 +194,29 @@ guard() {
 
   # Was Chrome-only, which let the same protected-URL check be bypassed
   # simply by doing the banking/payment browsing in Safari instead.
+  #
+  # Firefox is deliberately NOT in this case: it dropped AppleScript tab/URL
+  # support years ago (no `tabs`/`active tab` dictionary any GUI-scriptable
+  # `tell application "Firefox"` can query), so there is no reliable way to
+  # read its current URL from a shell script at all — adding a case arm here
+  # would just always return empty, i.e. the same no-op as not having it,
+  # while looking like coverage. If Firefox's frontmost app is itself in
+  # DEFAULT_DENY_NAMES/denylist that's still caught above; only the
+  # per-URL check is unavailable for it.
   case "$app" in
     com.google.Chrome) url="$(chrome_url)" ;;
     com.apple.Safari) url="$(safari_url)" ;;
     *) url="" ;;
   esac
   if [ -n "$url" ]; then
+    # DEFAULT_DENY_URL entries are lowercase ("bank", "paypal", ...); URLs
+    # read from the browser can be any case ("Bank.com"), so fold the URL
+    # to lowercase before comparing — same reasoning as the AppleScript
+    # do-shell-script/app-name folds below.
+    url_lc="$(printf '%s' "$url" | tr '[:upper:]' '[:lower:]')"
     while IFS= read -r bad; do
       [ -z "$bad" ] && continue
-      case "$url" in *"$bad"*) die "URL protetto in primo piano — azione rifiutata" ;; esac
+      case "$url_lc" in *"$bad"*) die "URL protetto in primo piano — azione rifiutata" ;; esac
     done <<<"$DEFAULT_DENY_URL"
   fi
 
@@ -350,9 +364,11 @@ case "$cmd" in
            bad_lc="$(printf '%s' "$bad" | tr '[:upper:]' '[:lower:]')"
            case "$script_lc" in *"$bad_lc"*) die "lo script punta a un'app protetta ($bad)" ;; esac
          done <<<"$DEFAULT_DENY_NAMES"
+         # Same case fold as DEFAULT_DENY_NAMES above: DEFAULT_DENY_URL
+         # entries are lowercase, AppleScript text can be any case.
          while IFS= read -r bad; do
            [ -z "$bad" ] && continue
-           case "$script" in *"$bad"*) die "lo script contiene un URL/servizio protetto ($bad)" ;; esac
+           case "$script_lc" in *"$bad"*) die "lo script contiene un URL/servizio protetto ($bad)" ;; esac
          done <<<"$DEFAULT_DENY_URL"
          guard
          case "$script" in
@@ -524,7 +540,13 @@ if command -v jq >/dev/null 2>&1; then
       rm -f "$tmp"
     fi
   else
-    cat > "$KB" <<'KB_EOF'
+    # `[ -f "$KB" ]` above is false for a *dangling* symlink too (the target
+    # doesn't exist), so this branch also runs when $KB is a broken symlink —
+    # a plain `cat > "$KB"` would follow it and write wherever it points.
+    # mktemp+mv (same pattern as the gui/statusline binary writes above)
+    # breaks the symlink instead of following it.
+    KB_TMP="$(mktemp "$CLAUDE_DIR/.keybindings.XXXXXX")"
+    cat > "$KB_TMP" <<'KB_EOF'
 {
   "bindings": [
     {
@@ -534,11 +556,14 @@ if command -v jq >/dev/null 2>&1; then
   ]
 }
 KB_EOF
-    MERGED_KB=1
+    mv "$KB_TMP" "$KB" && MERGED_KB=1 || rm -f "$KB_TMP"
   fi
 elif command -v python3 >/dev/null 2>&1; then
+  # Writes through a sibling temp file + os.replace (same symlink-safety
+  # reasoning as the jq branch above) instead of `open(path, "w")` directly,
+  # which would follow a dangling symlink at $KB.
   if python3 - "$KB" <<'PY'
-import json, sys
+import json, os, sys, tempfile
 path = sys.argv[1]
 try:
     with open(path) as f:
@@ -551,9 +576,15 @@ if chat is None:
     bindings.append({"context": "Chat", "bindings": {"ctrl+g": "command:gui-toggle"}})
 else:
     chat.setdefault("bindings", {}).setdefault("ctrl+g", "command:gui-toggle")
-with open(path, "w") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
+fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".keybindings.")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    os.replace(tmp_path, path)
+except BaseException:
+    os.unlink(tmp_path)
+    raise
 PY
   then
     MERGED_KB=1
@@ -717,8 +748,15 @@ merge_gui_settings() {
     jq_err="$(mktemp)"
     # GUI_SAFE_JSON/GUI_DENY_JSON built here, not at top level: this whole
     # branch is only reached once jq is confirmed present.
+    #
+    # claude_dir is CLAUDE_DIR_Q (shell-escaped), not raw CLAUDE_DIR: the
+    # gui-toggle.md `!command` this pattern must match is itself built from
+    # CLAUDE_DIR_Q (see the gui-toggle.md generation above), so if CLAUDE_DIR
+    # ever contains a space the literal command text actually executed has
+    # the backslash-escaped path — a raw, unescaped claude_dir here would
+    # build a permission pattern that never matches that literal string.
     if jq \
-      --arg claude_dir "$CLAUDE_DIR" \
+      --arg claude_dir "$CLAUDE_DIR_Q" \
       --arg statusline_cmd "$STATUSLINE_CMD" \
       --argjson safe_subs "$(json_array_from_words "$GUI_SAFE_SUBCOMMANDS")" \
       --argjson deny_subs "$(json_array_from_words "$GUI_DENY_SUBCOMMANDS")" \
@@ -739,7 +777,8 @@ merge_gui_settings() {
     fi
     rm -f "$jq_err"
   elif command -v python3 >/dev/null 2>&1; then
-    if CLAUDE_DIR="$CLAUDE_DIR" STATUSLINE_CMD="$STATUSLINE_CMD" \
+    # CLAUDE_DIR_Q here too, same reasoning as the jq branch's claude_dir arg.
+    if CLAUDE_DIR="$CLAUDE_DIR_Q" STATUSLINE_CMD="$STATUSLINE_CMD" \
       GUI_SAFE_SUBCOMMANDS="$GUI_SAFE_SUBCOMMANDS" GUI_DENY_SUBCOMMANDS="$GUI_DENY_SUBCOMMANDS" \
       python3 - "$st" <<'PY'
 import json, os, sys
