@@ -160,7 +160,18 @@ read_state() {
 }
 
 # Ogni azione riuscita sposta avanti la scadenza: è un TTL di inattività.
-touch_state() { echo "$(( $(date +%s) + WINDOW )) $WINDOW" >"$STATE"; }
+#
+# Writes through a sibling mktemp file + mv rather than `echo >"$STATE"`
+# directly: a plain redirect follows a symlink at $STATE and
+# truncates/overwrites whatever it points at, same bug class already fixed
+# for keybindings.json/settings.json elsewhere in this script. mv replaces
+# the symlink at $STATE instead of following it.
+touch_state() {
+  local tmp
+  tmp="$(mktemp "$CLAUDE_DIR/.gui-state.XXXXXX")" || return 1
+  echo "$(( $(date +%s) + WINDOW )) $WINDOW" >"$tmp"
+  mv "$tmp" "$STATE"
+}
 
 require_on() {
   # Absolute path, not bare "gui": $CLAUDE_DIR/bin is only symlinked onto
