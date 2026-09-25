@@ -800,10 +800,15 @@ merge_gui_settings() {
     rm -f "$jq_err"
   elif command -v python3 >/dev/null 2>&1; then
     # CLAUDE_DIR_Q here too, same reasoning as the jq branch's claude_dir arg.
+    #
+    # Writes through a sibling temp file + os.replace (same symlink-safety
+    # reasoning as the keybindings.json Python fallback above) instead of
+    # `open(path, "w")` directly, which would follow $st if it's a symlink
+    # rather than replacing it.
     if CLAUDE_DIR="$CLAUDE_DIR_Q" STATUSLINE_CMD="$STATUSLINE_CMD" \
       GUI_SAFE_SUBCOMMANDS="$GUI_SAFE_SUBCOMMANDS" GUI_DENY_SUBCOMMANDS="$GUI_DENY_SUBCOMMANDS" \
       python3 - "$st" <<'PY'
-import json, os, sys
+import json, os, sys, tempfile
 path = sys.argv[1]
 claude_dir = os.environ["CLAUDE_DIR"]
 statusline_cmd = os.environ["STATUSLINE_CMD"]
@@ -829,9 +834,15 @@ for entry in patterns(safe_subs):
 for entry in patterns(deny_subs):
     if entry not in deny:
         deny.append(entry)
-with open(path, "w") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
+fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".settings.")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    os.replace(tmp_path, path)
+except BaseException:
+    os.unlink(tmp_path)
+    raise
 PY
     then
       merged=1
