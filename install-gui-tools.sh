@@ -381,7 +381,11 @@ case "$cmd" in
            case "$script_lc" in *"$bad"*) die "lo script contiene un URL/servizio protetto ($bad)" ;; esac
          done <<<"$DEFAULT_DENY_URL"
          guard
-         case "$script" in
+         # script_lc (already computed above for the DEFAULT_DENY_NAMES/URL
+         # scans), not raw $script: AppleScript keywords are case-insensitive,
+         # so `KEYSTROKE`/`KEY CODE` would otherwise skip guard_idle() and let
+         # input be injected while the user is active.
+         case "$script_lc" in
            *keystroke*|*"key code"*) guard_idle ;;
          esac
          out="$(osascript -e "$script" 2>&1)"; rc=$?
