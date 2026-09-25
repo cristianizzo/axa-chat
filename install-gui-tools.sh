@@ -203,11 +203,21 @@ guard() {
   # while looking like coverage. If Firefox's frontmost app is itself in
   # DEFAULT_DENY_NAMES/denylist that's still caught above; only the
   # per-URL check is unavailable for it.
+  local url_rc=0
   case "$app" in
-    com.google.Chrome) url="$(chrome_url)" ;;
-    com.apple.Safari) url="$(safari_url)" ;;
+    com.google.Chrome) url="$(chrome_url)"; url_rc=$? ;;
+    com.apple.Safari) url="$(safari_url)"; url_rc=$? ;;
     *) url="" ;;
   esac
+  # A failed osascript call (Automation permission revoked, no window open,
+  # AppleScript error) previously looked identical to "url is empty" below,
+  # which skipped the deny-list scan — a permission/lookup FAILURE silently
+  # became an ALLOW instead of a deny. Chrome/Safari being frontmost with an
+  # unreadable URL is treated as a deny, not a pass-through: we can't rule
+  # out it's showing a protected page.
+  if [ "$url_rc" -ne 0 ]; then
+    die "impossibile leggere l'URL di $app — nego per sicurezza (permesso Automazione?)"
+  fi
   if [ -n "$url" ]; then
     # DEFAULT_DENY_URL entries are lowercase ("bank", "paypal", ...); URLs
     # read from the browser can be any case ("Bank.com"), so fold the URL
@@ -742,7 +752,15 @@ merge_gui_settings() {
   MERGE_LAST_ERROR=""
   # Mirror keybindings.json above: a missing file is not a failure, it's a
   # fresh install — merge against "{}" instead of skipping the whole step.
-  [ -f "$st" ] || echo '{}' > "$st"
+  if [ ! -f "$st" ]; then
+    # $st can be a dangling symlink here too ([ -f ] is false for those as
+    # well) — `echo > "$st"` would follow it and write '{}' through to
+    # whatever arbitrary path it points at, before the mv below ever runs.
+    # Unlink any symlink first so the write below creates a fresh regular
+    # file at $st itself, same reasoning as the keybindings.json fix.
+    [ -L "$st" ] && rm -f "$st"
+    echo '{}' > "$st"
+  fi
   if command -v jq >/dev/null 2>&1; then
     tmp="$(mktemp)"
     jq_err="$(mktemp)"
