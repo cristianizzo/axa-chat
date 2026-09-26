@@ -1,6 +1,6 @@
 {
   "name": "axa-chat",
-  "version": "2.1.89",
+  "version": "2.1.90",
   "private": true,
   "description": "AXA Chat — multi-provider support",
   "type": "module",
