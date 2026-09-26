@@ -3,6 +3,7 @@
  */
 
 import axios from 'axios'
+import { ANTHROPIC_COMPAT_CLAUDE_CODE_VERSION } from '../constants/anthropicClientVersion.js'
 import { OAUTH_BETA_HEADER } from '../constants/oauth.js'
 import {
   getAnthropicApiKey,
@@ -15,6 +16,13 @@ import { getWorkload } from './workloadContext.js'
 
 // WARNING: We rely on `claude-cli` in the user agent for log filtering.
 // Please do NOT change this without making sure that logging also gets updated!
+//
+// The version substituted below is ANTHROPIC_COMPAT_CLAUDE_CODE_VERSION, not
+// MACRO.VERSION — this string is sent as the literal User-Agent header on
+// every request to Anthropic's Messages API, and the backend gates some
+// models on a minimum *Claude Code* client version. See
+// constants/anthropicClientVersion.ts for why axa's own version number must
+// not be reported here.
 export function getUserAgent(): string {
   const agentSdkVersion = process.env.CLAUDE_AGENT_SDK_VERSION
     ? `, agent-sdk/${process.env.CLAUDE_AGENT_SDK_VERSION}`
@@ -32,7 +40,7 @@ export function getUserAgent(): string {
   // getAttributionHeader.
   const workload = getWorkload()
   const workloadSuffix = workload ? `, workload/${workload}` : ''
-  return `claude-cli/${MACRO.VERSION} (${process.env.USER_TYPE}, ${process.env.CLAUDE_CODE_ENTRYPOINT ?? 'cli'}${agentSdkVersion}${clientApp}${workloadSuffix})`
+  return `claude-cli/${ANTHROPIC_COMPAT_CLAUDE_CODE_VERSION} (${process.env.USER_TYPE}, ${process.env.CLAUDE_CODE_ENTRYPOINT ?? 'cli'}${agentSdkVersion}${clientApp}${workloadSuffix})`
 }
 
 export function getMCPUserAgent(): string {

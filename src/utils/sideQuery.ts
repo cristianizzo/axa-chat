@@ -4,6 +4,7 @@ import {
   getLastApiCompletionTimestamp,
   setLastApiCompletionTimestamp,
 } from '../bootstrap/state.js'
+import { ANTHROPIC_COMPAT_CLAUDE_CODE_VERSION } from '../constants/anthropicClientVersion.js'
 import { STRUCTURED_OUTPUTS_BETA_HEADER } from '../constants/betas.js'
 import type { QuerySource } from '../constants/querySource.js'
 import {
@@ -140,7 +141,7 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
   const messageText = extractFirstUserMessageText(messages)
 
   // Compute fingerprint for OAuth attribution
-  const fingerprint = computeFingerprint(messageText, MACRO.VERSION)
+  const fingerprint = computeFingerprint(messageText, ANTHROPIC_COMPAT_CLAUDE_CODE_VERSION)
   const attributionHeader = getAttributionHeader(fingerprint)
 
   // Build system as array to keep attribution header in its own block

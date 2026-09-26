@@ -197,12 +197,15 @@ ART
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [--rollback] [--list-versions] [--version <v>] [--help]
+Usage: install.sh [--rollback] [--list-versions] [--version <v>] [--with-gui-tools] [--help]
 
   (no flags)        install or update to the latest release on the channel
   --rollback        point the launcher back at the previously active version
   --list-versions   show what is installed and which one is active
   --version <v>     install a specific version instead of the channel's latest
+  --with-gui-tools  also install the optional `gui` macOS-automation tool
+                     (see install-gui-tools.sh — can also be run on its own,
+                     later, without re-running this installer)
 
 Environment:
   AXA_CHANNEL       release channel (default: stable)
@@ -900,12 +903,14 @@ report_launcher_state() {
 
 MODE="install"
 REQUESTED_VERSION=""
+WITH_GUI_TOOLS=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --rollback) MODE="rollback" ;;
     --list-versions) MODE="list" ;;
     --version) shift; REQUESTED_VERSION="${1:-}"; [ -n "$REQUESTED_VERSION" ] || fail "--version needs a value" ;;
     --version=*) REQUESTED_VERSION="${1#--version=}" ;;
+    --with-gui-tools) WITH_GUI_TOOLS=1 ;;
     -h|--help) usage; exit 0 ;;
     *) fail "Unknown option: $1
     Run with --help for usage." ;;
@@ -983,6 +988,20 @@ VERSION_ACTIVE="$(current_linked_version)"
 check_path
 check_shadowing
 report_launcher_state
+
+# Optional and best-effort: gui-tools is a separate set of plain files, not
+# part of the axa binary, and a failure installing it must never make this
+# script exit non-zero after axa itself installed cleanly. It runs last, and
+# fetched fresh rather than reusing $0 — this script is usually piped from
+# curl and has no file of itself on disk to re-read.
+if [ "$WITH_GUI_TOOLS" = "1" ]; then
+  echo ""
+  info "Installing gui-tools..."
+  if ! curl -fsSL "https://raw.githubusercontent.com/${REPO_SLUG}/main/install-gui-tools.sh" | bash; then
+    warn "gui-tools install did not complete. axa itself is unaffected. Retry with:
+      curl -fsSL https://raw.githubusercontent.com/${REPO_SLUG}/main/install-gui-tools.sh | bash"
+  fi
+fi
 
 echo ""
 printf "  ${BOLD}Run it:${RESET}\n"
