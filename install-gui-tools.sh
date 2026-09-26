@@ -83,6 +83,15 @@ LOG="$CLAUDE_DIR/logs/gui.log"
 DENY_CONF="$CLAUDE_DIR/.gui-denylist"
 
 mkdir -p "$(dirname "$LOG")"
+# `log()` below appends via `>>`, which follows a symlink at $LOG just like
+# `>` does (it only differs in not truncating) — and every log() call writes
+# caller-controlled text (e.g. the MOVE/CLICK/KEY argument) as the last field
+# of the line, so a pre-planted symlink at $LOG would let that text be
+# appended to an arbitrary file. Unlinking any symlink once per invocation,
+# same as the dangling-symlink guards elsewhere in this script, means the
+# first log() call recreates $LOG as a fresh regular file instead of
+# following an existing symlink through to its target.
+[ -L "$LOG" ] && rm -f "$LOG"
 
 # ---------------------------------------------------------------- denylist
 # App davanti alle quali non si agisce mai. System Settings è nell'elenco
@@ -115,7 +124,22 @@ System Settings
 Terminal
 iTerm'
 
-denylist() { [ -f "$DENY_CONF" ] && cat "$DENY_CONF" || echo "$DEFAULT_DENY"; }
+# `[ -f ] && cat || echo` only branches on exit status, not on output content:
+# if $DENY_CONF exists but is empty (or blank-lines-only), `cat` still exits 0,
+# so the `|| echo "$DEFAULT_DENY"` fallback never fires and both callers
+# (guard()'s frontmost-app check, the bundle-id scan below) silently iterate
+# over zero deny entries instead of falling back to the built-in list.
+denylist() {
+  if [ -f "$DENY_CONF" ]; then
+    local content
+    content="$(cat "$DENY_CONF" 2>/dev/null)"
+    if [ -n "$(printf '%s' "$content" | tr -d '[:space:]')" ]; then
+      printf '%s\n' "$content"
+      return
+    fi
+  fi
+  echo "$DEFAULT_DENY"
+}
 
 log() { printf '%s\t%s\tcc=%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "${CLAUDECODE:-0}" "$2" >>"$LOG"; }
 die() { echo "gui: $1" >&2; log DENIED "$1"; exit 1; }
@@ -193,6 +217,18 @@ safari_url() {
   osascript -e 'tell application "Safari" to return URL of current tab of front window' 2>/dev/null
 }
 
+# Brave ships the same Chromium AppleScript dictionary as Chrome — verified
+# directly (`osascript -e 'tell application "Brave Browser" to return URL of
+# active tab of front window'` returns the real URL, rc=0) rather than assumed
+# from "it's Chromium too". Other Chromium forks (Edge, Arc, Vivaldi, Opera)
+# are not enumerated below because none were available on hand to verify the
+# same way; Arc in particular is known to have pared back traditional
+# window/tab AppleScript support, so "Chromium-based" alone isn't a safe
+# enough basis to assume this query works there.
+brave_url() {
+  osascript -e 'tell application "Brave Browser" to return URL of active tab of front window' 2>/dev/null
+}
+
 guard() {
   local app url
   app="$(frontmost_bundle)"
@@ -218,6 +254,7 @@ guard() {
   case "$app" in
     com.google.Chrome) url="$(chrome_url)"; url_rc=$? ;;
     com.apple.Safari) url="$(safari_url)"; url_rc=$? ;;
+    com.brave.Browser) url="$(brave_url)"; url_rc=$? ;;
     *) url="" ;;
   esac
   # A failed osascript call (Automation permission revoked, no window open,
@@ -264,7 +301,11 @@ guard() {
 guard_idle() {
   local idle_ns idle_s
   idle_ns="$(ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/ {print $NF; exit}')"
-  [ -n "${idle_ns:-}" ] || die "impossibile leggere l'idle time (ioreg) — azione rifiutata"
+  # Digits-only, not just non-empty, before it flows into the $(( )) below —
+  # same reasoning as parse_dur()'s and read_state()'s guards on externally-
+  # derived arithmetic operands: an unexpected ioreg output shift could hand
+  # $(( )) a non-numeric (or command-substitution-shaped) token otherwise.
+  case "${idle_ns:-}" in '' | *[!0-9]*) die "impossibile leggere l'idle time (ioreg) — azione rifiutata" ;; esac
   idle_s=$(( idle_ns / 1000000000 ))
   [ "$idle_s" -lt 3 ] && die "stai usando la macchina (idle ${idle_s}s) — azione rifiutata"
   return 0
@@ -279,13 +320,23 @@ case "$cmd" in
 
   on)
     WINDOW="$(parse_dur "${1:-30m}")"
-    touch_state
+    touch_state || die "impossibile scrivere lo stato ($STATE)"
     log ON "window=${WINDOW}s"
     echo "gui ACCESO — scade dopo $((WINDOW/60)) min di inattività"
     ;;
 
   off)
-    rm -f "$STATE"; log OFF "-"
+    # `rm -f` suppresses "already gone" but can still fail (permission,
+    # macOS uchg immutable flag, read-only/NFS mount) and exit nonzero — in
+    # that case $STATE survives with its still-valid EXPIRY, read_state()
+    # keeps succeeding, gui stays functionally ON, yet this unconditionally
+    # reported "gui spento". toggle) execs into this same path and inherits
+    # the gap, so verify removal actually happened before reporting success.
+    rm -f "$STATE" 2>/dev/null
+    if [ -e "$STATE" ]; then
+      die "impossibile spegnere — $STATE non rimovibile"
+    fi
+    log OFF "-"
     echo "gui spento"
     ;;
 
@@ -372,14 +423,22 @@ case "$cmd" in
          # sotto — quindi lo stesso elenco (bundle id) usato da guard() per
          # l'app in primo piano va scansionato anche qui, sul testo dello
          # script, non solo confrontato contro FRONT_APP.
+         #
+         # Bundle-id lookup (LaunchServices) is case-insensitive just like
+         # the app-name/URL scans below, and denylist() entries are not
+         # uniformly cased (e.g. com.apple.MobileSMS, com.apple.Terminal) —
+         # so this scan folds both sides too, same reasoning as the
+         # "do shell script" fold above. script_lc is computed here (moved
+         # up from below) since this is now its first use.
+         script_lc="$(printf '%s' "$script" | tr '[:upper:]' '[:lower:]')"
          while IFS= read -r bad; do
            [ -z "$bad" ] && continue
-           case "$script" in *"$bad"*) die "lo script punta a un'app protetta per bundle id ($bad)" ;; esac
+           bad_lc="$(printf '%s' "$bad" | tr '[:upper:]' '[:lower:]')"
+           case "$script_lc" in *"$bad_lc"*) die "lo script punta a un'app protetta per bundle id ($bad)" ;; esac
          done <<<"$(denylist)"
          # AppleScript application-name matching is case-insensitive (same
          # reasoning as the "do shell script" fold above), so both sides
          # are folded to lowercase before comparing.
-         script_lc="$(printf '%s' "$script" | tr '[:upper:]' '[:lower:]')"
          while IFS= read -r bad; do
            [ -z "$bad" ] && continue
            bad_lc="$(printf '%s' "$bad" | tr '[:upper:]' '[:lower:]')"
@@ -412,7 +471,7 @@ GUI_EOF
 # world-readable-executable mode the old `cat >`+chmod+x produced under a
 # typical 022 umask.
 chmod 755 "$GUI_BIN_TMP"
-mv "$GUI_BIN_TMP" "$CLAUDE_DIR/bin/gui" || { rm -f "$GUI_BIN_TMP"; die "impossibile scrivere $CLAUDE_DIR/bin/gui"; }
+mv "$GUI_BIN_TMP" "$CLAUDE_DIR/bin/gui" || { rm -f "$GUI_BIN_TMP"; fail "impossibile scrivere $CLAUDE_DIR/bin/gui"; }
 ok "$CLAUDE_DIR/bin/gui"
 
 # Symlink into the same bin dir install.sh uses for the `axa` launcher, so a
@@ -474,7 +533,7 @@ line="$cwd % $badge"
 printf '%s' "$line"
 SL_EOF
 chmod 755 "$STATUSLINE_TMP"
-mv "$STATUSLINE_TMP" "$CLAUDE_DIR/bin/statusline" || { rm -f "$STATUSLINE_TMP"; die "impossibile scrivere $CLAUDE_DIR/bin/statusline"; }
+mv "$STATUSLINE_TMP" "$CLAUDE_DIR/bin/statusline" || { rm -f "$STATUSLINE_TMP"; fail "impossibile scrivere $CLAUDE_DIR/bin/statusline"; }
 ok "$CLAUDE_DIR/bin/statusline"
 
 # ---------------------------------------------------------------- gui-toggle command
@@ -523,7 +582,7 @@ Riporta solo lo stato qui sopra in una riga. Per cambiarlo l'utente deve
 digitare lui stesso (non tu, e non da dentro questo comando):
 \`!${CLAUDE_DIR_Q}/bin/gui toggle\`
 CMD_EOF
-mv "$GUI_TOGGLE_MD_TMP" "$CLAUDE_DIR/commands/gui-toggle.md" || { rm -f "$GUI_TOGGLE_MD_TMP"; die "impossibile scrivere $CLAUDE_DIR/commands/gui-toggle.md"; }
+mv "$GUI_TOGGLE_MD_TMP" "$CLAUDE_DIR/commands/gui-toggle.md" || { rm -f "$GUI_TOGGLE_MD_TMP"; fail "impossibile scrivere $CLAUDE_DIR/commands/gui-toggle.md"; }
 ok "$CLAUDE_DIR/commands/gui-toggle.md"
 
 # ---------------------------------------------------------------- keybindings.json (merge)
@@ -540,7 +599,11 @@ KB="$CLAUDE_DIR/keybindings.json"
 MERGED_KB=0
 if command -v jq >/dev/null 2>&1; then
   if [ -f "$KB" ]; then
-    tmp="$(mktemp)"
+    # Sibling of $KB (same dir), not $TMPDIR: mv only replaces-not-follows a
+    # destination symlink when source and destination share a filesystem —
+    # on EXDEV, `mv` falls back to a copy that opens (and follows) the
+    # destination, defeating the exact protection this pattern exists for.
+    tmp="$(mktemp "$(dirname "$KB")/.keybindings.XXXXXX")"
     if jq '
       .bindings |= (
         (map(select(.context == "Chat")) | length) as $n
@@ -777,7 +840,11 @@ merge_gui_settings() {
     echo '{}' > "$st"
   fi
   if command -v jq >/dev/null 2>&1; then
-    tmp="$(mktemp)"
+    # tmp is a sibling of $st (same dir), not $TMPDIR — same EXDEV reasoning
+    # as the keybindings.json jq branch above: mv only replaces-not-follows
+    # a destination symlink when source and destination share a filesystem.
+    # jq_err is pure scratch (never mv'd anywhere), so $TMPDIR is fine for it.
+    tmp="$(mktemp "$(dirname "$st")/.settings.XXXXXX")"
     jq_err="$(mktemp)"
     # GUI_SAFE_JSON/GUI_DENY_JSON built here, not at top level: this whole
     # branch is only reached once jq is confirmed present.
