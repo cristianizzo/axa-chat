@@ -197,6 +197,7 @@ function OllamaModelPicker(props: Props): React.ReactNode {
         <Select
           options={options}
           defaultValue={defaultValue}
+          defaultFocusValue={defaultValue}
           onChange={value => {
             // skipSettingsWrite scopes this picker instance to a different
             // target (e.g. a teammate's default model, see Config.tsx) — it
