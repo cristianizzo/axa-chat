@@ -404,9 +404,12 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     ]
   }
 
-  // An Ollama account serves exactly the one model it was logged in with, so
-  // the picker offers only that — never the Claude families below, which this
-  // provider cannot serve. Changing it means logging in again via /login.
+  // An Ollama account serves exactly the one model recorded on it — never the
+  // Claude families below, which this provider cannot serve. This base list
+  // is used by non-picker consumers (ConfigTool, prompt.ts); the /model
+  // picker itself bypasses it entirely via OllamaModelPicker
+  // (components/ModelPicker.tsx), which fetches the daemon's full local
+  // catalog and can switch the stored model with /model, not just /login.
   if (isOllamaSubscriber()) {
     const model = getOllamaAuth()?.model
     if (model) {
@@ -414,7 +417,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
         {
           value: model,
           label: model,
-          description: 'Served by Ollama · change it by signing in again with /login',
+          description: 'Served by Ollama · change it with /model or /login',
         },
       ]
     }

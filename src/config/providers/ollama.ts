@@ -25,11 +25,13 @@ export const OLLAMA_PROVIDER = {
   // The one model it serves is what distinguishes this account.
   accountDetail: config => config.ollamaAuth?.model,
 
-  // Authoritative in the credential record: a login always writes it, and
-  // changing it means logging in again. Declaring it here keeps the shared
-  // modelByAuthProvider map from being written for Ollama, where it would
-  // shadow the real value.
+  // Authoritative in the credential record: a login writes it, and /model can
+  // update it afterwards (setOllamaModel in utils/auth.ts). Declaring it here
+  // keeps the shared modelByAuthProvider map from being written for Ollama,
+  // where it would shadow the real value.
   ownedModel: config => config.ollamaAuth?.model || undefined,
 
-  // No `catalog`: the model is whatever the daemon reported at login.
+  // No `catalog`: the model list is whatever the daemon reports locally,
+  // fetched live by the /model picker (see OllamaModelPicker in
+  // components/ModelPicker.tsx) rather than declared statically here.
 } as const satisfies ProviderDescriptor

@@ -141,8 +141,9 @@ export type ProviderDescriptor<Id extends string = string> = {
    *
    * Present means the credentials are authoritative and the shared
    * `modelByAuthProvider` map must not be written for this provider — Ollama's
-   * model is fixed at login and changing it means logging in again. Absent
-   * means the map holds it, read and write.
+   * model is written to the account record directly, by /login or by /model
+   * (see setOllamaModel in utils/auth.ts). Absent means the map holds it, read
+   * and write.
    */
   ownedModel?: (config: GlobalConfig) => string | undefined
 

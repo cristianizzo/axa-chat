@@ -162,16 +162,25 @@ function OllamaModelPicker(props: Props): React.ReactNode {
         if (cancelled) {
           return
         }
+        if (fetchedNames.length === 0) {
+          setState({ status: 'error', message: 'No models installed. Run e.g. `ollama pull qwen3:8b`.' })
+          return
+        }
         // Apply the enterprise availableModels allowlist, same as every other
         // picker path — but keep the already-active model even if the
-        // allowlist would otherwise exclude it, matching ModelPickerBase's
-        // "Current model" fallback for models outside its own catalog.
+        // allowlist would otherwise exclude it. ModelPickerBase does the
+        // identical thing (see its own "Current model" fallback below): a
+        // policy change after login never leaves the picker silently unable
+        // to show, or reselect, the model the account is already running.
         const currentModel = initial ?? auth?.model
         const models = fetchedNames.filter(
           name => isModelAllowed(name) || name === currentModel,
         )
         if (models.length === 0) {
-          setState({ status: 'error', message: 'No models installed. Run e.g. `ollama pull qwen3:8b`.' })
+          setState({
+            status: 'error',
+            message: "No installed Ollama models are allowed by your organization's model policy.",
+          })
           return
         }
         setState({ status: 'ready', models })
