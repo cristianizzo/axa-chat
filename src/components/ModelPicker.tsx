@@ -132,6 +132,10 @@ type OllamaFetchState =
 function OllamaModelPicker(props: Props): React.ReactNode {
   const { initial, onSelect, onCancel, isStandaloneCommand, headerText, skipSettingsWrite } = props
   const [state, setState] = useState<OllamaFetchState>({ status: 'loading' })
+  // This component bypasses ModelPickerBase, so it must register the standard
+  // Ctrl+C/Ctrl+D double-press exit behavior itself (ModelPickerBase does the
+  // same at its own top level).
+  const exitState = useExitOnCtrlCDWithKeybindings()
 
   useEffect(() => {
     if (skipSettingsWrite) {
@@ -243,7 +247,16 @@ function OllamaModelPicker(props: Props): React.ReactNode {
   if (!isStandaloneCommand) {
     return content
   }
-  return <Pane color="permission">{content}</Pane>
+  return (
+    <Pane color="permission">
+      <Box flexDirection="column">
+        {content}
+        <Text dimColor={true} italic={true}>
+          {exitState.pending ? <>Press {exitState.keyName} again to exit</> : <Byline><KeyboardShortcutHint shortcut="Enter" action="confirm" /><ConfigurableShortcutHint action="select:cancel" context="Select" fallback="Esc" description="exit" /></Byline>}
+        </Text>
+      </Box>
+    </Pane>
+  )
 }
 
 function ModelPickerBase(t0: Props) {
