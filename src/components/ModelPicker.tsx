@@ -121,12 +121,22 @@ type OllamaFetchState =
  * of the single model the account was logged in with. Selecting a model
  * writes it to `ollamaAuth.model` directly, so switching no longer requires
  * logging in again.
+ *
+ * `skipSettingsWrite` callers (the teammate-default picker, see Config.tsx)
+ * don't go through this path's write — but `isServableByActiveProvider`
+ * (model.ts) still only accepts the single model recorded on the account, so
+ * offering the full local catalog there would let a user pick a model that's
+ * silently discarded later. Until Ollama has per-teammate model tracking,
+ * skip-write mode keeps the old single-option behavior instead of fetching.
  */
 function OllamaModelPicker(props: Props): React.ReactNode {
   const { initial, onSelect, onCancel, isStandaloneCommand, headerText, skipSettingsWrite } = props
   const [state, setState] = useState<OllamaFetchState>({ status: 'loading' })
 
   useEffect(() => {
+    if (skipSettingsWrite) {
+      return
+    }
     let cancelled = false
     // Use the stored account's baseUrl/authToken, not the OLLAMA_BASE_URL
     // default — a remote or authenticated daemon must be queried the same
@@ -169,15 +179,36 @@ function OllamaModelPicker(props: Props): React.ReactNode {
   }, [])
 
   // Select wires Escape to onCancel internally, but it isn't rendered during
-  // loading/error — without this, those states would be undismissable.
+  // loading/error — without this, those states would be undismissable. The
+  // skipSettingsWrite branch always renders a Select, so it's excluded here
+  // to avoid onCancel firing twice.
   useInput((_input, key) => {
-    if (key.escape && state.status !== 'ready') {
+    if (!skipSettingsWrite && key.escape && state.status !== 'ready') {
       onCancel?.()
     }
   })
 
   let content: React.ReactNode
-  if (state.status === 'loading') {
+  if (skipSettingsWrite) {
+    const model = getOllamaAuth()?.model
+    const options = model ? [{ value: model, label: model, description: 'Served by Ollama' }] : []
+    content = (
+      <Box flexDirection="column">
+        <Box marginBottom={1} flexDirection="column">
+          <Text color="remember" bold={true}>Select model</Text>
+          <Text dimColor={true}>{headerText ?? 'Served by Ollama · one model per account.'}</Text>
+        </Box>
+        <Select
+          options={options}
+          defaultValue={model}
+          defaultFocusValue={model}
+          onChange={value => onSelect(value as string, undefined)}
+          onCancel={onCancel}
+          visibleOptionCount={Math.min(10, options.length)}
+        />
+      </Box>
+    )
+  } else if (state.status === 'loading') {
     content = <Text dimColor={true}>Loading installed Ollama models…</Text>
   } else if (state.status === 'error') {
     content = <Text color="error">{state.message}</Text>
@@ -199,12 +230,7 @@ function OllamaModelPicker(props: Props): React.ReactNode {
           defaultValue={defaultValue}
           defaultFocusValue={defaultValue}
           onChange={value => {
-            // skipSettingsWrite scopes this picker instance to a different
-            // target (e.g. a teammate's default model, see Config.tsx) — it
-            // must not also overwrite the current account's own model.
-            if (!skipSettingsWrite) {
-              setOllamaModel(value as string)
-            }
+            setOllamaModel(value as string)
             onSelect(value as string, undefined)
           }}
           onCancel={onCancel}
