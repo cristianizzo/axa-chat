@@ -156,12 +156,20 @@ function OllamaModelPicker(props: Props): React.ReactNode {
           throw new Error(`Ollama responded ${res.status}`)
         }
         const body = (await res.json()) as { models?: { name?: string }[] }
-        const models = (body.models ?? [])
+        const fetchedNames = (body.models ?? [])
           .map(m => m.name)
           .filter((name): name is string => !!name)
         if (cancelled) {
           return
         }
+        // Apply the enterprise availableModels allowlist, same as every other
+        // picker path — but keep the already-active model even if the
+        // allowlist would otherwise exclude it, matching ModelPickerBase's
+        // "Current model" fallback for models outside its own catalog.
+        const currentModel = initial ?? auth?.model
+        const models = fetchedNames.filter(
+          name => isModelAllowed(name) || name === currentModel,
+        )
         if (models.length === 0) {
           setState({ status: 'error', message: 'No models installed. Run e.g. `ollama pull qwen3:8b`.' })
           return
@@ -217,12 +225,16 @@ function OllamaModelPicker(props: Props): React.ReactNode {
   } else if (state.status === 'error') {
     content = <Text color="error">{state.message}</Text>
   } else {
+    // `initial` is null when the session uses the provider default, in which
+    // case the actual current model lives on the stored account, not the
+    // prop — fall back to it so focus/default land on what's really active.
+    const currentModel = initial ?? getOllamaAuth()?.model
     const options = state.models.map(model => ({
       value: model,
       label: model,
-      description: model === initial ? 'Current model' : undefined,
+      description: model === currentModel ? 'Current model' : undefined,
     }))
-    const defaultValue = initial && state.models.includes(initial) ? initial : state.models[0]
+    const defaultValue = currentModel && state.models.includes(currentModel) ? currentModel : state.models[0]
     content = (
       <Box flexDirection="column">
         <Box marginBottom={1} flexDirection="column">
