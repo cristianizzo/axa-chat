@@ -1396,6 +1396,26 @@ export function saveOllamaAuth(auth: OllamaAuth): void {
 }
 
 /**
+ * Updates just the model on the stored Ollama account, keeping the existing
+ * baseUrl/authToken. Lets /model switch models without going through /login
+ * again. No-ops if no Ollama account is stored yet.
+ */
+export function setOllamaModel(model: string): void {
+  saveGlobalConfig((cfg) => {
+    if (!cfg.ollamaAuth?.baseUrl) {
+      return cfg
+    }
+    return {
+      ...cfg,
+      ollamaAuth: {
+        ...cfg.ollamaAuth,
+        model,
+      },
+    }
+  })
+}
+
+/**
  * Retrieves the stored Ollama account from GlobalConfig.
  * Returns null unless both a base URL and a model are recorded.
  */

@@ -1,11 +1,12 @@
 import { c as _c } from "react/compiler-runtime";
 import capitalize from 'lodash-es/capitalize.js';
 import * as React from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useExitOnCtrlCDWithKeybindings } from 'src/hooks/useExitOnCtrlCDWithKeybindings.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from 'src/services/analytics/index.js';
 import { FAST_MODE_MODEL_DISPLAY, isFastModeAvailable, isFastModeCooldown, isFastModeEnabled } from 'src/utils/fastMode.js';
-import { Box, Text } from '../ink.js';
+import { getOllamaAuth, isOllamaSubscriber, setOllamaModel } from 'src/utils/auth.js';
+import { Box, Text, useInput } from '../ink.js';
 import { useKeybindings } from '../keybindings/useKeybinding.js';
 import { useAppState, useSetAppState } from '../state/AppState.js';
 import { convertEffortValueToLevel, type EffortLevel, getDefaultEffortForModel, modelSupportsEffort, modelSupportsMaxEffort, resolvePickerEffortPersistence, toPersistableEffort } from '../utils/effort.js';
@@ -103,7 +104,180 @@ function TwoLevelModelPicker(props: Props): React.ReactNode {
 }
 
 export function ModelPicker(props: Props): React.ReactNode {
+  if (isOllamaSubscriber()) {
+    return <OllamaModelPicker {...props} />
+  }
   return <TwoLevelModelPicker {...props} />
+}
+
+type OllamaFetchState =
+  | { status: 'loading' }
+  | { status: 'ready'; models: string[] }
+  | { status: 'error'; message: string }
+
+/**
+ * /model for an Ollama account: lists every locally pulled model (via the
+ * daemon's `/api/tags`, same call `OllamaModelSelect` makes at /login) instead
+ * of the single model the account was logged in with. Selecting a model
+ * writes it to `ollamaAuth.model` directly, so switching no longer requires
+ * logging in again.
+ *
+ * `skipSettingsWrite` callers (the teammate-default picker, see Config.tsx)
+ * don't go through this path's write — but `isServableByActiveProvider`
+ * (model.ts) still only accepts the single model recorded on the account, so
+ * offering the full local catalog there would let a user pick a model that's
+ * silently discarded later. Until Ollama has per-teammate model tracking,
+ * skip-write mode keeps the old single-option behavior instead of fetching.
+ */
+function OllamaModelPicker(props: Props): React.ReactNode {
+  const { initial, onSelect, onCancel, isStandaloneCommand, headerText, skipSettingsWrite } = props
+  const [state, setState] = useState<OllamaFetchState>({ status: 'loading' })
+  // This component bypasses ModelPickerBase, so it must register the standard
+  // Ctrl+C/Ctrl+D double-press exit behavior itself (ModelPickerBase does the
+  // same at its own top level).
+  const exitState = useExitOnCtrlCDWithKeybindings()
+
+  useEffect(() => {
+    if (skipSettingsWrite) {
+      return
+    }
+    let cancelled = false
+    // Use the stored account's baseUrl/authToken, not the OLLAMA_BASE_URL
+    // default — a remote or authenticated daemon must be queried the same
+    // way chat requests reach it (see providerClients.ts's ollama branch).
+    const auth = getOllamaAuth()
+    const baseUrl = auth?.baseUrl ?? ''
+    void (async () => {
+      try {
+        const res = await fetch(`${baseUrl}/api/tags`, {
+          headers: auth?.authToken ? { Authorization: `Bearer ${auth.authToken}` } : undefined,
+        })
+        if (!res.ok) {
+          throw new Error(`Ollama responded ${res.status}`)
+        }
+        const body = (await res.json()) as { models?: { name?: string }[] }
+        const fetchedNames = (body.models ?? [])
+          .map(m => m.name)
+          .filter((name): name is string => !!name)
+        if (cancelled) {
+          return
+        }
+        if (fetchedNames.length === 0) {
+          setState({ status: 'error', message: 'No models installed. Run e.g. `ollama pull qwen3:8b`.' })
+          return
+        }
+        // Apply the enterprise availableModels allowlist, same as every other
+        // picker path — but keep the already-active model even if the
+        // allowlist would otherwise exclude it. ModelPickerBase does the
+        // identical thing (see its own "Current model" fallback below): a
+        // policy change after login never leaves the picker silently unable
+        // to show, or reselect, the model the account is already running.
+        const currentModel = initial ?? auth?.model
+        const models = fetchedNames.filter(
+          name => isModelAllowed(name) || name === currentModel,
+        )
+        if (models.length === 0) {
+          setState({
+            status: 'error',
+            message: "No installed Ollama models are allowed by your organization's model policy.",
+          })
+          return
+        }
+        setState({ status: 'ready', models })
+      } catch (err) {
+        if (cancelled) {
+          return
+        }
+        setState({
+          status: 'error',
+          message: `Could not reach the Ollama daemon at ${baseUrl} (${(err as Error).message}). Is it running?`,
+        })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Select wires Escape to onCancel internally, but it isn't rendered during
+  // loading/error — without this, those states would be undismissable. The
+  // skipSettingsWrite branch always renders a Select, so it's excluded here
+  // to avoid onCancel firing twice.
+  useInput((_input, key) => {
+    if (!skipSettingsWrite && key.escape && state.status !== 'ready') {
+      onCancel?.()
+    }
+  })
+
+  let content: React.ReactNode
+  if (skipSettingsWrite) {
+    const model = getOllamaAuth()?.model
+    const options = model ? [{ value: model, label: model, description: 'Served by Ollama' }] : []
+    content = (
+      <Box flexDirection="column">
+        <Box marginBottom={1} flexDirection="column">
+          <Text color="remember" bold={true}>Select model</Text>
+          <Text dimColor={true}>{headerText ?? 'Served by Ollama · one model per account.'}</Text>
+        </Box>
+        <Select
+          options={options}
+          defaultValue={model}
+          defaultFocusValue={model}
+          onChange={value => onSelect(value as string, undefined)}
+          onCancel={onCancel}
+          visibleOptionCount={Math.min(10, options.length)}
+        />
+      </Box>
+    )
+  } else if (state.status === 'loading') {
+    content = <Text dimColor={true}>Loading installed Ollama models…</Text>
+  } else if (state.status === 'error') {
+    content = <Text color="error">{state.message}</Text>
+  } else {
+    // `initial` is null when the session uses the provider default, in which
+    // case the actual current model lives on the stored account, not the
+    // prop — fall back to it so focus/default land on what's really active.
+    const currentModel = initial ?? getOllamaAuth()?.model
+    const options = state.models.map(model => ({
+      value: model,
+      label: model,
+      description: model === currentModel ? 'Current model' : undefined,
+    }))
+    const defaultValue = currentModel && state.models.includes(currentModel) ? currentModel : state.models[0]
+    content = (
+      <Box flexDirection="column">
+        <Box marginBottom={1} flexDirection="column">
+          <Text color="remember" bold={true}>Select model</Text>
+          <Text dimColor={true}>{headerText ?? 'Served by Ollama · pick any locally installed model.'}</Text>
+        </Box>
+        <Select
+          options={options}
+          defaultValue={defaultValue}
+          defaultFocusValue={defaultValue}
+          onChange={value => {
+            setOllamaModel(value as string)
+            onSelect(value as string, undefined)
+          }}
+          onCancel={onCancel}
+          visibleOptionCount={Math.min(10, options.length)}
+        />
+      </Box>
+    )
+  }
+
+  if (!isStandaloneCommand) {
+    return content
+  }
+  return (
+    <Pane color="permission">
+      <Box flexDirection="column">
+        {content}
+        <Text dimColor={true} italic={true}>
+          {exitState.pending ? <>Press {exitState.keyName} again to exit</> : <Byline><KeyboardShortcutHint shortcut="Enter" action="confirm" /><ConfigurableShortcutHint action="select:cancel" context="Select" fallback="Esc" description="exit" /></Byline>}
+        </Text>
+      </Box>
+    </Pane>
+  )
 }
 
 function ModelPickerBase(t0: Props) {
