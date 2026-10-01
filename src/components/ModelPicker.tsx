@@ -1,10 +1,12 @@
 import { c as _c } from "react/compiler-runtime";
 import capitalize from 'lodash-es/capitalize.js';
 import * as React from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useExitOnCtrlCDWithKeybindings } from 'src/hooks/useExitOnCtrlCDWithKeybindings.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from 'src/services/analytics/index.js';
 import { FAST_MODE_MODEL_DISPLAY, isFastModeAvailable, isFastModeCooldown, isFastModeEnabled } from 'src/utils/fastMode.js';
+import { getOllamaBaseUrl } from 'src/config/ollama.js';
+import { isOllamaSubscriber, setOllamaModel } from 'src/utils/auth.js';
 import { Box, Text } from '../ink.js';
 import { useKeybindings } from '../keybindings/useKeybinding.js';
 import { useAppState, useSetAppState } from '../state/AppState.js';
@@ -103,7 +105,100 @@ function TwoLevelModelPicker(props: Props): React.ReactNode {
 }
 
 export function ModelPicker(props: Props): React.ReactNode {
+  if (isOllamaSubscriber()) {
+    return <OllamaModelPicker {...props} />
+  }
   return <TwoLevelModelPicker {...props} />
+}
+
+type OllamaFetchState =
+  | { status: 'loading' }
+  | { status: 'ready'; models: string[] }
+  | { status: 'error'; message: string }
+
+/**
+ * /model for an Ollama account: lists every locally pulled model (via the
+ * daemon's `/api/tags`, same call `OllamaModelSelect` makes at /login) instead
+ * of the single model the account was logged in with. Selecting a model
+ * writes it to `ollamaAuth.model` directly, so switching no longer requires
+ * logging in again.
+ */
+function OllamaModelPicker(props: Props): React.ReactNode {
+  const { initial, onSelect, onCancel, isStandaloneCommand, headerText } = props
+  const [state, setState] = useState<OllamaFetchState>({ status: 'loading' })
+
+  useEffect(() => {
+    let cancelled = false
+    const baseUrl = getOllamaBaseUrl()
+    void (async () => {
+      try {
+        const res = await fetch(`${baseUrl}/api/tags`)
+        if (!res.ok) {
+          throw new Error(`Ollama responded ${res.status}`)
+        }
+        const body = (await res.json()) as { models?: { name?: string }[] }
+        const models = (body.models ?? [])
+          .map(m => m.name)
+          .filter((name): name is string => !!name)
+        if (cancelled) {
+          return
+        }
+        if (models.length === 0) {
+          setState({ status: 'error', message: 'No models installed. Run e.g. `ollama pull qwen3:8b`.' })
+          return
+        }
+        setState({ status: 'ready', models })
+      } catch (err) {
+        if (cancelled) {
+          return
+        }
+        setState({
+          status: 'error',
+          message: `Could not reach the Ollama daemon at ${baseUrl} (${(err as Error).message}). Is it running?`,
+        })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  let content: React.ReactNode
+  if (state.status === 'loading') {
+    content = <Text dimColor={true}>Loading installed Ollama models…</Text>
+  } else if (state.status === 'error') {
+    content = <Text color="error">{state.message}</Text>
+  } else {
+    const options = state.models.map(model => ({
+      value: model,
+      label: model,
+      description: model === initial ? 'Current model' : undefined,
+    }))
+    const defaultValue = initial && state.models.includes(initial) ? initial : state.models[0]
+    content = (
+      <Box flexDirection="column">
+        <Box marginBottom={1} flexDirection="column">
+          <Text color="remember" bold={true}>Select model</Text>
+          <Text dimColor={true}>{headerText ?? 'Served by Ollama · pick any locally installed model.'}</Text>
+        </Box>
+        <Select
+          options={options}
+          defaultValue={defaultValue}
+          onChange={value => {
+            setOllamaModel(value as string)
+            onSelect(value as string, undefined)
+          }}
+          onCancel={onCancel}
+          visibleOptionCount={Math.min(10, options.length)}
+        />
+      </Box>
+    )
+  }
+
+  if (!isStandaloneCommand) {
+    return content
+  }
+  return <Pane color="permission">{content}</Pane>
 }
 
 function ModelPickerBase(t0: Props) {
