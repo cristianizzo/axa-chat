@@ -5,9 +5,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useExitOnCtrlCDWithKeybindings } from 'src/hooks/useExitOnCtrlCDWithKeybindings.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from 'src/services/analytics/index.js';
 import { FAST_MODE_MODEL_DISPLAY, isFastModeAvailable, isFastModeCooldown, isFastModeEnabled } from 'src/utils/fastMode.js';
-import { getOllamaBaseUrl } from 'src/config/ollama.js';
-import { isOllamaSubscriber, setOllamaModel } from 'src/utils/auth.js';
-import { Box, Text } from '../ink.js';
+import { getOllamaAuth, isOllamaSubscriber, setOllamaModel } from 'src/utils/auth.js';
+import { Box, Text, useInput } from '../ink.js';
 import { useKeybindings } from '../keybindings/useKeybinding.js';
 import { useAppState, useSetAppState } from '../state/AppState.js';
 import { convertEffortValueToLevel, type EffortLevel, getDefaultEffortForModel, modelSupportsEffort, modelSupportsMaxEffort, resolvePickerEffortPersistence, toPersistableEffort } from '../utils/effort.js';
@@ -124,15 +123,21 @@ type OllamaFetchState =
  * logging in again.
  */
 function OllamaModelPicker(props: Props): React.ReactNode {
-  const { initial, onSelect, onCancel, isStandaloneCommand, headerText } = props
+  const { initial, onSelect, onCancel, isStandaloneCommand, headerText, skipSettingsWrite } = props
   const [state, setState] = useState<OllamaFetchState>({ status: 'loading' })
 
   useEffect(() => {
     let cancelled = false
-    const baseUrl = getOllamaBaseUrl()
+    // Use the stored account's baseUrl/authToken, not the OLLAMA_BASE_URL
+    // default — a remote or authenticated daemon must be queried the same
+    // way chat requests reach it (see providerClients.ts's ollama branch).
+    const auth = getOllamaAuth()
+    const baseUrl = auth?.baseUrl ?? ''
     void (async () => {
       try {
-        const res = await fetch(`${baseUrl}/api/tags`)
+        const res = await fetch(`${baseUrl}/api/tags`, {
+          headers: auth?.authToken ? { Authorization: `Bearer ${auth.authToken}` } : undefined,
+        })
         if (!res.ok) {
           throw new Error(`Ollama responded ${res.status}`)
         }
@@ -163,6 +168,14 @@ function OllamaModelPicker(props: Props): React.ReactNode {
     }
   }, [])
 
+  // Select wires Escape to onCancel internally, but it isn't rendered during
+  // loading/error — without this, those states would be undismissable.
+  useInput((_input, key) => {
+    if (key.escape && state.status !== 'ready') {
+      onCancel?.()
+    }
+  })
+
   let content: React.ReactNode
   if (state.status === 'loading') {
     content = <Text dimColor={true}>Loading installed Ollama models…</Text>
@@ -185,7 +198,12 @@ function OllamaModelPicker(props: Props): React.ReactNode {
           options={options}
           defaultValue={defaultValue}
           onChange={value => {
-            setOllamaModel(value as string)
+            // skipSettingsWrite scopes this picker instance to a different
+            // target (e.g. a teammate's default model, see Config.tsx) — it
+            // must not also overwrite the current account's own model.
+            if (!skipSettingsWrite) {
+              setOllamaModel(value as string)
+            }
             onSelect(value as string, undefined)
           }}
           onCancel={onCancel}
