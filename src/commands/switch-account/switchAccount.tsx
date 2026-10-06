@@ -16,6 +16,7 @@ import {
   getActiveAuthProvider,
   hasCredentialsForAuthProvider,
   setActiveAuthProvider,
+  setActiveAuthProviderForSession,
   setStoredModelForProvider,
 } from '../../utils/activeAuthProvider.js'
 import { getGlobalConfig } from '../../utils/config.js'
@@ -62,11 +63,15 @@ function describeAccount(id: AuthProviderId): string {
  *
  * @param id - The provider to switch to
  * @param context - The command context, for reading and updating AppState
+ * @param sessionOnly - When true, the switch is kept in this process's memory
+ *   only (via setActiveAuthProviderForSession) instead of being written to the
+ *   shared global config, so no other axa terminal is affected
  * @returns The message to show the user
  */
 async function switchTo(
   id: AuthProviderId,
   context: LocalJSXCommandContext,
+  sessionOnly: boolean = false,
 ): Promise<string> {
   const outgoing = getActiveAuthProvider()
   const outgoingModel = context.getAppState().mainLoopModel
@@ -74,7 +79,11 @@ async function switchTo(
     setStoredModelForProvider(outgoing, outgoingModel)
   }
 
-  setActiveAuthProvider(id)
+  if (sessionOnly) {
+    setActiveAuthProviderForSession(id)
+  } else {
+    setActiveAuthProvider(id)
+  }
   await clearAuthRelatedCaches()
 
   // Signature-bearing blocks (thinking, connector_text) are bound to the
@@ -98,7 +107,8 @@ async function switchTo(
   setMainLoopModelOverride(target)
 
   const model = renderModelSetting(target ?? getDefaultMainLoopModelSetting())
-  return `Switched to ${describeAccount(id)} · model: ${model}`
+  const suffix = sessionOnly ? ' (this session only)' : ''
+  return `Switched to ${describeAccount(id)}${suffix} · model: ${model}`
 }
 
 function SwitchAccount({
@@ -147,7 +157,14 @@ export async function call(
   context: LocalJSXCommandContext,
   args?: string,
 ): Promise<React.ReactNode> {
-  const requested = resolveProviderAlias(args ?? '')
+  // --session is a debug convenience: strip it out of the argument before
+  // resolving the provider name, so `/switch-account ollama --session` and
+  // `/switch-account --session ollama` both work regardless of order.
+  const tokens = (args ?? '').trim().split(/\s+/).filter(Boolean)
+  const sessionOnly = tokens.some(token => token === '--session')
+  const providerArg = tokens.filter(token => token !== '--session').join(' ')
+
+  const requested = resolveProviderAlias(providerArg)
   if (requested) {
     if (!hasCredentialsForAuthProvider(requested)) {
       onDone(
@@ -155,7 +172,7 @@ export async function call(
       )
       return null
     }
-    onDone(await switchTo(requested, context))
+    onDone(await switchTo(requested, context, sessionOnly))
     context.onChangeAPIKey()
     return null
   }

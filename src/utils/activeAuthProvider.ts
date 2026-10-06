@@ -74,6 +74,18 @@ export function hasCredentialsForAuthProvider(id: AuthProviderId): boolean {
 }
 
 /**
+ * A `/switch-account --session` choice, held only in this process's memory.
+ *
+ * Deliberately not written through saveGlobalConfig: the global config is
+ * shared by every axa process on the machine, so a disk write would move the
+ * default for every other terminal, not just this one. A module-level
+ * variable is scoped to this process by construction — nothing else can read
+ * it — which is exactly the "this terminal only" behaviour a debug switch
+ * needs, with no extra plumbing.
+ */
+let sessionAuthProviderOverride: AuthProviderId | undefined
+
+/**
  * The provider whose account this session is using.
  *
  * try/catch: callers include getAPIProvider, which runs while main.tsx builds
@@ -86,6 +98,14 @@ export function hasCredentialsForAuthProvider(id: AuthProviderId): boolean {
  * @returns The active provider ID, defaulting to Anthropic
  */
 export function getActiveAuthProvider(): AuthProviderId {
+  // Checked before the persisted value: a session override exists only when
+  // this process explicitly asked for a local-only switch, and that ask must
+  // win over whatever another terminal has since written to the shared
+  // config — otherwise the override would silently stop applying the moment
+  // any other axa process ran /switch-account.
+  if (sessionAuthProviderOverride) {
+    return sessionAuthProviderOverride
+  }
   try {
     const config = getGlobalConfig()
     if (isAuthProviderId(config.activeAuthProvider)) {
@@ -106,6 +126,18 @@ export function getActiveAuthProvider(): AuthProviderId {
  */
 export function setActiveAuthProvider(id: AuthProviderId): void {
   saveGlobalConfig(config => ({ ...config, activeAuthProvider: id }))
+}
+
+/**
+ * Makes the given provider active for this process only, bypassing the
+ * global config entirely. Used by `/switch-account --session`, a debug
+ * convenience for trying another account without changing the default every
+ * other running (or future) axa terminal resolves to.
+ *
+ * @param id - The provider to use for the remainder of this process
+ */
+export function setActiveAuthProviderForSession(id: AuthProviderId): void {
+  sessionAuthProviderOverride = id
 }
 
 /**
