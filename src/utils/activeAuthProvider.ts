@@ -122,9 +122,16 @@ export function getActiveAuthProvider(): AuthProviderId {
 /**
  * Records the provider a login authenticated, or that `/switch-account` selected.
  *
+ * Clears any session override first: a persistent switch is a stronger
+ * statement of intent than a session-only one that may have preceded it in
+ * this same process, and without this the override would keep winning in
+ * getActiveAuthProvider, making the persistent switch silently not apply for
+ * the rest of this terminal's life.
+ *
  * @param id - The provider now in use
  */
 export function setActiveAuthProvider(id: AuthProviderId): void {
+  sessionAuthProviderOverride = undefined
   saveGlobalConfig(config => ({ ...config, activeAuthProvider: id }))
 }
 
@@ -143,8 +150,14 @@ export function setActiveAuthProviderForSession(id: AuthProviderId): void {
 /**
  * Forgets the active provider, so resolution falls back to whatever credentials
  * remain. Called on logout.
+ *
+ * Also clears any session override, for the same reason setActiveAuthProvider
+ * does: logging out is a stronger statement than a prior session-only switch,
+ * and the override would otherwise keep resolving to a provider this process
+ * just logged out of.
  */
 export function clearActiveAuthProvider(): void {
+  sessionAuthProviderOverride = undefined
   saveGlobalConfig(config => ({ ...config, activeAuthProvider: undefined }))
 }
 
