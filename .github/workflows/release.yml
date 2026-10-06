@@ -12,9 +12,13 @@ name: release
 #
 #   v<version>/axa-<version>-darwin-arm64.tar.gz          one file: `axa`
 #   v<version>/axa-<version>-darwin-arm64.tar.gz.sha256   `shasum -c` format
-#   v<version>/manifest.json
+#   v<version>/axa-<version>-linux-x64.tar.gz             one file: `axa`
+#   v<version>/axa-<version>-linux-x64.tar.gz.sha256      `sha256sum -c` format
+#   v<version>/axa-<version>-linux-arm64.tar.gz           one file: `axa`
+#   v<version>/axa-<version>-linux-arm64.tar.gz.sha256    `sha256sum -c` format
+#   v<version>/manifest.json                              one `platforms` map, all three
 #   <channel>/VERSION                                     plain text, one line
-#   <channel>/manifest.json
+#   <channel>/manifest.json                               same merged map
 #
 # The channel release is a rolling one whose assets are replaced each time. Its
 # tag moves, which is deliberate and is the reason its assets are a pointer and
@@ -27,7 +31,16 @@ name: release
 # Two consumers, two formats, on purpose. `install.sh` is bash with no JSON
 # parser it can rely on, so it reads the plain-text VERSION and the `.sha256`
 # sidecar. The in-process updater has JSON.parse, so it reads manifest.json.
-# Both are generated below from one `shasum` run, so they cannot disagree.
+# Both are generated below from one hashing run per platform, so they cannot
+# disagree.
+#
+# Three jobs, not one matrix: the macOS job is untouched from before Linux
+# existed, and each Linux job depends on the previous one rather than running
+# in parallel with it, because both write the same manifest.json back onto the
+# same release — `needs:` is what keeps that read-modify-write from racing
+# itself. Each job builds and smoke-tests on the architecture it publishes:
+# `scripts/build.ts --target` is passed explicitly rather than left to default
+# to the host, so a runner-image change cannot silently swap what gets built.
 
 on:
   push:
@@ -49,12 +62,13 @@ env:
 
 jobs:
   release:
-    # macos-15 is Apple Silicon. Deliberately one runner and one artifact:
-    # `scripts/build.ts` passes `--target bun`, which is host-only, so every
-    # additional platform is another runner producing an artifact nobody here
-    # can verify on real hardware. Publishing an untested darwin-x64 build
-    # would be worse than publishing none — install.sh says so explicitly
-    # rather than failing obscurely.
+    # macos-15 is Apple Silicon. This job's own steps are unchanged from
+    # before Linux publishing existed. `scripts/build.ts` passes `--target
+    # bun`, which is host-only, so darwin-x64 is still not published: an
+    # untested cross-build would be worse than publishing none — install.sh
+    # says so explicitly rather than failing obscurely. Linux is published by
+    # the two jobs below instead of by widening this one, because each needs
+    # its own real hardware to build and smoke-test on, same reasoning.
     runs-on: macos-15
     timeout-minutes: 45
 
@@ -228,6 +242,284 @@ jobs:
           # Installs from the real URLs into a throwaway prefix on the runner.
           # This is the step that would have caught a manifest pointing at an
           # asset that does not exist, which is invisible to every check above.
+          prefix="$(mktemp -d)"
+          AXA_BIN_DIR="$prefix/bin" AXA_DATA_DIR="$prefix/share/axa" \
+            bash ./install.sh
+          "$prefix/bin/axa" --version
+          test -L "$prefix/bin/axa"
+
+  release-linux-x64:
+    # Depends on the macOS job rather than running alongside it: this job
+    # downloads out/manifest.json from the versioned release, adds a
+    # `linux-x64` entry, and re-uploads it with --clobber. Running in
+    # parallel with the macOS job would race that read-modify-write against
+    # the macOS job's own first write of manifest.json.
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PLATFORM: linux-x64
+      BUN_TARGET: bun-linux-x64
+
+    steps:
+      - name: Resolve the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          AXA_SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export AXA_SOURCE_DATE_EPOCH
+          bun run build:release \
+            --version-tag "${{ steps.tag.outputs.version }}" \
+            --target "$BUN_TARGET" \
+            --outfile ./axa.next
+          mv -f ./axa.next ./axa
+          chmod 755 ./axa
+
+      - name: Verify the binary runs and reports the tagged version
+        run: |
+          set -euo pipefail
+          reported="$(./axa --version 2>&1 | tr -d '[:space:]' || true)"
+          echo "axa --version -> $reported"
+          case "$reported" in
+            *"${{ steps.tag.outputs.version }}"*) ;;
+            *)
+              echo "::error::The built binary does not report ${{ steps.tag.outputs.version }}."
+              echo "::error::Refusing to publish an artifact that cannot identify itself."
+              exit 1
+              ;;
+          esac
+
+      - name: Package and checksum
+        id: package
+        run: |
+          set -euo pipefail
+          version="${{ steps.tag.outputs.version }}"
+          archive="axa-${version}-${PLATFORM}.tar.gz"
+
+          mkdir -p out
+          tar -czf "out/${archive}" axa
+          ( cd out && sha256sum "${archive}" > "${archive}.sha256" )
+
+          {
+            echo "archive=$archive"
+            echo "sha256=$(awk '{print $1}' "out/${archive}.sha256")"
+            echo "size=$(wc -c < "out/${archive}" | tr -d ' ')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload the archive and add this platform to manifest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          archive="${{ steps.package.outputs.archive }}"
+
+          gh release upload "$tag" "out/${archive}" "out/${archive}.sha256" --clobber
+
+          # Read-modify-write against the manifest the macOS job already
+          # published, rather than generating a fresh one: this job must add
+          # a platforms entry, not replace the darwin-arm64 one.
+          gh release download "$tag" -p manifest.json -D out --clobber
+          jq \
+            --arg platform "$PLATFORM" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${archive}" \
+            --arg sha256 "${{ steps.package.outputs.sha256 }}" \
+            --argjson size "${{ steps.package.outputs.size }}" \
+            '.platforms[$platform] = {url:$url, sha256:$sha256, size:$size}' \
+            out/manifest.json > out/manifest.next.json
+          mv out/manifest.next.json out/manifest.json
+          gh release upload "$tag" out/manifest.json --clobber
+
+          echo "--- manifest.json ---"
+          cat out/manifest.json
+
+      - name: Merge this platform into the channel manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The channel manifest was already moved to this version by the
+          # macOS job, with only darwin-arm64 in its platforms map. Merge
+          # rather than overwrite, for the same reason as the versioned
+          # manifest above. Built as a standalone one-platform fragment first
+          # so the merge expression is identical in both Linux jobs regardless
+          # of which manifest.json it is reading from.
+          mkdir -p this-platform
+          jq -n \
+            --arg platform "$PLATFORM" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ steps.tag.outputs.tag }}/${{ steps.package.outputs.archive }}" \
+            --arg sha256 "${{ steps.package.outputs.sha256 }}" \
+            --argjson size "${{ steps.package.outputs.size }}" \
+            '{platforms: {($platform): {url:$url, sha256:$sha256, size:$size}}}' \
+            > this-platform/manifest.json
+
+          gh release download "$CHANNEL" -p manifest.json -D out --clobber
+          jq --slurpfile v this-platform/manifest.json \
+            '.platforms[$v[0].platforms | keys[0]] = $v[0].platforms[$v[0].platforms | keys[0]]' \
+            out/manifest.json > out/manifest.next.json
+          mv out/manifest.next.json out/manifest.json
+          gh release upload "$CHANNEL" out/manifest.json --clobber
+
+      - name: Smoke-test the published channel end to end on Linux x64
+        run: |
+          set -euo pipefail
+          prefix="$(mktemp -d)"
+          AXA_BIN_DIR="$prefix/bin" AXA_DATA_DIR="$prefix/share/axa" \
+            bash ./install.sh
+          "$prefix/bin/axa" --version
+          test -L "$prefix/bin/axa"
+
+  release-linux-arm64:
+    # Depends on the x64 Linux job, not on `release` directly: this is the
+    # second write to the same manifest.json, and chaining the two Linux jobs
+    # serialises them the same way the x64 job is serialised after macOS.
+    needs: release-linux-x64
+    # GA, free-tier hosted Arm64 Linux runner (see actions/runner-images). Real
+    # hardware, same reasoning as macos-15 and ubuntu-latest above: an
+    # untested cross-build would be worse than publishing none.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    env:
+      PLATFORM: linux-arm64
+      BUN_TARGET: bun-linux-arm64
+
+    steps:
+      - name: Resolve the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          AXA_SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export AXA_SOURCE_DATE_EPOCH
+          bun run build:release \
+            --version-tag "${{ steps.tag.outputs.version }}" \
+            --target "$BUN_TARGET" \
+            --outfile ./axa.next
+          mv -f ./axa.next ./axa
+          chmod 755 ./axa
+
+      - name: Verify the binary runs and reports the tagged version
+        run: |
+          set -euo pipefail
+          reported="$(./axa --version 2>&1 | tr -d '[:space:]' || true)"
+          echo "axa --version -> $reported"
+          case "$reported" in
+            *"${{ steps.tag.outputs.version }}"*) ;;
+            *)
+              echo "::error::The built binary does not report ${{ steps.tag.outputs.version }}."
+              echo "::error::Refusing to publish an artifact that cannot identify itself."
+              exit 1
+              ;;
+          esac
+
+      - name: Package and checksum
+        id: package
+        run: |
+          set -euo pipefail
+          version="${{ steps.tag.outputs.version }}"
+          archive="axa-${version}-${PLATFORM}.tar.gz"
+
+          mkdir -p out
+          tar -czf "out/${archive}" axa
+          ( cd out && sha256sum "${archive}" > "${archive}.sha256" )
+
+          {
+            echo "archive=$archive"
+            echo "sha256=$(awk '{print $1}' "out/${archive}.sha256")"
+            echo "size=$(wc -c < "out/${archive}" | tr -d ' ')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload the archive and add this platform to manifest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          archive="${{ steps.package.outputs.archive }}"
+
+          gh release upload "$tag" "out/${archive}" "out/${archive}.sha256" --clobber
+
+          gh release download "$tag" -p manifest.json -D out --clobber
+          jq \
+            --arg platform "$PLATFORM" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${archive}" \
+            --arg sha256 "${{ steps.package.outputs.sha256 }}" \
+            --argjson size "${{ steps.package.outputs.size }}" \
+            '.platforms[$platform] = {url:$url, sha256:$sha256, size:$size}' \
+            out/manifest.json > out/manifest.next.json
+          mv out/manifest.next.json out/manifest.json
+          gh release upload "$tag" out/manifest.json --clobber
+
+          echo "--- manifest.json ---"
+          cat out/manifest.json
+
+      - name: Merge this platform into the channel manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p this-platform
+          jq -n \
+            --arg platform "$PLATFORM" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ steps.tag.outputs.tag }}/${{ steps.package.outputs.archive }}" \
+            --arg sha256 "${{ steps.package.outputs.sha256 }}" \
+            --argjson size "${{ steps.package.outputs.size }}" \
+            '{platforms: {($platform): {url:$url, sha256:$sha256, size:$size}}}' \
+            > this-platform/manifest.json
+
+          gh release download "$CHANNEL" -p manifest.json -D out --clobber
+          jq --slurpfile v this-platform/manifest.json \
+            '.platforms[$v[0].platforms | keys[0]] = $v[0].platforms[$v[0].platforms | keys[0]]' \
+            out/manifest.json > out/manifest.next.json
+          mv out/manifest.next.json out/manifest.json
+          gh release upload "$CHANNEL" out/manifest.json --clobber
+
+      - name: Smoke-test the published channel end to end on Linux arm64
+        run: |
+          set -euo pipefail
           prefix="$(mktemp -d)"
           AXA_BIN_DIR="$prefix/bin" AXA_DATA_DIR="$prefix/share/axa" \
             bash ./install.sh

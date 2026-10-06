@@ -219,47 +219,89 @@ EOF
 # System checks
 # -------------------------------------------------------------------
 
-# macOS only, deliberately. Earlier versions of this script advertised Linux
-# and could not deliver it: the build is host-targeted, there was never a Linux
-# artifact, and promising one is worse than not offering it. If Linux is wanted
-# it is a new decision and a new runner, not a flag.
+# macOS and Linux, deliberately the only two. Earlier versions of this script
+# advertised Linux before a Linux artifact existed at all — the build was
+# host-targeted and there was nothing to download — and promising a platform
+# you cannot deliver is worse than not offering it. A real Linux artifact is
+# now published by the release workflow, built and smoke-tested on its own
+# runner, which is what makes this branch safe to add. Windows is still a new
+# decision and a new runner, not a flag.
 check_platform() {
   local os arch
   os="$(uname -s)"
   arch="$(uname -m)"
 
-  if [ "$os" != "Darwin" ]; then
-    fail "axa is published for macOS only.
-    This machine reports \"$os\". There is no Linux or Windows build to
-    download — not a missing flag, a missing artifact. Build from source
-    instead: https://github.com/${REPO_SLUG}#building-from-source"
-  fi
-
-  case "$arch" in
-    arm64) PLATFORM="darwin-arm64" ;;
-    x86_64)
-      fail "axa is published for Apple Silicon (arm64) only, and this Mac
+  case "$os" in
+    Darwin)
+      case "$arch" in
+        arm64) PLATFORM="darwin-arm64" ;;
+        x86_64)
+          fail "axa is published for Apple Silicon (arm64) only, and this Mac
     reports x86_64. Rosetta will not help: the download simply does not exist.
     Build from source instead:
       https://github.com/${REPO_SLUG}#building-from-source"
+          ;;
+        *) fail "Unsupported architecture: $arch" ;;
+      esac
+      ok "Platform: macOS $arch ($PLATFORM)"
       ;;
-    *) fail "Unsupported architecture: $arch" ;;
+    Linux)
+      case "$arch" in
+        x86_64) PLATFORM="linux-x64" ;;
+        aarch64|arm64) PLATFORM="linux-arm64" ;;
+        *) fail "Unsupported architecture: $arch" ;;
+      esac
+      ok "Platform: Linux $arch ($PLATFORM)"
+      # Credential storage on Linux is plaintext-file only: there is no
+      # libsecret integration yet (tracked by the "TODO: add libsecret support
+      # for Linux" in src/utils/secureStorage/index.ts). This is not a
+      # regression from building from source — it is the same behavior Linux
+      # already has today — but it is stated here because this is the first
+      # time Linux is an officially published release platform rather than a
+      # build-it-yourself target.
+      warn "Linux credential storage is plaintext-file only (no OS keychain/libsecret integration yet). Your API key or OAuth token is stored unencrypted on disk."
+      ;;
+    *)
+      fail "axa is published for macOS and Linux only.
+    This machine reports \"$os\". There is no Windows build to download — not
+    a missing flag, a missing artifact. Build from source instead:
+      https://github.com/${REPO_SLUG}#building-from-source"
+      ;;
   esac
-
-  ok "Platform: macOS $arch ($PLATFORM)"
 }
 
-# Every one of these ships with macOS. They are checked anyway because the
-# failure of a missing one is otherwise a confusing error several steps later,
-# on a partially-written install directory.
+# `shasum` is a Perl script: it ships with macOS and with every mainstream
+# desktop Linux distro that installs Perl by default, but not with a minimal
+# container base (Alpine's busybox has no Perl at all). `sha256sum` — GNU
+# coreutils on Linux, also provided by busybox — is the equivalent everywhere
+# that `shasum` is missing, and the two read the same "<hash>  <filename>"
+# format, so resolving to whichever exists costs nothing at every call site.
+# Resolved once, into a two-word command the rest of the script can run as-is.
+SHA256_CMD=""
+resolve_sha256_cmd() {
+  if command -v shasum &>/dev/null; then
+    SHA256_CMD="shasum -a 256"
+  elif command -v sha256sum &>/dev/null; then
+    SHA256_CMD="sha256sum"
+  fi
+}
+
+# curl/tar/mktemp ship with macOS and with every mainstream Linux distro; the
+# hashing tool is checked via resolve_sha256_cmd instead of by a fixed name,
+# since which one exists is itself the platform-dependent part. Checked anyway
+# because the failure of a missing one is otherwise a confusing error several
+# steps later, on a partially-written install directory.
 check_tools() {
   local missing=()
-  for tool in curl tar shasum mktemp; do
+  for tool in curl tar mktemp; do
     command -v "$tool" &>/dev/null || missing+=("$tool")
   done
+  resolve_sha256_cmd
+  [ -n "$SHA256_CMD" ] || missing+=("shasum or sha256sum")
   if [ ${#missing[@]} -gt 0 ]; then
     fail "Required tools are missing: ${missing[*]}
-    All of these ship with macOS, so a missing one usually means a broken PATH."
+    All of these ship with a stock macOS or Linux install, so a missing one
+    usually means a broken PATH or a minimal container base."
   fi
 }
 
@@ -407,11 +449,13 @@ download_and_verify() {
     Refusing to install an unverified binary. Nothing was changed."
   fi
 
-  # `shasum -c` reads "<hash>  <filename>", so it has to run where the file is.
-  if ! (cd "$STAGING_DIR" && shasum -a 256 -c "$archive.sha256" >/dev/null 2>&1); then
+  # `-c` reads "<hash>  <filename>", so it has to run where the file is.
+  # $SHA256_CMD is two words (e.g. "shasum -a 256"), so it is intentionally
+  # left unquoted here to word-split into the command and its flag.
+  if ! (cd "$STAGING_DIR" && $SHA256_CMD -c "$archive.sha256" >/dev/null 2>&1); then
     local expected actual
     expected="$(awk '{print $1}' "$STAGING_DIR/$archive.sha256" 2>/dev/null || echo '?')"
-    actual="$(shasum -a 256 "$STAGING_DIR/$archive" 2>/dev/null | awk '{print $1}' || echo '?')"
+    actual="$($SHA256_CMD "$STAGING_DIR/$archive" 2>/dev/null | awk '{print $1}' || echo '?')"
     rm -rf "$STAGING_DIR"
     fail "Checksum mismatch for ${archive}.
       expected  $expected

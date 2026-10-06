@@ -21,7 +21,7 @@
 
 ## Quick Install
 
-**macOS, Apple Silicon.** A prebuilt binary is downloaded — nothing is compiled on your machine, and Bun is not needed.
+**macOS (Apple Silicon) and Linux (x64, arm64).** A prebuilt binary is downloaded — nothing is compiled on your machine, and Bun is not needed. The installer detects your platform on its own.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cristianizzo/axa-chat/main/install.sh | bash
@@ -31,10 +31,14 @@ Then run `axa` and use the `/login` command to authenticate with your preferred 
 
 > **If you already have an `axa` shell function or alias**, it wins over anything on your PATH and the newly installed binary will not be what runs. The installer checks for this and says so instead of reporting success; follow what it prints.
 
+> **Linux credential storage is plaintext-file only.** There is no OS keychain/secret-store (libsecret) integration yet — tracked by the `TODO: add libsecret support for Linux` in `src/utils/secureStorage/index.ts`. Your API key or OAuth token is stored unencrypted on disk, same as building from source already behaves today. macOS is unaffected and continues to use Keychain.
+
 <details>
 <summary>Downloading the binary by hand instead</summary>
 
-Grab `axa-<version>-darwin-arm64.tar.gz` and its `.sha256` from the [latest release](https://github.com/cristianizzo/axa-chat/releases), then:
+Grab the archive and its `.sha256` for your platform from the [latest release](https://github.com/cristianizzo/axa-chat/releases) — `axa-<version>-darwin-arm64.tar.gz`, `axa-<version>-linux-x64.tar.gz`, or `axa-<version>-linux-arm64.tar.gz` — then:
+
+**macOS:**
 
 ```bash
 shasum -a 256 -c axa-<version>-darwin-arm64.tar.gz.sha256
@@ -45,6 +49,16 @@ xattr -d com.apple.quarantine axa && chmod +x axa
 The `xattr` line is not optional. A browser marks its downloads with `com.apple.quarantine`, and a bare executable (as opposed to a `.app` or a `.pkg`) that carries that flag is **hard-blocked** by Gatekeeper — there is no right-click → Open escape hatch for this file shape. Clearing the flag yourself is the only way through, and it means you are vouching for the download, which is what the checksum above is for.
 
 `curl` sets no quarantine flag, which is why the one-liner needs none of this.
+
+**Linux:**
+
+```bash
+sha256sum -c axa-<version>-linux-x64.tar.gz.sha256   # or shasum -a 256 -c, if present
+tar -xzf axa-<version>-linux-x64.tar.gz
+chmod +x axa
+```
+
+No Gatekeeper equivalent, so no quarantine attribute to clear.
 
 </details>
 
@@ -249,8 +263,8 @@ between accounts you have already authenticated.
 
 To **install and run** the released binary:
 
-- **OS**: macOS on Apple Silicon (arm64). This is the only published artifact; see below.
-- **Tools**: `curl`, `tar`, `shasum` — all present on a stock macOS.
+- **OS**: macOS on Apple Silicon (arm64), or Linux on x64 or arm64. These are the only published artifacts; see below.
+- **Tools**: `curl`, `tar`, and a SHA-256 tool — `shasum` on macOS and most desktop Linux, `sha256sum` elsewhere. `install.sh` resolves whichever is present.
 - **Auth**: An API key or OAuth login for your chosen provider.
 
 No Bun, no toolchain, no compiler: the binary is self-contained.
@@ -261,11 +275,11 @@ To **build from source** you additionally need [Bun](https://bun.sh) >= 1.4.0:
 curl -fsSL https://bun.sh/install | bash
 ```
 
-### Why only macOS arm64
+### Why not every platform
 
-The build passes `--target bun` to `bun build --compile`, which produces a binary for the machine it runs on. Every additional platform is therefore another release runner producing an artifact nobody here can run on real hardware before publishing it. Publishing an untested `darwin-x64` or Linux build would be worse than publishing none, so `install.sh` refuses on those platforms and points here rather than failing obscurely.
+`scripts/build.ts` passes `--target bun` to `bun build --compile` by default, which produces a binary for the machine it runs on — that is still exactly what the macOS release does. Each published Linux artifact comes from its own release job running on real x64 or arm64 Linux hardware, passing an explicit `--target bun-linux-x64` / `--target bun-linux-arm64` override instead of relying on the host. Every additional platform is therefore another release runner producing an artifact that has to be built and smoke-tested on real hardware before publishing — which is why `darwin-x64` still is not published: publishing an untested cross-build would be worse than publishing none, so `install.sh` refuses on that combination and points here rather than failing obscurely.
 
-Building from source works anywhere Bun does, including Linux and Intel Macs. What is unsupported is the *released* binary, not the project.
+Building from source works anywhere Bun does, including Intel Macs. What is unsupported there is the *released* binary, not the project.
 
 ---
 
@@ -287,6 +301,15 @@ bun run build:dev
 | `bun run build:dev` | `./cli-dev` | `VOICE_MODE` only | Dev version stamp |
 | `bun run build:dev:full` | `./cli-dev` | All 54 experimental flags | Full unlock build |
 | `bun run compile` | `./dist/cli` | `VOICE_MODE` only | Alternative output path |
+
+Every variant above defaults to `--target bun`, Bun's host-only compile target — the output is a binary for whatever machine the build runs on. Pass `--target` yourself to cross-compile for a different one, e.g.:
+
+```bash
+bun run ./scripts/build.ts --target bun-linux-x64 --outfile ./axa-linux-x64
+bun run ./scripts/build.ts --target bun-linux-arm64 --outfile ./axa-linux-arm64
+```
+
+The release workflow's two Linux jobs pass this explicitly too, even though each runs on a native runner for its own architecture (so the flag is not actually cross-compiling there) — stating the target rather than relying on the host keeps the build correct even if a future runner image changes architecture. See [Why not every platform](#why-not-every-platform).
 
 ### Update & Rebuild
 
