@@ -74,6 +74,18 @@ export function hasCredentialsForAuthProvider(id: AuthProviderId): boolean {
 }
 
 /**
+ * A `/switch-account --session` choice, held only in this process's memory.
+ *
+ * Deliberately not written through saveGlobalConfig: the global config is
+ * shared by every axa process on the machine, so a disk write would move the
+ * default for every other terminal, not just this one. A module-level
+ * variable is scoped to this process by construction — nothing else can read
+ * it — which is exactly the "this terminal only" behaviour a debug switch
+ * needs, with no extra plumbing.
+ */
+let sessionAuthProviderOverride: AuthProviderId | undefined
+
+/**
  * The provider whose account this session is using.
  *
  * try/catch: callers include getAPIProvider, which runs while main.tsx builds
@@ -86,6 +98,14 @@ export function hasCredentialsForAuthProvider(id: AuthProviderId): boolean {
  * @returns The active provider ID, defaulting to Anthropic
  */
 export function getActiveAuthProvider(): AuthProviderId {
+  // Checked before the persisted value: a session override exists only when
+  // this process explicitly asked for a local-only switch, and that ask must
+  // win over whatever another terminal has since written to the shared
+  // config — otherwise the override would silently stop applying the moment
+  // any other axa process ran /switch-account.
+  if (sessionAuthProviderOverride) {
+    return sessionAuthProviderOverride
+  }
   try {
     const config = getGlobalConfig()
     if (isAuthProviderId(config.activeAuthProvider)) {
@@ -102,17 +122,57 @@ export function getActiveAuthProvider(): AuthProviderId {
 /**
  * Records the provider a login authenticated, or that `/switch-account` selected.
  *
+ * Clears any session override first: a persistent switch is a stronger
+ * statement of intent than a session-only one that may have preceded it in
+ * this same process, and without this the override would keep winning in
+ * getActiveAuthProvider, making the persistent switch silently not apply for
+ * the rest of this terminal's life.
+ *
  * @param id - The provider now in use
  */
 export function setActiveAuthProvider(id: AuthProviderId): void {
+  sessionAuthProviderOverride = undefined
   saveGlobalConfig(config => ({ ...config, activeAuthProvider: id }))
+}
+
+/**
+ * Makes the given provider active for this process only, bypassing the
+ * global config entirely. Used by `/switch-account --session`, a debug
+ * convenience for trying another account without changing the default every
+ * other running (or future) axa terminal resolves to.
+ *
+ * @param id - The provider to use for the remainder of this process
+ */
+export function setActiveAuthProviderForSession(id: AuthProviderId): void {
+  sessionAuthProviderOverride = id
+}
+
+/**
+ * Whether this process is currently running on a session-only override.
+ *
+ * onChangeAppState uses this to decide whether a model change should be
+ * written to the shared config: while an override is active, the account
+ * getActiveAuthProvider reports isn't the persisted one, so recording a model
+ * against it — or against the user's global default — would attach session-only
+ * state to accounts other terminals don't know this session is using.
+ *
+ * @returns True while a session override is active
+ */
+export function hasSessionAuthProviderOverride(): boolean {
+  return sessionAuthProviderOverride !== undefined
 }
 
 /**
  * Forgets the active provider, so resolution falls back to whatever credentials
  * remain. Called on logout.
+ *
+ * Also clears any session override, for the same reason setActiveAuthProvider
+ * does: logging out is a stronger statement than a prior session-only switch,
+ * and the override would otherwise keep resolving to a provider this process
+ * just logged out of.
  */
 export function clearActiveAuthProvider(): void {
+  sessionAuthProviderOverride = undefined
   saveGlobalConfig(config => ({ ...config, activeAuthProvider: undefined }))
 }
 

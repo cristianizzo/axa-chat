@@ -15,7 +15,9 @@ import { setMainLoopModelOverride } from '../../bootstrap/state.js'
 import {
   getActiveAuthProvider,
   hasCredentialsForAuthProvider,
+  hasSessionAuthProviderOverride,
   setActiveAuthProvider,
+  setActiveAuthProviderForSession,
   setStoredModelForProvider,
 } from '../../utils/activeAuthProvider.js'
 import { getGlobalConfig } from '../../utils/config.js'
@@ -62,19 +64,31 @@ function describeAccount(id: AuthProviderId): string {
  *
  * @param id - The provider to switch to
  * @param context - The command context, for reading and updating AppState
+ * @param sessionOnly - When true, the switch is kept in this process's memory
+ *   only (via setActiveAuthProviderForSession) instead of being written to the
+ *   shared global config, so no other axa terminal is affected
  * @returns The message to show the user
  */
 async function switchTo(
   id: AuthProviderId,
   context: LocalJSXCommandContext,
+  sessionOnly: boolean = false,
 ): Promise<string> {
   const outgoing = getActiveAuthProvider()
+  // If the outgoing identity is itself a session-only override, it has no
+  // persisted record to begin with — writing one here would leak this
+  // process's local state into the shared config other terminals read.
+  const outgoingIsSessionOnly = hasSessionAuthProviderOverride()
   const outgoingModel = context.getAppState().mainLoopModel
-  if (typeof outgoingModel === 'string') {
+  if (typeof outgoingModel === 'string' && !outgoingIsSessionOnly) {
     setStoredModelForProvider(outgoing, outgoingModel)
   }
 
-  setActiveAuthProvider(id)
+  if (sessionOnly) {
+    setActiveAuthProviderForSession(id)
+  } else {
+    setActiveAuthProvider(id)
+  }
   await clearAuthRelatedCaches()
 
   // Signature-bearing blocks (thinking, connector_text) are bound to the
@@ -98,15 +112,18 @@ async function switchTo(
   setMainLoopModelOverride(target)
 
   const model = renderModelSetting(target ?? getDefaultMainLoopModelSetting())
-  return `Switched to ${describeAccount(id)} · model: ${model}`
+  const suffix = sessionOnly ? ' (this session only)' : ''
+  return `Switched to ${describeAccount(id)}${suffix} · model: ${model}`
 }
 
 function SwitchAccount({
   onDone,
   context,
+  sessionOnly,
 }: {
   onDone: LocalJSXCommandOnDone
   context: LocalJSXCommandContext
+  sessionOnly: boolean
 }): React.ReactNode {
   const active = getActiveAuthProvider()
   const available = ALL_PROVIDERS.filter(provider =>
@@ -132,7 +149,11 @@ function SwitchAccount({
         defaultValue={active}
         onChange={value => {
           void (async () => {
-            const message = await switchTo(value as AuthProviderId, context)
+            const message = await switchTo(
+              value as AuthProviderId,
+              context,
+              sessionOnly,
+            )
             context.onChangeAPIKey()
             onDone(message)
           })()
@@ -147,7 +168,14 @@ export async function call(
   context: LocalJSXCommandContext,
   args?: string,
 ): Promise<React.ReactNode> {
-  const requested = resolveProviderAlias(args ?? '')
+  // --session is a debug convenience: strip it out of the argument before
+  // resolving the provider name, so `/switch-account ollama --session` and
+  // `/switch-account --session ollama` both work regardless of order.
+  const tokens = (args ?? '').trim().split(/\s+/).filter(Boolean)
+  const sessionOnly = tokens.some(token => token === '--session')
+  const providerArg = tokens.filter(token => token !== '--session').join(' ')
+
+  const requested = resolveProviderAlias(providerArg)
   if (requested) {
     if (!hasCredentialsForAuthProvider(requested)) {
       onDone(
@@ -155,7 +183,7 @@ export async function call(
       )
       return null
     }
-    onDone(await switchTo(requested, context))
+    onDone(await switchTo(requested, context, sessionOnly))
     context.onChangeAPIKey()
     return null
   }
@@ -170,5 +198,7 @@ export async function call(
     return null
   }
 
-  return <SwitchAccount onDone={onDone} context={context} />
+  return (
+    <SwitchAccount onDone={onDone} context={context} sessionOnly={sessionOnly} />
+  )
 }
