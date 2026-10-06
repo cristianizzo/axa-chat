@@ -41,6 +41,7 @@ import { createCodexFetch } from './codex-fetch-adapter.js'
 import { createCountTokensShim } from './count-tokens-shim.js'
 import { createDeepSeekFetch } from './deepseek-fetch-adapter.js'
 import { createGrokFetch } from './grok-fetch-adapter.js'
+import { createOllamaFetch } from './ollama-fetch-adapter.js'
 import { limitRequestConcurrency } from './requestLimiter.js'
 
 type FetchFn = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -121,14 +122,17 @@ const PROVIDER_CLIENT_BUILDERS: Record<
       return undefined
     }
     return {
-      apiKey: null,
-      // A local daemon ignores the token, so any non-empty placeholder works;
-      // Ollama Cloud expects a real one. It is sent as `Authorization: Bearer`,
-      // which is what the SDK's `authToken` produces.
-      authToken: ollama.authToken || 'ollama',
-      baseURL: ollama.baseUrl,
-      // The daemon has no count_tokens endpoint; answer that one path locally.
-      fetch: createCountTokensShim(base),
+      // The SDK insists on a key; the fetch adapter is what actually talks to
+      // the daemon, using ollama.authToken (or the ignored-locally placeholder)
+      // as the Bearer token. Mirror of the Codex/DeepSeek/Grok placeholder.
+      apiKey: 'ollama-placeholder',
+      // No baseURL override: the adapter below builds the full native-endpoint
+      // URL itself from ollama.baseUrl, the same way createCodexFetch and
+      // createDeepSeekFetch target their own hosts regardless of the SDK's
+      // default baseURL. Translates through `/api/chat` instead of the
+      // Anthropic-compat `/v1/messages` shim this used to point at — that shim
+      // never surfaced the daemon's prompt/KV cache (see config/ollama.ts).
+      fetch: createOllamaFetch(ollama.baseUrl, ollama.authToken || 'ollama', base),
     }
   },
 

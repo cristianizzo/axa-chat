@@ -56,6 +56,25 @@ function isAttributionHeaderEnabled(): boolean {
   return getFeatureValue_CACHED_MAY_BE_STALE('tengu_attribution_header', true)
 }
 
+// Backends that actually run Claude models and whose server validates the
+// cch/fingerprint scheme (see fingerprint.ts). Everything else — Codex, Grok,
+// DeepSeek, Kimi, Ollama — ignores the header outright, so sending it there
+// buys nothing. For Ollama specifically it is actively harmful: this text is
+// not a real HTTP header, it is spliced into the system PROMPT (see below),
+// and the fingerprint third of it is derived from conversation content, so it
+// changes from one turn to the next. Ollama's native `/api/chat` cache keys
+// on an exact prefix match of that prompt text, so a value this volatile sits
+// at the very front and invalidates the daemon's entire KV cache on every
+// single turn — measured: two turns of the same session reusing 0% of a
+// 20k-token prefix, with no speed difference from a cold request, until this
+// was excluded for 'ollama'.
+const ANTHROPIC_MODEL_API_PROVIDERS = new Set([
+  'firstParty',
+  'bedrock',
+  'vertex',
+  'foundry',
+])
+
 /**
  * Get attribution header for API requests.
  * Returns a header string with cc_version (including fingerprint) and cc_entrypoint.
@@ -68,6 +87,9 @@ function isAttributionHeaderEnabled(): boolean {
  */
 export function getAttributionHeader(fingerprint: string): string {
   if (!isAttributionHeaderEnabled()) {
+    return ''
+  }
+  if (!ANTHROPIC_MODEL_API_PROVIDERS.has(getAPIProvider())) {
     return ''
   }
 

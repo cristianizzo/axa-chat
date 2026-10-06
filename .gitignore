@@ -35,3 +35,4 @@ conversation-backup.jsonl
 .axa-install.json
 .axa-update.json
 .axa-update.json.lock
+.playwright-mcp/
