@@ -148,6 +148,21 @@ export function setActiveAuthProviderForSession(id: AuthProviderId): void {
 }
 
 /**
+ * Whether this process is currently running on a session-only override.
+ *
+ * onChangeAppState uses this to decide whether a model change should be
+ * written to the shared config: while an override is active, the account
+ * getActiveAuthProvider reports isn't the persisted one, so recording a model
+ * against it — or against the user's global default — would attach session-only
+ * state to accounts other terminals don't know this session is using.
+ *
+ * @returns True while a session override is active
+ */
+export function hasSessionAuthProviderOverride(): boolean {
+  return sessionAuthProviderOverride !== undefined
+}
+
+/**
  * Forgets the active provider, so resolution falls back to whatever credentials
  * remain. Called on logout.
  *

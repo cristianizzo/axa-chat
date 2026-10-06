@@ -15,6 +15,7 @@ import { setMainLoopModelOverride } from '../../bootstrap/state.js'
 import {
   getActiveAuthProvider,
   hasCredentialsForAuthProvider,
+  hasSessionAuthProviderOverride,
   setActiveAuthProvider,
   setActiveAuthProviderForSession,
   setStoredModelForProvider,
@@ -74,8 +75,12 @@ async function switchTo(
   sessionOnly: boolean = false,
 ): Promise<string> {
   const outgoing = getActiveAuthProvider()
+  // If the outgoing identity is itself a session-only override, it has no
+  // persisted record to begin with — writing one here would leak this
+  // process's local state into the shared config other terminals read.
+  const outgoingIsSessionOnly = hasSessionAuthProviderOverride()
   const outgoingModel = context.getAppState().mainLoopModel
-  if (typeof outgoingModel === 'string') {
+  if (typeof outgoingModel === 'string' && !outgoingIsSessionOnly) {
     setStoredModelForProvider(outgoing, outgoingModel)
   }
 
@@ -114,9 +119,11 @@ async function switchTo(
 function SwitchAccount({
   onDone,
   context,
+  sessionOnly,
 }: {
   onDone: LocalJSXCommandOnDone
   context: LocalJSXCommandContext
+  sessionOnly: boolean
 }): React.ReactNode {
   const active = getActiveAuthProvider()
   const available = ALL_PROVIDERS.filter(provider =>
@@ -142,7 +149,11 @@ function SwitchAccount({
         defaultValue={active}
         onChange={value => {
           void (async () => {
-            const message = await switchTo(value as AuthProviderId, context)
+            const message = await switchTo(
+              value as AuthProviderId,
+              context,
+              sessionOnly,
+            )
             context.onChangeAPIKey()
             onDone(message)
           })()
@@ -187,5 +198,7 @@ export async function call(
     return null
   }
 
-  return <SwitchAccount onDone={onDone} context={context} />
+  return (
+    <SwitchAccount onDone={onDone} context={context} sessionOnly={sessionOnly} />
+  )
 }
