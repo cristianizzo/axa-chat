@@ -251,6 +251,23 @@ check_platform() {
         aarch64|arm64) PLATFORM="linux-arm64" ;;
         *) fail "Unsupported architecture: $arch" ;;
       esac
+      # The published Linux archive is a glibc build (Bun's bun-linux-x64/
+      # bun-linux-arm64 targets, built on ubuntu-latest/ubuntu-24.04-arm). A
+      # musl system — Alpine chief among them, which this script's shasum
+      # fallback above already anticipates — reports the same $os/$arch as a
+      # glibc host and would pass every check above, download successfully,
+      # and then fail to execute at all. Detect it two ways: `ldd --version`
+      # names "musl" on musl systems (glibc's prints "GNU libc"); Alpine's
+      # ldd is a busybox symlink that may not support --version at all, so
+      # also check for the musl dynamic loader directly, which exists on
+      # every musl system regardless of what ldd does.
+      if (command -v ldd &>/dev/null && ldd --version 2>&1 | grep -qi musl) \
+        || ls /lib/ld-musl-*.so.1 &>/dev/null 2>&1; then
+        fail "axa's Linux build requires glibc; this system uses musl (e.g.
+    Alpine), which cannot run it. There is no musl build published. Build
+    from source instead:
+      https://github.com/${REPO_SLUG}#building-from-source"
+      fi
       ok "Platform: Linux $arch ($PLATFORM)"
       # Credential storage on Linux is plaintext-file only: there is no
       # libsecret integration yet (tracked by the "TODO: add libsecret support

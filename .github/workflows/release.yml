@@ -56,6 +56,17 @@ on:
 permissions:
   contents: write
 
+# All three jobs read-modify-write the same stable-channel manifest.json, and
+# `needs:` only orders jobs within a single run — it does nothing to stop two
+# *runs* (a tag push racing a manual workflow_dispatch re-publish, or two tags
+# pushed close together) from interleaving their reads and writes of that same
+# file. One shared group with no cancel-in-progress queues runs instead of
+# racing them; cancelling would be worse, since it could kill a run mid-upload
+# and leave the channel manifest listing a platform whose asset never finished.
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
 env:
   CHANNEL: stable
   PLATFORM: darwin-arm64
