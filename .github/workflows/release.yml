@@ -530,6 +530,26 @@ jobs:
           tag="${{ steps.tag.outputs.tag }}"
           version="${{ steps.tag.outputs.version }}"
 
+          # `queue: max` serializes these runs but does not guarantee they
+          # finish in tag order — GitHub documents FIFO only for the point a
+          # run starts *waiting*, not for when it completes. Two tags pushed
+          # close together can therefore have the older one's publish-channel
+          # job finish last. Refuse to move the pointer backward: compare
+          # against whatever VERSION the channel already has, and skip (not
+          # fail — this run's own versioned release is still published and
+          # correct) when the channel is already at this version or newer.
+          current_version=""
+          if gh release view "$CHANNEL" >/dev/null 2>&1; then
+            current_version="$(gh release download "$CHANNEL" -p VERSION -O - 2>/dev/null | tr -d '[:space:]' || true)"
+          fi
+          if [ -n "$current_version" ] && [ "$current_version" != "$version" ]; then
+            newest="$(printf '%s\n%s\n' "$current_version" "$version" | sort -V | tail -1)"
+            if [ "$newest" != "$version" ]; then
+              echo "::notice::stable channel is already at $current_version, which is newer than or equal to this run's $version. Not moving the pointer backward."
+              exit 0
+            fi
+          fi
+
           # The versioned release's own manifest.json is the complete,
           # three-platform one by this point: the macOS job wrote it with
           # darwin-arm64, and each Linux job merged its own platform into
