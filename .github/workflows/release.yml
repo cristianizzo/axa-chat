@@ -12,9 +12,13 @@ name: release
 #
 #   v<version>/axa-<version>-darwin-arm64.tar.gz          one file: `axa`
 #   v<version>/axa-<version>-darwin-arm64.tar.gz.sha256   `shasum -c` format
-#   v<version>/manifest.json
+#   v<version>/axa-<version>-linux-x64.tar.gz             one file: `axa`
+#   v<version>/axa-<version>-linux-x64.tar.gz.sha256      `sha256sum -c` format
+#   v<version>/axa-<version>-linux-arm64.tar.gz           one file: `axa`
+#   v<version>/axa-<version>-linux-arm64.tar.gz.sha256    `sha256sum -c` format
+#   v<version>/manifest.json                              one `platforms` map, all three
 #   <channel>/VERSION                                     plain text, one line
-#   <channel>/manifest.json
+#   <channel>/manifest.json                               same merged map
 #
 # The channel release is a rolling one whose assets are replaced each time. Its
 # tag moves, which is deliberate and is the reason its assets are a pointer and
@@ -27,7 +31,21 @@ name: release
 # Two consumers, two formats, on purpose. `install.sh` is bash with no JSON
 # parser it can rely on, so it reads the plain-text VERSION and the `.sha256`
 # sidecar. The in-process updater has JSON.parse, so it reads manifest.json.
-# Both are generated below from one `shasum` run, so they cannot disagree.
+# Both are generated below from one hashing run per platform, so they cannot
+# disagree.
+#
+# Four jobs, not one matrix: the macOS job is otherwise unchanged from before
+# Linux existed, and each Linux job depends on the previous one rather than
+# running in parallel with it, because both write the same versioned
+# manifest.json back onto the same release — `needs:` is what keeps that
+# read-modify-write from racing itself. Each build job smoke-tests on the
+# architecture it publishes, but against that version's own release fetched
+# via `install.sh --version`, never against the channel: the channel pointer
+# has not moved yet at that point, and moving it before every platform is
+# confirmed uploaded and working is exactly the bug the final
+# `publish-channel` job below exists to avoid. `scripts/build.ts --target` is
+# passed explicitly rather than left to default to the host, so a
+# runner-image change cannot silently swap what gets built.
 
 on:
   push:
@@ -43,18 +61,37 @@ on:
 permissions:
   contents: write
 
+# All jobs read-modify-write the same stable-channel manifest.json, and
+# `needs:` only orders jobs within a single run — it does nothing to stop two
+# *runs* (a tag push racing a manual workflow_dispatch re-publish, or two tags
+# pushed close together) from interleaving their reads and writes of that same
+# file. One shared group with no cancel-in-progress queues runs instead of
+# racing them; cancelling would be worse, since it could kill a run mid-upload
+# and leave the channel manifest listing a platform whose asset never finished.
+#
+# `queue: max` matters as much as the group itself: the default `queue: single`
+# keeps only the most recently queued run pending and cancels any earlier one
+# still waiting, so a third tag pushed while a second is queued behind a first
+# would silently drop the second tag's release. `queue: max` lets up to 100
+# runs queue and each still runs to completion, in order.
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+  queue: max
+
 env:
   CHANNEL: stable
   PLATFORM: darwin-arm64
 
 jobs:
   release:
-    # macos-15 is Apple Silicon. Deliberately one runner and one artifact:
-    # `scripts/build.ts` passes `--target bun`, which is host-only, so every
-    # additional platform is another runner producing an artifact nobody here
-    # can verify on real hardware. Publishing an untested darwin-x64 build
-    # would be worse than publishing none — install.sh says so explicitly
-    # rather than failing obscurely.
+    # macos-15 is Apple Silicon. This job's own steps are unchanged from
+    # before Linux publishing existed. `scripts/build.ts` passes `--target
+    # bun`, which is host-only, so darwin-x64 is still not published: an
+    # untested cross-build would be worse than publishing none — install.sh
+    # says so explicitly rather than failing obscurely. Linux is published by
+    # the two jobs below instead of by widening this one, because each needs
+    # its own real hardware to build and smoke-test on, same reasoning.
     runs-on: macos-15
     timeout-minutes: 45
 
@@ -206,14 +243,323 @@ jobs:
             "out/manifest.json" \
             --clobber
 
+      - name: Smoke-test this version's own release, not the channel
+        run: |
+          set -euo pipefail
+          # Installs the versioned release directly via `--version`, bypassing
+          # the stable channel entirely. The channel pointer has not moved yet
+          # — it is moved only once by the final `publish-channel` job below,
+          # after every platform's artifact and smoke test have succeeded —
+          # so a smoke test against the channel here would still be exercising
+          # last release's install, not this one.
+          prefix="$(mktemp -d)"
+          AXA_BIN_DIR="$prefix/bin" AXA_DATA_DIR="$prefix/share/axa" \
+            bash ./install.sh --version "${{ steps.tag.outputs.version }}"
+          "$prefix/bin/axa" --version
+          test -L "$prefix/bin/axa"
+
+  release-linux-x64:
+    # Depends on the macOS job rather than running alongside it: this job
+    # downloads out/manifest.json from the versioned release, adds a
+    # `linux-x64` entry, and re-uploads it with --clobber. Running in
+    # parallel with the macOS job would race that read-modify-write against
+    # the macOS job's own first write of manifest.json.
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PLATFORM: linux-x64
+      BUN_TARGET: bun-linux-x64
+
+    steps:
+      - name: Resolve the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          AXA_SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export AXA_SOURCE_DATE_EPOCH
+          bun run build:release \
+            --version-tag "${{ steps.tag.outputs.version }}" \
+            --target "$BUN_TARGET" \
+            --outfile ./axa.next
+          mv -f ./axa.next ./axa
+          chmod 755 ./axa
+
+      - name: Verify the binary runs and reports the tagged version
+        run: |
+          set -euo pipefail
+          reported="$(./axa --version 2>&1 | tr -d '[:space:]' || true)"
+          echo "axa --version -> $reported"
+          case "$reported" in
+            *"${{ steps.tag.outputs.version }}"*) ;;
+            *)
+              echo "::error::The built binary does not report ${{ steps.tag.outputs.version }}."
+              echo "::error::Refusing to publish an artifact that cannot identify itself."
+              exit 1
+              ;;
+          esac
+
+      - name: Package and checksum
+        id: package
+        run: |
+          set -euo pipefail
+          version="${{ steps.tag.outputs.version }}"
+          archive="axa-${version}-${PLATFORM}.tar.gz"
+
+          mkdir -p out
+          tar -czf "out/${archive}" axa
+          ( cd out && sha256sum "${archive}" > "${archive}.sha256" )
+
+          {
+            echo "archive=$archive"
+            echo "sha256=$(awk '{print $1}' "out/${archive}.sha256")"
+            echo "size=$(wc -c < "out/${archive}" | tr -d ' ')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload the archive and add this platform to manifest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          archive="${{ steps.package.outputs.archive }}"
+
+          gh release upload "$tag" "out/${archive}" "out/${archive}.sha256" --clobber
+
+          # Read-modify-write against the manifest the macOS job already
+          # published, rather than generating a fresh one: this job must add
+          # a platforms entry, not replace the darwin-arm64 one.
+          gh release download "$tag" -p manifest.json -D out --clobber
+          jq \
+            --arg platform "$PLATFORM" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${archive}" \
+            --arg sha256 "${{ steps.package.outputs.sha256 }}" \
+            --argjson size "${{ steps.package.outputs.size }}" \
+            '.platforms[$platform] = {url:$url, sha256:$sha256, size:$size}' \
+            out/manifest.json > out/manifest.next.json
+          mv out/manifest.next.json out/manifest.json
+          gh release upload "$tag" out/manifest.json --clobber
+
+          echo "--- manifest.json ---"
+          cat out/manifest.json
+
+      - name: Smoke-test this version's own release, not the channel
+        run: |
+          set -euo pipefail
+          # Same reasoning as the macOS job: the channel pointer has not
+          # moved yet, so this installs the versioned release directly.
+          prefix="$(mktemp -d)"
+          AXA_BIN_DIR="$prefix/bin" AXA_DATA_DIR="$prefix/share/axa" \
+            bash ./install.sh --version "${{ steps.tag.outputs.version }}"
+          "$prefix/bin/axa" --version
+          test -L "$prefix/bin/axa"
+
+  release-linux-arm64:
+    # Depends on the x64 Linux job, not on `release` directly: this is the
+    # second write to the same manifest.json, and chaining the two Linux jobs
+    # serialises them the same way the x64 job is serialised after macOS.
+    needs: release-linux-x64
+    # GA, free-tier hosted Arm64 Linux runner (see actions/runner-images). Real
+    # hardware, same reasoning as macos-15 and ubuntu-latest above: an
+    # untested cross-build would be worse than publishing none.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    env:
+      PLATFORM: linux-arm64
+      BUN_TARGET: bun-linux-arm64
+
+    steps:
+      - name: Resolve the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          AXA_SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export AXA_SOURCE_DATE_EPOCH
+          bun run build:release \
+            --version-tag "${{ steps.tag.outputs.version }}" \
+            --target "$BUN_TARGET" \
+            --outfile ./axa.next
+          mv -f ./axa.next ./axa
+          chmod 755 ./axa
+
+      - name: Verify the binary runs and reports the tagged version
+        run: |
+          set -euo pipefail
+          reported="$(./axa --version 2>&1 | tr -d '[:space:]' || true)"
+          echo "axa --version -> $reported"
+          case "$reported" in
+            *"${{ steps.tag.outputs.version }}"*) ;;
+            *)
+              echo "::error::The built binary does not report ${{ steps.tag.outputs.version }}."
+              echo "::error::Refusing to publish an artifact that cannot identify itself."
+              exit 1
+              ;;
+          esac
+
+      - name: Package and checksum
+        id: package
+        run: |
+          set -euo pipefail
+          version="${{ steps.tag.outputs.version }}"
+          archive="axa-${version}-${PLATFORM}.tar.gz"
+
+          mkdir -p out
+          tar -czf "out/${archive}" axa
+          ( cd out && sha256sum "${archive}" > "${archive}.sha256" )
+
+          {
+            echo "archive=$archive"
+            echo "sha256=$(awk '{print $1}' "out/${archive}.sha256")"
+            echo "size=$(wc -c < "out/${archive}" | tr -d ' ')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload the archive and add this platform to manifest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          archive="${{ steps.package.outputs.archive }}"
+
+          gh release upload "$tag" "out/${archive}" "out/${archive}.sha256" --clobber
+
+          gh release download "$tag" -p manifest.json -D out --clobber
+          jq \
+            --arg platform "$PLATFORM" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${archive}" \
+            --arg sha256 "${{ steps.package.outputs.sha256 }}" \
+            --argjson size "${{ steps.package.outputs.size }}" \
+            '.platforms[$platform] = {url:$url, sha256:$sha256, size:$size}' \
+            out/manifest.json > out/manifest.next.json
+          mv out/manifest.next.json out/manifest.json
+          gh release upload "$tag" out/manifest.json --clobber
+
+          echo "--- manifest.json ---"
+          cat out/manifest.json
+
+      - name: Smoke-test this version's own release, not the channel
+        run: |
+          set -euo pipefail
+          # Same reasoning as the macOS job: the channel pointer has not
+          # moved yet, so this installs the versioned release directly.
+          prefix="$(mktemp -d)"
+          AXA_BIN_DIR="$prefix/bin" AXA_DATA_DIR="$prefix/share/axa" \
+            bash ./install.sh --version "${{ steps.tag.outputs.version }}"
+          "$prefix/bin/axa" --version
+          test -L "$prefix/bin/axa"
+
+  publish-channel:
+    # Runs only once every platform's artifact has been uploaded to the
+    # versioned release AND its own smoke test (against that versioned
+    # release directly, via `--version`) has passed. Moving the channel
+    # pointer earlier — as the macOS job used to do — made the new version
+    # visible to every installed copy before the Linux artifacts existed: a
+    # Linux install in that window would resolve the new version from
+    # `stable/VERSION` and then 404 on an archive that had not been uploaded
+    # yet, or was never uploaded because a later job failed.
+    needs: [release, release-linux-x64, release-linux-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Resolve the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
       - name: Move the channel pointer
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Last, and only once the versioned release is fully uploaded: this
-          # is the step that makes the new version visible to every installed
-          # copy, and it must never point at assets that are not there yet.
+          tag="${{ steps.tag.outputs.tag }}"
+          version="${{ steps.tag.outputs.version }}"
+
+          # `queue: max` serializes these runs but does not guarantee they
+          # finish in tag order — GitHub documents FIFO only for the point a
+          # run starts *waiting*, not for when it completes. Two tags pushed
+          # close together can therefore have the older one's publish-channel
+          # job finish last. Refuse to move the pointer backward: compare
+          # against whatever VERSION the channel already has, and skip (not
+          # fail — this run's own versioned release is still published and
+          # correct) when the channel is already at this version or newer.
+          current_version=""
+          if gh release view "$CHANNEL" >/dev/null 2>&1; then
+            current_version="$(gh release download "$CHANNEL" -p VERSION -O - 2>/dev/null | tr -d '[:space:]' || true)"
+          fi
+          if [ -n "$current_version" ] && [ "$current_version" != "$version" ]; then
+            newest="$(printf '%s\n%s\n' "$current_version" "$version" | sort -V | tail -1)"
+            if [ "$newest" != "$version" ]; then
+              echo "::notice::stable channel is already at $current_version, which is newer than or equal to this run's $version. Not moving the pointer backward."
+              exit 0
+            fi
+          fi
+
+          # The versioned release's own manifest.json is the complete,
+          # three-platform one by this point: the macOS job wrote it with
+          # darwin-arm64, and each Linux job merged its own platform into
+          # that same file. Reusing it (rather than re-deriving anything)
+          # means the channel manifest can never disagree with the one the
+          # versioned release already serves.
+          mkdir -p out
+          gh release download "$tag" -p manifest.json -D out --clobber
+          printf '%s\n' "$version" > out/VERSION
+
           if ! gh release view "$CHANNEL" >/dev/null 2>&1; then
             gh release create "$CHANNEL" \
               --title "Channel: $CHANNEL" \
@@ -225,9 +571,9 @@ jobs:
       - name: Smoke-test the published channel end to end
         run: |
           set -euo pipefail
-          # Installs from the real URLs into a throwaway prefix on the runner.
-          # This is the step that would have caught a manifest pointing at an
-          # asset that does not exist, which is invisible to every check above.
+          # Installs from the real channel URL, the path every existing
+          # install actually uses. This is the step that would have caught a
+          # channel manifest pointing at an asset that does not exist.
           prefix="$(mktemp -d)"
           AXA_BIN_DIR="$prefix/bin" AXA_DATA_DIR="$prefix/share/axa" \
             bash ./install.sh
