@@ -21,7 +21,7 @@
 
 ## Quick Install
 
-**macOS (Apple Silicon) and Linux (x64, arm64).** A prebuilt binary is downloaded — nothing is compiled on your machine, and Bun is not needed. The installer detects your platform on its own.
+**macOS (Apple Silicon) and glibc-based Linux (x64, arm64).** A prebuilt binary is downloaded — nothing is compiled on your machine, and Bun is not needed. The installer detects your platform on its own, and refuses with source-build guidance on a musl-based Linux (e.g. Alpine), which cannot run a glibc-linked binary.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cristianizzo/axa-chat/main/install.sh | bash
@@ -263,7 +263,7 @@ between accounts you have already authenticated.
 
 To **install and run** the released binary:
 
-- **OS**: macOS on Apple Silicon (arm64), or Linux on x64 or arm64. These are the only published artifacts; see below.
+- **OS**: macOS on Apple Silicon (arm64), or glibc-based Linux on x64 or arm64 (musl distros such as Alpine are not supported — see below). These are the only published artifacts; see below.
 - **Tools**: `curl`, `tar`, and a SHA-256 tool — `shasum` on macOS and most desktop Linux, `sha256sum` elsewhere. `install.sh` resolves whichever is present.
 - **Auth**: An API key or OAuth login for your chosen provider.
 
