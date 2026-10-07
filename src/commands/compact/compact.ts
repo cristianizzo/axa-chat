@@ -7,6 +7,7 @@ import { getShortcutDisplay } from '../../keybindings/shortcutFormat.js'
 import { notifyCompaction } from '../../services/api/promptCacheBreakDetection.js'
 import {
   type CompactionResult,
+  COMPACT_STAGE_PERCENT,
   compactConversation,
   ERROR_MESSAGE_INCOMPLETE_RESPONSE,
   ERROR_MESSAGE_NOT_ENOUGH_MESSAGES,
@@ -149,6 +150,7 @@ async function compactViaReactive(
   context.onCompactProgress?.({
     type: 'hooks_start',
     hookType: 'pre_compact',
+    percent: COMPACT_STAGE_PERCENT.preCompactHooks,
   })
   context.setSDKStatus?.('compacting')
 
@@ -170,7 +172,16 @@ async function compactViaReactive(
 
     context.setStreamMode?.('requesting')
     context.setResponseLength?.(() => 0)
-    context.onCompactProgress?.({ type: 'compact_start' })
+    // No session_start/post_compact progress events on this path —
+    // reactiveCompactOnPromptTooLong runs PostCompact hooks internally
+    // without a progress callback, so the bar holds at `summarizing` and
+    // then disappears at compact_end rather than advancing through the
+    // later stages. Honest about what's tracked, just a shorter visible
+    // sequence than the compactConversation path.
+    context.onCompactProgress?.({
+      type: 'compact_start',
+      percent: COMPACT_STAGE_PERCENT.summarizing,
+    })
 
     const outcome = await reactive.reactiveCompactOnPromptTooLong(
       messages,

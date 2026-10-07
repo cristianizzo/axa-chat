@@ -151,8 +151,17 @@ export type CompactProgressEvent =
   | {
       type: 'hooks_start'
       hookType: 'pre_compact' | 'post_compact' | 'session_start'
+      /**
+       * Which known stage of the fixed compaction sequence is starting, as a
+       * 0-100 position on a single overall bar. There is no sub-progress
+       * signal inside any stage (summarization in particular is one opaque
+       * LLM call), so this is honest only as "which stage are we entering" —
+       * not smooth progress through it. See COMPACT_STAGE_PERCENT in
+       * services/compact/compact.ts for the boundary values.
+       */
+      percent: number
     }
-  | { type: 'compact_start' }
+  | { type: 'compact_start'; percent: number }
   | { type: 'compact_end' }
 
 export type ToolUseContext = {
