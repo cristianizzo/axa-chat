@@ -2,6 +2,7 @@
  * EXPERIMENT: Session memory compaction
  */
 
+import type { CompactProgressEvent } from '../../Tool.js'
 import type { AgentId } from '../../types/ids.js'
 import type { HookResultMessage, Message } from '../../types/message.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -35,6 +36,7 @@ import {
 import {
   annotateBoundaryWithPreservedSegment,
   buildPostCompactMessages,
+  COMPACT_STAGE_PERCENT,
   type CompactionResult,
   createPlanAttachmentIfNeeded,
 } from './compact.js'
@@ -515,6 +517,18 @@ export async function trySessionMemoryCompaction(
   messages: Message[],
   agentId?: AgentId,
   autoCompactThreshold?: number,
+  /**
+   * Optional progress sink, same contract as the compactConversation /
+   * reactiveCompact paths (see COMPACT_STAGE_PERCENT in compact.ts). Only
+   * emitted once we're past every early `return null` below — this path has
+   * several cheap bail-outs (flag off, no session memory file, empty
+   * template, stale summarized-id) that fall through to the legacy
+   * compactConversation compactor, which emits its own full sequence
+   * starting at 0. Firing progress before those checks would make the bar
+   * jump forward and then snap back for every one of those common no-op
+   * cases.
+   */
+  onCompactProgress?: (event: CompactProgressEvent) => void,
 ): Promise<CompactionResult | null> {
   if (!shouldUseSessionMemoryCompaction()) {
     return null
@@ -565,6 +579,18 @@ export async function trySessionMemoryCompaction(
       logEvent('tengu_sm_compact_resumed_session', {})
     }
 
+    // Committed to an SM-compact attempt past this point for every outcome
+    // except the threshold-exceeded bail-out below, which only runs after
+    // session-start hooks have already executed — so it's safe to start the
+    // bar here without risking another backward snap. No pre-compact/
+    // post-compact hooks run on this path (unlike compactConversation), so
+    // the sequence is just this start boundary followed by sessionStartHooks
+    // below; percent scale matches COMPACT_STAGE_PERCENT elsewhere.
+    onCompactProgress?.({
+      type: 'compact_start',
+      percent: COMPACT_STAGE_PERCENT.summarizing,
+    })
+
     // Calculate the starting index for messages to keep
     // This starts from lastSummarizedIndex, expands to meet minimums,
     // and adjusts to not split tool_use/tool_result pairs
@@ -580,6 +606,11 @@ export async function trySessionMemoryCompaction(
       .slice(startIndex)
       .filter(m => !isCompactBoundaryMessage(m))
 
+    onCompactProgress?.({
+      type: 'hooks_start',
+      hookType: 'session_start',
+      percent: COMPACT_STAGE_PERCENT.sessionStartHooks,
+    })
     // Run session start hooks to restore CLAUDE.md and other context
     const hookResults = await processSessionStartHooks('compact', {
       model: getMainLoopModel(),

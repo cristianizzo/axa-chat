@@ -56,10 +56,23 @@ export const call: LocalCommandCall = async (args, context) => {
     // Try session memory compaction first if no custom instructions
     // (session memory compaction doesn't support custom instructions)
     if (!customInstructions) {
-      const sessionMemoryResult = await trySessionMemoryCompaction(
-        messages,
-        context.agentId,
-      )
+      // setSDKStatus/compact_end bracket the attempt regardless of outcome —
+      // trySessionMemoryCompaction only emits its internal stage events once
+      // committed (see its own doc comment), but a late internal error could
+      // still leave the bar stuck without this unconditional compact_end.
+      context.setSDKStatus?.('compacting')
+      let sessionMemoryResult: CompactionResult | null
+      try {
+        sessionMemoryResult = await trySessionMemoryCompaction(
+          messages,
+          context.agentId,
+          undefined,
+          context.onCompactProgress,
+        )
+      } finally {
+        context.setSDKStatus?.(null)
+        context.onCompactProgress?.({ type: 'compact_end' })
+      }
       if (sessionMemoryResult) {
         getUserContext.cache.clear?.()
         runPostCompactCleanup()
