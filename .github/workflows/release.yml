@@ -135,9 +135,27 @@ jobs:
 
       - name: Verify the binary runs and reports the tagged version
         run: |
-          set -euo pipefail
-          reported="$(./axa --version 2>&1 | tr -d '[:space:]' || true)"
-          echo "axa --version -> $reported"
+          set -uo pipefail
+          # Deliberately not `set -e` here: this step needs the exit status
+          # of `./axa --version` itself, not just whatever text made it to
+          # stdout before the process died. An earlier version of this check
+          # piped through `|| true`, which discarded that status entirely —
+          # a binary that prints the right version and is then SIGKILLed on
+          # exit (macOS code-signing validates lazily, per page, so a bad
+          # page can go untouched until teardown) read as a passing step.
+          # `codesign --verify` is checked separately below and is not a
+          # substitute for this: it rejects bun's compile-time signature on
+          # every binary this script produces, including ones that run to
+          # completion cleanly, so it cannot distinguish "will crash" from
+          # "will not" on its own.
+          reported="$(./axa --version 2>&1 | tr -d '[:space:]')"
+          status=$?
+          echo "axa --version -> $reported (exit $status)"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::./axa --version exited $status instead of 0."
+            echo "::error::Refusing to publish a binary that does not run to completion."
+            exit 1
+          fi
           case "$reported" in
             *"${{ steps.tag.outputs.version }}"*) ;;
             *)
@@ -146,6 +164,16 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Verify the code signature is self-consistent
+        run: |
+          set -euo pipefail
+          # Catches a bad signature directly, rather than hoping a crash
+          # happens to land inside the one command the step above runs.
+          # Only meaningful because the build step now force-re-signs the
+          # binary (scripts/build.ts) instead of shipping bun's own
+          # compile-time signature, which fails --strict unconditionally.
+          codesign --verify --strict ./axa
 
       - name: Package, checksum and write the manifest
         id: package

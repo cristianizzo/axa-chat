@@ -422,4 +422,33 @@ if (existsSync(outfile)) {
   chmodSync(outfile, 0o755)
 }
 
+/**
+ * `bun build --compile`'s own ad-hoc code signature is not reliably accepted
+ * by macOS's lazy per-page validator: measured directly, a binary built this
+ * way on one machine (or by CI's `oven-sh/setup-bun`-provisioned toolchain)
+ * ran fine on the machine that built it, then SIGKILLed with termination
+ * namespace CODESIGNING ("Invalid Page") on every launch on a different
+ * machine — the kernel validates each page against the Code Directory only
+ * when that page is first faulted in, so a mismatched page can go untouched
+ * for the entire lifetime of one process and still be reached by another.
+ * The crash reproduced deterministically; re-running `codesign --sign -
+ * --force` over the exact same on-disk bytes (no rebuild) made it disappear
+ * on every subsequent launch, which is why this re-signs here rather than
+ * trying to coax a correct signature out of bun's own `--compile` step.
+ *
+ * Signing is macOS-only; `codesign` does not exist elsewhere, and `--target
+ * bun` compiles for the host, so a non-darwin build never reaches this.
+ */
+if (existsSync(outfile) && process.platform === 'darwin') {
+  const sign = Bun.spawnSync({
+    cmd: ['codesign', '--sign', '-', '--force', outfile],
+    stdout: 'inherit',
+    stderr: 'inherit',
+  })
+  if (sign.exitCode !== 0) {
+    console.error(`\x1b[31m[error]\x1b[0m codesign failed to re-sign ${outfile}`)
+    process.exit(sign.exitCode ?? 1)
+  }
+}
+
 console.log(`Built ${outfile}`)
