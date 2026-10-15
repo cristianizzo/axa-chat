@@ -1480,6 +1480,11 @@ export function REPL({
   const visibleStreamingText = streamingText && showStreamingText ? streamingText.substring(0, streamingText.lastIndexOf('\n') + 1) || null : null;
   const [lastQueryCompletionTime, setLastQueryCompletionTime] = useState(0);
   const [spinnerMessage, setSpinnerMessage] = useState<string | null>(null);
+  // 0-100 while compacting; null the rest of the time. See onCompactProgress
+  // below and COMPACT_STAGE_PERCENT in services/compact/compact.ts — there
+  // is no sub-progress signal within a stage, so this jumps between a fixed
+  // set of boundaries rather than animating smoothly.
+  const [spinnerProgress, setSpinnerProgress] = useState<number | null>(null);
   const [spinnerColor, setSpinnerColor] = useState<keyof Theme | null>(null);
   const [spinnerShimmerColor, setSpinnerShimmerColor] = useState<keyof Theme | null>(null);
   const [isMessageSelectorVisible, setIsMessageSelectorVisible] = useState(false);
@@ -1583,6 +1588,7 @@ export function REPL({
     setStreamingText(null);
     setStreamingToolUses([]);
     setSpinnerMessage(null);
+    setSpinnerProgress(null);
     setSpinnerColor(null);
     setSpinnerShimmerColor(null);
     pickNewSpinnerTip();
@@ -2507,12 +2513,15 @@ export function REPL({
             setSpinnerColor('claudeBlue_FOR_SYSTEM_SPINNER');
             setSpinnerShimmerColor('claudeBlueShimmer_FOR_SYSTEM_SPINNER');
             setSpinnerMessage(event.hookType === 'pre_compact' ? 'Running PreCompact hooks\u2026' : event.hookType === 'post_compact' ? 'Running PostCompact hooks\u2026' : 'Running SessionStart hooks\u2026');
+            setSpinnerProgress(event.percent);
             break;
           case 'compact_start':
             setSpinnerMessage('Compacting conversation');
+            setSpinnerProgress(event.percent);
             break;
           case 'compact_end':
             setSpinnerMessage(null);
+            setSpinnerProgress(null);
             setSpinnerColor(null);
             setSpinnerShimmerColor(null);
             break;
@@ -4617,7 +4626,7 @@ export function REPL({
               {"external" === 'ant' && <TungstenLiveMonitor />}
               {feature('WEB_BROWSER_TOOL') ? WebBrowserPanelModule && <WebBrowserPanelModule.WebBrowserPanel /> : null}
               <Box flexGrow={1} />
-              {showSpinner && <SpinnerWithVerb mode={streamMode} spinnerTip={spinnerTip} responseLengthRef={responseLengthRef} apiMetricsRef={apiMetricsRef} overrideMessage={spinnerMessage} spinnerSuffix={stopHookSpinnerSuffix} verbose={verbose} loadingStartTimeRef={loadingStartTimeRef} totalPausedMsRef={totalPausedMsRef} pauseStartTimeRef={pauseStartTimeRef} overrideColor={spinnerColor} overrideShimmerColor={spinnerShimmerColor} hasActiveTools={inProgressToolUseIDs.size > 0} leaderIsIdle={!isLoading} />}
+              {showSpinner && <SpinnerWithVerb mode={streamMode} spinnerTip={spinnerTip} responseLengthRef={responseLengthRef} apiMetricsRef={apiMetricsRef} overrideMessage={spinnerMessage} overrideProgress={spinnerProgress} spinnerSuffix={stopHookSpinnerSuffix} verbose={verbose} loadingStartTimeRef={loadingStartTimeRef} totalPausedMsRef={totalPausedMsRef} pauseStartTimeRef={pauseStartTimeRef} overrideColor={spinnerColor} overrideShimmerColor={spinnerShimmerColor} hasActiveTools={inProgressToolUseIDs.size > 0} leaderIsIdle={!isLoading} />}
               {!showSpinner && !isLoading && !userInputOnProcessing && !hasRunningTeammates && isBriefOnly && !viewedAgentTask && <BriefIdleStatus />}
               {isFullscreenEnvEnabled() && <PromptInputQueuedCommands />}
             </>} bottom={<Box flexDirection={feature('BUDDY') && companionNarrow ? 'column' : 'row'} width="100%" alignItems={feature('BUDDY') && companionNarrow ? undefined : 'flex-end'}>

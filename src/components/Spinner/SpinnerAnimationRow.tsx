@@ -7,6 +7,7 @@ import { Box, Text, useAnimationFrame } from '../../ink.js';
 import type { InProcessTeammateTaskState } from '../../tasks/InProcessTeammateTask/types.js';
 import { formatDuration, formatNumber } from '../../utils/format.js';
 import { toInkColor } from '../../utils/ink.js';
+import { renderProgressBar } from '../../utils/progressBar.js';
 import type { Theme } from '../../utils/theme.js';
 import { Byline } from '../design-system/Byline.js';
 import { GlimmerMessage } from './GlimmerMessage.js';
@@ -17,6 +18,7 @@ import { interpolateColor, toRGBColor } from './utils.js';
 const SEP_WIDTH = stringWidth(' · ');
 const THINKING_BARE_WIDTH = stringWidth('thinking');
 const SHOW_TOKENS_AFTER_MS = 30_000;
+const COMPACT_PROGRESS_BAR_WIDTH = 20;
 
 // Thinking shimmer constants. Previously lived in a separate ThinkingShimmerText
 // component with its own useAnimationFrame(50) — inlined here to reuse our
@@ -55,6 +57,14 @@ export type SpinnerAnimationRowProps = {
   spinnerSuffix?: string | null;
   verbose: boolean;
   columns: number;
+  /**
+   * 0-100, or null/undefined outside compaction. Compaction is the only
+   * caller today (REPL.tsx's onCompactProgress) — there is no sub-progress
+   * signal within a stage, so this is honest only as "which known stage of
+   * compaction are we in", not smooth progress. See COMPACT_STAGE_PERCENT in
+   * services/compact/compact.ts.
+   */
+  compactProgressPercent?: number | null;
 
   // Teammate-derived (computed by parent from tasks)
   hasRunningTeammates: boolean;
@@ -93,6 +103,7 @@ export function SpinnerAnimationRow({
   spinnerSuffix,
   verbose,
   columns,
+  compactProgressPercent,
   hasRunningTeammates,
   teammateTokens,
   foregroundedTeammate,
@@ -189,8 +200,28 @@ export function SpinnerAnimationRow({
   const usedAfterThinking = showThinking ? thinkingWidthValue + sep : 0;
   const showTimer = wantsTimerAndTokens && availableSpace > usedAfterThinking + timerWidth;
   const usedAfterTimer = usedAfterThinking + (showTimer ? timerWidth + sep : 0);
-  const showTokens = wantsTimerAndTokens && totalTokens > 0 && availableSpace > usedAfterTimer + tokensWidth;
-  const thinkingOnly = showThinking && thinkingStatus === 'thinking' && !spinnerSuffix && !showTimer && !showTokens && true;
+
+  // === Compaction progress bar (not part of `parts`/Byline — rendered as
+  // its own segment between the message and the parenthesized status, per
+  // the approved mockup: "message… ████░░░░ 38% (1m 12s · tokens)"). Lower
+  // priority than the timer (sacrificed first when space is tight) so the
+  // timer — which is always-on, not compaction-specific — never flickers
+  // out to make room for it. Degrades in two steps before disappearing:
+  // full bar+percent, then percent alone. ===
+  let compactProgressText = '';
+  if (compactProgressPercent !== null && compactProgressPercent !== undefined) {
+    const percentText = `${Math.round(compactProgressPercent)}%`;
+    const percentWidth = stringWidth(percentText);
+    const remainingForProgress = availableSpace - usedAfterTimer;
+    if (remainingForProgress >= COMPACT_PROGRESS_BAR_WIDTH + 1 + percentWidth) {
+      compactProgressText = `${renderProgressBar(compactProgressPercent, COMPACT_PROGRESS_BAR_WIDTH)} ${percentText} `;
+    } else if (remainingForProgress >= percentWidth) {
+      compactProgressText = `${percentText} `;
+    }
+  }
+  const usedAfterProgress = usedAfterTimer + (compactProgressText ? stringWidth(compactProgressText) : 0);
+  const showTokens = wantsTimerAndTokens && totalTokens > 0 && availableSpace > usedAfterProgress + tokensWidth;
+  const thinkingOnly = showThinking && thinkingStatus === 'thinking' && !spinnerSuffix && !showTimer && !showTokens && !compactProgressText;
 
   // === Thinking shimmer color (formerly ThinkingShimmerText's own timer) ===
   // Same sine-wave opacity, but derived from our shared `time` instead of a
@@ -226,6 +257,7 @@ export function SpinnerAnimationRow({
   return <Box ref={viewportRef} flexDirection="row" flexWrap="wrap" marginTop={1} width="100%">
       <SpinnerGlyph frame={frame} messageColor={messageColor} stalledIntensity={overrideColor ? 0 : stalledIntensity} reducedMotion={reducedMotion} time={time} />
       <GlimmerMessage message={message} mode={mode} messageColor={messageColor} glimmerIndex={glimmerIndex} flashOpacity={flashOpacity} shimmerColor={shimmerColor} stalledIntensity={overrideColor ? 0 : stalledIntensity} />
+      {compactProgressText && <Text dimColor>{compactProgressText}</Text>}
       {status}
     </Box>;
 }
