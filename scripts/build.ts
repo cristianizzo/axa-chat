@@ -41,6 +41,15 @@ function flagValue(name: string): string | null {
 // running axa binary that started the build. See src/utils/sourceUpdate.ts.
 const outfileOverride = flagValue('--outfile')
 
+// `bun` (bare) is Bun's host-only compile target: whatever OS/arch the build
+// runs on is what gets produced, which is the existing macOS release path and
+// must keep working unchanged. Passing e.g. `bun-linux-x64` or
+// `bun-linux-arm64` instead cross-compiles for that target regardless of the
+// host. Not validated against a known list: `bun build` itself reports a clear
+// error for a bad value, and hardcoding the list here is one more place for it
+// to drift out of sync with what Bun actually supports.
+const targetOverride = flagValue('--target')
+
 // Release builds stamp the published version instead of the generated dev
 // string. Without it a released binary reports `2.1.88-dev.20260920.t…shaabc`,
 // which does not match the release it was cut from and cannot be compared
@@ -297,7 +306,7 @@ const cmd = [
   './src/entrypoints/cli.tsx',
   '--compile',
   '--target',
-  'bun',
+  targetOverride ?? 'bun',
   '--format',
   'esm',
   '--outfile',
