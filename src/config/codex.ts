@@ -44,7 +44,7 @@ export type CodexReasoningEffort = (typeof CODEX_EFFORTS)[number]
  * per model, so it cannot be hoisted into a shared constant.
  *
  * Not exhaustive: any other `gpt-*` ID the user types is passed through to the
- * backend untouched (see mapClaudeModelToCodex), so a newly launched model works
+ * backend untouched (see resolveClaudeModelForCodex), so a newly launched model works
  * without a code change — at the cost of no label and no effort clamping.
  */
 export const CODEX_MODELS = [
@@ -110,6 +110,42 @@ export const CLAUDE_FAMILY_TO_CODEX_MODEL = {
   sonnet: DEFAULT_CODEX_MODEL,
   haiku: 'gpt-5.6-luna',
 } as const satisfies Record<string, CodexModelId>
+
+/**
+ * Resolves the model ID to send to the Codex backend.
+ *
+ * Claude model names are heuristically mapped to a comparable Codex model —
+ * this is the legitimate case where the user is in Codex mode with a Claude
+ * model still selected. Any other ID (i.e. an explicitly chosen `gpt-*` model)
+ * is passed through untouched so that models newer than {@link CODEX_MODELS}
+ * still work; the backend rejects genuinely invalid IDs.
+ *
+ * Dependency-free on purpose: the fetch adapter and the account pill both call
+ * this, so it must not drag runtime imports into either graph.
+ */
+export function resolveClaudeModelForCodex(
+  claudeModel: string | null | undefined,
+): string {
+  if (!claudeModel) return DEFAULT_CODEX_MODEL
+
+  const lower = claudeModel.toLowerCase()
+  const family = (
+    Object.keys(CLAUDE_FAMILY_TO_CODEX_MODEL) as Array<
+      keyof typeof CLAUDE_FAMILY_TO_CODEX_MODEL
+    >
+  ).find(name => lower.includes(name))
+
+  const mapped = family
+    ? CLAUDE_FAMILY_TO_CODEX_MODEL[family]
+    : // Other Claude models (e.g. claude-fable-5, claude-mythos-5) have no
+      // natural counterpart, but must not be forwarded verbatim — Codex
+      // would reject them.
+      lower.includes('claude')
+      ? DEFAULT_CODEX_MODEL
+      : null
+
+  return mapped ?? claudeModel
+}
 
 // ── Limits ──────────────────────────────────────────────────────────
 
@@ -184,7 +220,7 @@ export const CODEX_PROVIDER_ID = 'openai-codex' as const
 /**
  * True for any model that will be routed to the Codex backend.
  *
- * Broader than a CODEX_MODELS lookup on purpose: `mapClaudeModelToCodex`
+ * Broader than a CODEX_MODELS lookup on purpose: `resolveClaudeModelForCodex`
  * forwards any other `gpt-*` ID untouched, so capability checks must agree
  * with that rather than only recognising the listed models.
  *

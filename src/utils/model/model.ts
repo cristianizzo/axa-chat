@@ -25,6 +25,7 @@ import {
   getProviderModelCatalog,
   getProviderModelCatalogForModel,
   isModelOwnedByACatalog,
+  resolveClaudeModelForProvider,
 } from 'src/config/providers/index.js'
 import { getModelDescriptor } from './registry.js'
 import {
@@ -252,6 +253,31 @@ export function resolveModelForActiveProvider(): ModelName | null {
     return stored
   }
   return null
+}
+
+/**
+ * The model ID the active account will actually serve for a given model, for
+ * display only.
+ *
+ * `useMainLoopModel()` returns the *requested* model — for a third-party
+ * account a Claude-family ID like `claude-opus-4-6` — but the fetch adapter
+ * translates that to the provider's own model at the network boundary. The
+ * account pill must show the served model, not the Claude ID it never sends.
+ * This resolves the same way the adapters do, so the pill and the wire cannot
+ * disagree.
+ *
+ * Identity when the logged-in account is not what serves requests (Bedrock /
+ * Vertex / Foundry) — those deployments name their own models and the account's
+ * translation is irrelevant.
+ *
+ * @param model - A model ID already parsed from any alias
+ * @returns The provider-native model ID to display
+ */
+export function getDisplayModelForActiveProvider(model: ModelName): ModelName {
+  if (!isActiveAccountServingRequests()) {
+    return model
+  }
+  return resolveClaudeModelForProvider(model, getActiveAuthProvider())
 }
 
 export function getBestModel(): ModelName {
