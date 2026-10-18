@@ -106,6 +106,50 @@ export const COST_TIER_10_50 = {
   webSearchRequests: 0.01,
 } as const satisfies ModelCosts
 
+// Pricing for Opus 5.5: $4 input / $20 output per Mtok. Distinct from
+// COST_TIER_5_25 (Opus 4.5+) — both input/output and cache-read numbers
+// differ, so this cannot reuse an existing tier.
+export const COST_OPUS_5_5 = {
+  inputTokens: 4,
+  outputTokens: 20,
+  promptCacheWriteTokens: 5,
+  promptCacheReadTokens: 0.2,
+  webSearchRequests: 0.01,
+} as const satisfies ModelCosts
+
+// Pricing for Sonnet 5.5: $2 input / $10 output per Mtok. Looks like
+// COST_TIER_2_10 (Sonnet 5) at a glance, but the cache-read price differs
+// ($0.10 vs $0.20), so it is kept as its own tier rather than reused.
+export const COST_SONNET_5_5 = {
+  inputTokens: 2,
+  outputTokens: 10,
+  promptCacheWriteTokens: 2.5,
+  promptCacheReadTokens: 0.1,
+  webSearchRequests: 0.01,
+} as const satisfies ModelCosts
+
+// Pricing for Haiku 5.5, prompts <=100K tokens: $0.10 input / $0.50 output
+// per Mtok.
+//
+// Anthropic's published pricing for this model has a second, higher tier for
+// prompts >100K tokens ($0.50 input / $2.50 output / $0.625 5m-cache-write /
+// $1 1h-cache-write / $0.05 cache-read per Mtok). ModelCosts (and every other
+// pricing tier in this file) has no notion of prompt-length-dependent
+// pricing, and no existing model in this catalog has that shape either — this
+// is a genuinely new pricing mechanism, not something already modeled
+// elsewhere. Rather than inventing a mechanism here, only the <=100K tier is
+// registered; a long-prompt Haiku 5.5 turn is currently costed at this
+// (cheaper) rate, which under-reports spend for prompts over 100K tokens.
+// Flagging rather than guessing at the plumbing this would need
+// (presumably threading prompt length through getModelCosts/calculateUSDCost).
+export const COST_HAIKU_5_5 = {
+  inputTokens: 0.1,
+  outputTokens: 0.5,
+  promptCacheWriteTokens: 0.125,
+  promptCacheReadTokens: 0.01,
+  webSearchRequests: 0.01,
+} as const satisfies ModelCosts
+
 // Codex is reached only through a ChatGPT OAuth session against
 // chatgpt.com/backend-api (see services/api/codex-fetch-adapter.ts) — there is
 // no metered API-key path in this fork. Usage is covered by the flat monthly
@@ -129,6 +173,9 @@ export const PRICING_TIER_COSTS: Record<PricingTier, ModelCosts> = {
   tier_10_50: COST_TIER_10_50,
   haiku_35: COST_HAIKU_35,
   haiku_45: COST_HAIKU_45,
+  opus_55: COST_OPUS_5_5,
+  sonnet_55: COST_SONNET_5_5,
+  haiku_55: COST_HAIKU_5_5,
 }
 
 /**

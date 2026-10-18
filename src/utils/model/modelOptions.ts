@@ -352,7 +352,8 @@ export function getModelFamilies(): ModelFamily[] {
       label: 'Opus',
       description: '$5/$25 · Most capable for complex work',
       versions: [
-        { value: s.opus5, label: 'Opus 5', description: '1M context · 128k output · Latest, most capable' },
+        { value: s.opus55, label: 'Opus 5.5', description: '1M context · 128k output · Latest, most capable' },
+        { value: s.opus5, label: 'Opus 5', description: '1M context · 128k output · Previous version' },
         { value: s.opus48, label: 'Opus 4.8', description: '1M context · 128k output · Previous default' },
         { value: s.opus47, label: 'Opus 4.7', description: '1M context · 128k output · Agentic coding' },
         { value: s.opus46, label: 'Opus 4.6', description: '1M context · 128k output' },
@@ -363,7 +364,8 @@ export function getModelFamilies(): ModelFamily[] {
       label: 'Sonnet',
       description: '$2/$10 · Best speed/intelligence balance',
       versions: [
-        { value: s.sonnet5, label: 'Sonnet 5', description: '1M context · 128k output · Latest' },
+        { value: s.sonnet55, label: 'Sonnet 5.5', description: '1M context · 128k output · Latest' },
+        { value: s.sonnet5, label: 'Sonnet 5', description: '1M context · 128k output · Previous version' },
         { value: s.sonnet46, label: 'Sonnet 4.6', description: '1M context · 128k output · Previous default' },
       ],
     },
@@ -381,6 +383,7 @@ export function getModelFamilies(): ModelFamily[] {
       label: 'Haiku',
       description: '$1/$5 · Fastest for quick answers',
       versions: [
+        { value: s.haiku55, label: 'Haiku 5.5', description: '1M context · 128k output · Latest' },
         { value: s.haiku45, label: 'Haiku 4.5', description: '200k context · 64k output' },
       ],
     },

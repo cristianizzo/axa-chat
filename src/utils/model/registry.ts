@@ -35,6 +35,9 @@ export type PricingTier =
   | 'tier_10_50'
   | 'haiku_35'
   | 'haiku_45'
+  | 'opus_55'
+  | 'sonnet_55'
+  | 'haiku_55'
 
 export type ModelDescriptor = {
   /** Internal short key, mirrors ALL_MODEL_CONFIGS. */
@@ -171,6 +174,24 @@ export const MODEL_REGISTRY: readonly ModelDescriptor[] = [
     knowledgeCutoff: 'May 2026',
   },
   {
+    key: 'opus55',
+    config: ALL_MODEL_CONFIGS.opus55,
+    canonical: 'claude-opus-5-5',
+    family: 'opus',
+    displayName: 'Opus 5.5',
+    pricingTier: 'opus_55',
+    supports1M: true,
+    effort: true,
+    maxEffort: true,
+    adaptiveThinking: true,
+    structuredOutputs: false,
+    maxOutput: OUT_64_128,
+    // ASSUMPTION: no knowledge-cutoff date was supplied for this launch; kept
+    // consistent with the opus5 pattern (most recent shipped cutoff) until a
+    // real date is confirmed.
+    knowledgeCutoff: 'May 2026',
+  },
+  {
     key: 'sonnet45',
     config: ALL_MODEL_CONFIGS.sonnet45,
     canonical: 'claude-sonnet-4-5',
@@ -213,6 +234,40 @@ export const MODEL_REGISTRY: readonly ModelDescriptor[] = [
     adaptiveThinking: true,
     structuredOutputs: false,
     maxOutput: OUT_64_128,
+    knowledgeCutoff: 'January 2026',
+  },
+  {
+    key: 'sonnet55',
+    config: ALL_MODEL_CONFIGS.sonnet55,
+    canonical: 'claude-sonnet-5-5',
+    family: 'sonnet',
+    displayName: 'Sonnet 5.5',
+    pricingTier: 'sonnet_55',
+    supports1M: true,
+    effort: true,
+    maxEffort: false,
+    adaptiveThinking: true,
+    structuredOutputs: false,
+    maxOutput: OUT_64_128,
+    // ASSUMPTION: no knowledge-cutoff date was supplied for this launch; kept
+    // consistent with the sonnet5 pattern until a real date is confirmed.
+    knowledgeCutoff: 'January 2026',
+  },
+  {
+    key: 'haiku55',
+    config: ALL_MODEL_CONFIGS.haiku55,
+    canonical: 'claude-haiku-5-5',
+    family: 'haiku',
+    displayName: 'Haiku 5.5',
+    pricingTier: 'haiku_55',
+    supports1M: true,
+    effort: false,
+    maxEffort: false,
+    adaptiveThinking: false,
+    structuredOutputs: true,
+    maxOutput: OUT_64_128,
+    // ASSUMPTION: no knowledge-cutoff date was supplied for this launch; kept
+    // consistent with the haiku45 pattern until a real date is confirmed.
     knowledgeCutoff: 'January 2026',
   },
   {

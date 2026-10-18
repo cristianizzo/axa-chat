@@ -95,7 +95,8 @@ export function isNonCustomOpusModel(model: ModelName): boolean {
     model === getModelStrings().opus46 ||
     model === getModelStrings().opus47 ||
     model === getModelStrings().opus48 ||
-    model === getModelStrings().opus5
+    model === getModelStrings().opus5 ||
+    model === getModelStrings().opus55
   )
 }
 
@@ -268,7 +269,7 @@ export function getDefaultOpusModel(): ModelName {
   if (getAPIProvider() !== 'firstParty') {
     return getModelStrings().opus46
   }
-  return getModelStrings().opus5
+  return getModelStrings().opus55
 }
 
 // @[MODEL LAUNCH]: Update the default Sonnet model (3P providers may lag so keep defaults unchanged).
@@ -284,11 +285,11 @@ export function getDefaultSonnetModel(): ModelName {
 // reject a misconfigured override without re-deriving the 3P branch and
 // letting the two copies drift.
 function getBuiltInSonnetModel(): ModelName {
-  // Default to Sonnet 4.6 for 3P since they may not have Sonnet 5 yet
+  // Default to Sonnet 4.6 for 3P since they may not have Sonnet 5.5 yet
   if (getAPIProvider() !== 'firstParty') {
     return getModelStrings().sonnet46
   }
-  return getModelStrings().sonnet5
+  return getModelStrings().sonnet55
 }
 
 // Whether two model IDs name the same model. The same model can be spelled
@@ -307,12 +308,14 @@ export function isSameModel(a: ModelName, b: ModelName): boolean {
 // Sonnet complies (empirically ~100% of AUP refusals are Opus, 0 Sonnet).
 //
 // The step is one model at a time, and query.ts re-enters here after each
-// switch, so the returns below form a chain — but only for Opus 5, which goes
-// Opus 5 -> Opus 4.8 -> Sonnet. Trying Opus 4.8 first keeps the capability drop
-// as small as the refusal allows: it declines a different (narrower) set of
-// prompts than Opus 5, so most refusals never reach the Sonnet step. Every
-// other Opus is a single hop to Sonnet. Returns undefined when there is no
-// distinct fallback left, which lets the refusal surface terminally.
+// switch, so the returns below form a chain — but only for Opus 5.5 and Opus
+// 5, which go Opus 5.5 -> Opus 5 -> Opus 4.8 -> Sonnet. Trying the version
+// directly below the one that refused first keeps the capability drop as
+// small as the refusal allows: each step declines a different (narrower) set
+// of prompts than the one above it, so most refusals never reach the Sonnet
+// step. Every other Opus is a single hop to Sonnet. Returns undefined when
+// there is no distinct fallback left, which lets the refusal surface
+// terminally.
 export function getRefusalFallbackModel(model: ModelName): ModelName | undefined {
   // Detect Opus on the canonical name, not the raw ID: modelOverrides can map
   // an Opus model to an arbitrary provider string (a Bedrock ARN, say) with no
@@ -323,16 +326,21 @@ export function getRefusalFallbackModel(model: ModelName): ModelName | undefined
     return undefined
   }
 
-  // The intermediate step is gated on Opus 5 specifically, not on the Opus
-  // family: "the version below the one that refused" only names Opus 4.8 for
-  // Opus 5. Testing `model !== opus48` instead would send an Opus 4.1 or 4.6
-  // refusal *up* to 4.8 — a cross-version switch to a model the user did not
-  // pick, and on 3P (where Opus 4.6 is the default) the common case rather
-  // than an edge one. Every other Opus goes straight to Sonnet, as before.
+  // The intermediate steps are gated on Opus 5.5 and Opus 5 specifically, not
+  // on the Opus family: "the version below the one that refused" only names
+  // Opus 5 for Opus 5.5, and Opus 4.8 for Opus 5. Testing `model !== opus48`
+  // instead would send an Opus 4.1 or 4.6 refusal *up* to 4.8 — a cross-version
+  // switch to a model the user did not pick, and on 3P (where Opus 4.6 is the
+  // default) the common case rather than an edge one. Every other Opus goes
+  // straight to Sonnet, as before.
   //
-  // Opus 4.8 is servable on every provider (see CLAUDE_OPUS_4_8_CONFIG), so
-  // unlike getDefaultOpusModel there's no 3P-lag branch to take here.
+  // Opus 5 and Opus 4.8 are both servable on every provider (see
+  // CLAUDE_OPUS_5_CONFIG / CLAUDE_OPUS_4_8_CONFIG), so unlike
+  // getDefaultOpusModel there's no 3P-lag branch to take at either step.
   const strings = getModelStrings()
+  if (canonicalNameTolerating1mTag(strings.opus55) === canonical) {
+    return carry1mTag(strings.opus5, model)
+  }
   if (canonicalNameTolerating1mTag(strings.opus5) === canonical) {
     return carry1mTag(strings.opus48, model)
   }
@@ -349,9 +357,9 @@ export function getRefusalFallbackModel(model: ModelName): ModelName | undefined
   // that somehow resolves to the refusing model still surfaces terminally
   // rather than being handed back as its own replacement.
   //
-  // The replacement is getBuiltInSonnetModel(), not strings.sonnet5, so it
+  // The replacement is getBuiltInSonnetModel(), not strings.sonnet55, so it
   // respects the same 3P-lag branch getDefaultSonnetModel would have taken —
-  // otherwise a Bedrock/Vertex/Foundry session gets handed a Sonnet 5 those
+  // otherwise a Bedrock/Vertex/Foundry session gets handed a Sonnet 5.5 those
   // providers may not serve yet, swapping a refusal for a 404.
   const sonnetOverride = getDefaultSonnetModel()
   const sonnet = canonicalNameTolerating1mTag(sonnetOverride).includes('opus')
@@ -424,8 +432,8 @@ export function getDefaultHaikuModel(): ModelName {
     return process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL
   }
 
-  // Haiku 4.5 is available on all platforms (first-party, Foundry, Bedrock, Vertex)
-  return getModelStrings().haiku45
+  // Haiku 5.5 is available on all platforms (first-party, Foundry, Bedrock, Vertex)
+  return getModelStrings().haiku55
 }
 
 /**
@@ -654,9 +662,9 @@ export function getClaudeAiUserDefaultModelDescription(
 
   if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
     const contextNote = isOpus1mMergeEnabled() ? ' (1M context)' : ''
-    return `Opus 5${contextNote} · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
+    return `Opus 5.5${contextNote} · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
   }
-  return 'Sonnet 5 · Best for everyday tasks'
+  return 'Sonnet 5.5 · Best for everyday tasks'
 }
 
 export function renderDefaultModelSetting(

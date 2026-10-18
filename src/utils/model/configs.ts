@@ -197,6 +197,30 @@ export const CLAUDE_OPUS_5_CONFIG = {
   openai: 'claude-opus-5',
 } as const satisfies ModelConfig
 
+export const CLAUDE_OPUS_5_5_CONFIG = {
+  firstParty: 'claude-opus-5-5',
+  bedrock: 'anthropic.claude-opus-5-5',
+  vertex: 'claude-opus-5-5',
+  foundry: 'claude-opus-5-5',
+  openai: 'claude-opus-5-5',
+} as const satisfies ModelConfig
+
+export const CLAUDE_SONNET_5_5_CONFIG = {
+  firstParty: 'claude-sonnet-5-5',
+  bedrock: 'anthropic.claude-sonnet-5-5',
+  vertex: 'claude-sonnet-5-5',
+  foundry: 'claude-sonnet-5-5',
+  openai: 'claude-sonnet-5-5',
+} as const satisfies ModelConfig
+
+export const CLAUDE_HAIKU_5_5_CONFIG = {
+  firstParty: 'claude-haiku-5-5',
+  bedrock: 'anthropic.claude-haiku-5-5',
+  vertex: 'claude-haiku-5-5',
+  foundry: 'claude-haiku-5-5',
+  openai: 'claude-haiku-5-5',
+} as const satisfies ModelConfig
+
 // NOTE: Bedrock IDs for new models use the dateless format (e.g. 'anthropic.claude-opus-4-8')
 // matching the pattern from Anthropic docs. The modelStrings.ts findFirstMatch() will resolve
 // these against actual Bedrock inference profiles at runtime. If a model is not yet available
@@ -243,7 +267,10 @@ export const ALL_MODEL_CONFIGS = {
   opus47: CLAUDE_OPUS_4_7_CONFIG,
   opus48: CLAUDE_OPUS_4_8_CONFIG,
   opus5: CLAUDE_OPUS_5_CONFIG,
+  opus55: CLAUDE_OPUS_5_5_CONFIG,
   sonnet5: CLAUDE_SONNET_5_CONFIG,
+  sonnet55: CLAUDE_SONNET_5_5_CONFIG,
+  haiku55: CLAUDE_HAIKU_5_5_CONFIG,
   fable5: CLAUDE_FABLE_5_CONFIG,
   fable51: CLAUDE_FABLE_5_1_CONFIG,
   mythos5: CLAUDE_MYTHOS_5_CONFIG,
