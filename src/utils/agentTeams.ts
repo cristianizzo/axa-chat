@@ -101,6 +101,11 @@ export function deleteTeam(id: string): void {
  * "loading a team loads all of its agents" ambiguous.
  */
 export function setTeamMembers(teamId: string, keys: string[]): void {
+  // Without this guard a stale id — a team deleted under an open editor — makes
+  // the map run only the "strip keys that moved into this team" branch: the
+  // keys leave their real teams and land nowhere. Saving the editor would
+  // silently ungroup every agent it ticked.
+  if (!getTeamById(teamId)) throw new Error(`Unknown team: ${teamId}`)
   const wanted = new Set(keys)
   saveGlobalConfig(current => ({
     ...current,
@@ -179,9 +184,15 @@ export function filterLoadedAgents(
   const disabledTeams = new Set(config.disabledTeams ?? [])
   if (disabledAgents.size === 0 && disabledTeams.size === 0) return agents
 
+  // First match wins, matching getTeamForAgent. Last-wins here would mean a
+  // duplicated key (only reachable via an external config edit) filters one
+  // team while the UI badge reports the other, so the two would disagree about
+  // the same agent.
   const teamByAgent = new Map<string, string>()
   for (const team of config.agentTeams ?? []) {
-    for (const key of team.agentKeys) teamByAgent.set(key, team.id)
+    for (const key of team.agentKeys) {
+      if (!teamByAgent.has(key)) teamByAgent.set(key, team.id)
+    }
   }
 
   return agents.filter(agent => {

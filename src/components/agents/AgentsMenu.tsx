@@ -11,7 +11,7 @@ import { useAppState, useSetAppState } from '../../state/AppState.js';
 import type { Tools } from '../../Tool.js';
 import { type ResolvedAgent, resolveAgentOverrides } from '../../tools/AgentTool/agentDisplay.js';
 import { type AgentDefinition, getActiveAgentsFromList } from '../../tools/AgentTool/loadAgentsDir.js';
-import { agentKey, isAgentLoaded, setAgentLoaded } from '../../utils/agentTeams.js';
+import { agentKey, getTeamForAgent, isAgentLoaded, isTeamLoaded, setAgentLoaded, setTeamLoaded } from '../../utils/agentTeams.js';
 import { toError } from '../../utils/errors.js';
 import { logError } from '../../utils/log.js';
 import { Select } from '../CustomSelect/select.js';
@@ -54,6 +54,20 @@ export function AgentsMenu(t0) {
     allAgents,
     activeAgents: agents
   } = agentDefinitions;
+  // Which agent wins each agentType, ignoring load state. Shadowing is a
+  // precedence fact, so deriving it from the filtered list made the marker
+  // vanish the moment the winning agent was unloaded — leaving a shadowed row
+  // claiming it was loaded while the model could see no agent of that type.
+  let precedenceAgents;
+  if ($[164] !== allAgents) {
+    precedenceAgents = getActiveAgentsFromList(allAgents, {
+      skipLoadFilter: true
+    });
+    $[164] = allAgents;
+    $[165] = precedenceAgents;
+  } else {
+    precedenceAgents = $[165];
+  }
   let t2;
   if ($[1] === Symbol.for("react.memo_cache_sentinel")) {
     t2 = [];
@@ -206,10 +220,10 @@ export function AgentsMenu(t0) {
         }
         const agentsToShow = t13;
         let t14;
-        if ($[31] !== agents || $[32] !== agentsToShow) {
-          t14 = resolveAgentOverrides(agentsToShow, agents);
-          $[31] = agents;
+        if ($[32] !== agentsToShow || $[166] !== precedenceAgents) {
+          t14 = resolveAgentOverrides(agentsToShow, precedenceAgents);
           $[32] = agentsToShow;
+          $[166] = precedenceAgents;
           $[33] = t14;
         } else {
           t14 = $[33];
@@ -328,7 +342,14 @@ export function AgentsMenu(t0) {
         const agentToUse = freshAgent_1 || modeState.agent;
         const isEditable = agentToUse.source !== "built-in" && agentToUse.source !== "plugin" && agentToUse.source !== "flagSettings";
         // Built-ins are always loaded and cannot be toggled — see filterLoadedAgents.
-        const agentLoaded = agentToUse.source === "built-in" ? true : isAgentLoaded(agentKey(agentToUse));
+        const agentKey_0 = agentKey(agentToUse);
+        const agentTeam = agentToUse.source === "built-in" ? undefined : getTeamForAgent(agentKey_0);
+        const agentLoaded = agentToUse.source === "built-in" ? true : isAgentLoaded(agentKey_0);
+        // An agent can be unloaded either by its own deny entry or by its team's.
+        // setAgentLoaded only clears the former, so offering a plain "Load agent"
+        // for a team-blocked agent would write nothing and then report success.
+        // Offer the action that actually changes what the model sees instead.
+        const blockedByTeam = !agentLoaded && agentTeam !== undefined && !isTeamLoaded(agentTeam.id);
         let t14;
         if ($[60] === Symbol.for("react.memo_cache_sentinel")) {
           t14 = {
@@ -340,12 +361,16 @@ export function AgentsMenu(t0) {
           t14 = $[60];
         }
         let t15;
-        if ($[61] !== isEditable || $[157] !== agentLoaded) {
+        if ($[61] !== isEditable || $[157] !== agentLoaded || $[160] !== blockedByTeam || $[161] !== agentTeam?.name) {
           const loadItem = agentToUse.source === "built-in" ? [] : [{
             label: agentLoaded ? "Unload agent" : "Load agent",
             value: "toggle-load",
-            description: agentLoaded ? "Stops being offered to the model. The file is untouched." : "Becomes available to the model again."
-          }];
+            description: agentLoaded ? "Stops being offered to the model. The file is untouched." : blockedByTeam ? `Its team "${agentTeam?.name ?? ""}" is unloaded, so loading this agent alone leaves it out. Use "Load its team".` : "Becomes available to the model again."
+          }, ...(!agentLoaded && blockedByTeam ? [{
+            label: "Load its team",
+            value: "load-team",
+            description: `Loads "${agentTeam?.name ?? ""}", which brings this agent back.`
+          }] : [])];
           t15 = [...loadItem, ...(isEditable ? [{
             label: "Edit agent",
             value: "edit"
@@ -355,6 +380,8 @@ export function AgentsMenu(t0) {
           }] : [])];
           $[61] = isEditable;
           $[157] = agentLoaded;
+          $[160] = blockedByTeam;
+          $[161] = agentTeam?.name;
           $[62] = t15;
         } else {
           t15 = $[62];
@@ -379,12 +406,12 @@ export function AgentsMenu(t0) {
         }
         const menuItems = t17;
         let t18;
-        if ($[66] !== agentToUse || $[67] !== modeState || $[158] !== agentLoaded || $[159] !== setAppState) {
+        if ($[66] !== agentToUse || $[67] !== modeState || $[158] !== agentLoaded || $[159] !== setAppState || $[162] !== agentKey_0 || $[163] !== agentTeam?.id) {
           t18 = value_0 => {
             bb129: switch (value_0) {
               case "toggle-load":
                 {
-                  setAgentLoaded(agentKey(agentToUse), !agentLoaded);
+                  setAgentLoaded(agentKey_0, !agentLoaded);
                   setAppState(state => ({
                     ...state,
                     agentDefinitions: {
@@ -393,6 +420,19 @@ export function AgentsMenu(t0) {
                     }
                   }));
                   setChanges(prev_0 => [...prev_0, `${agentLoaded ? "Unloaded" : "Loaded"} agent: ${chalk.bold(agentToUse.agentType)}`]);
+                  break bb129;
+                }
+              case "load-team":
+                {
+                  if (agentTeam) setTeamLoaded(agentTeam.id, true);
+                  setAppState(state => ({
+                    ...state,
+                    agentDefinitions: {
+                      ...state.agentDefinitions,
+                      activeAgents: getActiveAgentsFromList(state.agentDefinitions.allAgents)
+                    }
+                  }));
+                  setChanges(prev_0 => [...prev_0, `Loaded team: ${chalk.bold(agentTeam?.name ?? "")}`]);
                   break bb129;
                 }
               case "view":

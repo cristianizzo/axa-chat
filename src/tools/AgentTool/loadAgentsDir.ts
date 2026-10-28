@@ -194,6 +194,15 @@ export type AgentDefinitionsResult = {
 
 export function getActiveAgentsFromList(
   allAgents: AgentDefinition[],
+  /**
+   * Resolve settings precedence only, skipping the load/unload filter. For
+   * display code that needs to know which agent wins an agentType regardless of
+   * whether the user unloaded it — unload state is a separate question from
+   * precedence, and conflating them lets a shadowed row report itself loaded
+   * when the model can see no agent of that type at all. Never pass this when
+   * assembling the model-facing set.
+   */
+  { skipLoadFilter = false }: { skipLoadFilter?: boolean } = {},
 ): AgentDefinition[] {
   const builtInAgents = allAgents.filter(a => a.source === 'built-in')
   const pluginAgents = allAgents.filter(a => a.source === 'plugin')
@@ -219,14 +228,14 @@ export function getActiveAgentsFromList(
     }
   }
 
+  const byPrecedence = Array.from(agentMap.values())
+  if (skipLoadFilter) return byPrecedence
+
   // Precedence is resolved first, then the user's load/unload choices are
-  // applied. The other order would let an unloaded userSettings override expose
-  // the projectSettings agent it shadows — a different agent than the one the
-  // user pointed at.
-  return filterLoadedAgents(
-    Array.from(agentMap.values()),
-    getGlobalConfig(),
-  )
+  // applied. The other order would let an unloaded winner expose the agent it
+  // shadows at a lower-precedence source — a different agent than the one the
+  // user pointed at, and one they never chose to keep.
+  return filterLoadedAgents(byPrecedence, getGlobalConfig())
 }
 
 /**

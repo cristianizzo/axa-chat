@@ -11,7 +11,7 @@ import { createTeam, getTeams } from '../../utils/agentTeams.js'
 import { AgentNavigationFooter } from './AgentNavigationFooter.js'
 import { AgentsMenu } from './AgentsMenu.js'
 import { MainMenu } from './MainMenu.js'
-import { SkillsManager } from './SkillsManager.js'
+import { isSkillCommand, SkillsManager } from './SkillsManager.js'
 import { TeamAgentsEditor } from './TeamAgentsEditor.js'
 import { TeamMenu } from './TeamMenu.js'
 import { TeamsList } from './TeamsList.js'
@@ -74,7 +74,10 @@ export function AgentManager({ tools, commands, onExit }: Props): React.ReactEle
           agentCount={activeAgents.filter(a => a.source !== 'built-in').length}
           totalAgentCount={allAgents.filter(a => a.source !== 'built-in').length}
           teamCount={teams.length}
-          skillCount={commands.filter(c => c.type === 'prompt').length}
+          // Count what SkillsManager actually lists. `type === 'prompt'` also
+          // matches built-in prompt commands (statusline, insights) which have
+          // no loadedFrom and never appear on that screen.
+          skillCount={commands.filter(isSkillCommand).length}
           onSelect={choice => {
             if (choice === 'agents') setMode({ mode: 'agents' })
             else if (choice === 'teams') setMode({ mode: 'teams' })

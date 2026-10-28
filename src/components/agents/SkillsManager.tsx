@@ -91,7 +91,7 @@ function getSourceSubtitle(
     : skillsPath
 }
 
-function isSkillCommand(cmd: Command): cmd is SkillCommand {
+export function isSkillCommand(cmd: Command): cmd is SkillCommand {
   return (
     cmd.type === 'prompt' &&
     (cmd.loadedFrom === 'skills' ||
