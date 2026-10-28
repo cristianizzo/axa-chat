@@ -13,6 +13,8 @@ import {
   McpServerConfigSchema,
 } from '../../services/mcp/types.js'
 import type { ToolUseContext } from '../../Tool.js'
+import { filterLoadedAgents } from '../../utils/agentTeams.js'
+import { getGlobalConfig } from '../../utils/config.js'
 import { logForDebugging } from '../../utils/debug.js'
 import {
   EFFORT_LEVELS,
@@ -217,7 +219,14 @@ export function getActiveAgentsFromList(
     }
   }
 
-  return Array.from(agentMap.values())
+  // Precedence is resolved first, then the user's load/unload choices are
+  // applied. The other order would let an unloaded userSettings override expose
+  // the projectSettings agent it shadows — a different agent than the one the
+  // user pointed at.
+  return filterLoadedAgents(
+    Array.from(agentMap.values()),
+    getGlobalConfig(),
+  )
 }
 
 /**

@@ -11,6 +11,7 @@ import { useAppState, useSetAppState } from '../../state/AppState.js';
 import type { Tools } from '../../Tool.js';
 import { type ResolvedAgent, resolveAgentOverrides } from '../../tools/AgentTool/agentDisplay.js';
 import { type AgentDefinition, getActiveAgentsFromList } from '../../tools/AgentTool/loadAgentsDir.js';
+import { agentKey, isAgentLoaded, setAgentLoaded } from '../../utils/agentTeams.js';
 import { toError } from '../../utils/errors.js';
 import { logError } from '../../utils/log.js';
 import { Select } from '../CustomSelect/select.js';
@@ -29,7 +30,7 @@ type Props = {
   }) => void;
 };
 export function AgentsMenu(t0) {
-  const $ = _c(157);
+  const $ = _c(170);
   const {
     tools,
     onExit
@@ -326,6 +327,8 @@ export function AgentsMenu(t0) {
         const freshAgent_1 = t13;
         const agentToUse = freshAgent_1 || modeState.agent;
         const isEditable = agentToUse.source !== "built-in" && agentToUse.source !== "plugin" && agentToUse.source !== "flagSettings";
+        // Built-ins are always loaded and cannot be toggled — see filterLoadedAgents.
+        const agentLoaded = agentToUse.source === "built-in" ? true : isAgentLoaded(agentKey(agentToUse));
         let t14;
         if ($[60] === Symbol.for("react.memo_cache_sentinel")) {
           t14 = {
@@ -337,15 +340,21 @@ export function AgentsMenu(t0) {
           t14 = $[60];
         }
         let t15;
-        if ($[61] !== isEditable) {
-          t15 = isEditable ? [{
+        if ($[61] !== isEditable || $[157] !== agentLoaded) {
+          const loadItem = agentToUse.source === "built-in" ? [] : [{
+            label: agentLoaded ? "Unload agent" : "Load agent",
+            value: "toggle-load",
+            description: agentLoaded ? "Stops being offered to the model. The file is untouched." : "Becomes available to the model again."
+          }];
+          t15 = [...loadItem, ...(isEditable ? [{
             label: "Edit agent",
             value: "edit"
           }, {
             label: "Delete agent",
             value: "delete"
-          }] : [];
+          }] : [])];
           $[61] = isEditable;
+          $[157] = agentLoaded;
           $[62] = t15;
         } else {
           t15 = $[62];
@@ -370,9 +379,22 @@ export function AgentsMenu(t0) {
         }
         const menuItems = t17;
         let t18;
-        if ($[66] !== agentToUse || $[67] !== modeState) {
+        if ($[66] !== agentToUse || $[67] !== modeState || $[158] !== agentLoaded || $[159] !== setAppState) {
           t18 = value_0 => {
             bb129: switch (value_0) {
+              case "toggle-load":
+                {
+                  setAgentLoaded(agentKey(agentToUse), !agentLoaded);
+                  setAppState(state => ({
+                    ...state,
+                    agentDefinitions: {
+                      ...state.agentDefinitions,
+                      activeAgents: getActiveAgentsFromList(state.agentDefinitions.allAgents)
+                    }
+                  }));
+                  setChanges(prev_0 => [...prev_0, `${agentLoaded ? "Unloaded" : "Loaded"} agent: ${chalk.bold(agentToUse.agentType)}`]);
+                  break bb129;
+                }
               case "view":
                 {
                   setModeState({
@@ -408,6 +430,8 @@ export function AgentsMenu(t0) {
           };
           $[66] = agentToUse;
           $[67] = modeState;
+          $[158] = agentLoaded;
+          $[159] = setAppState;
           $[68] = t18;
         } else {
           t18 = $[68];

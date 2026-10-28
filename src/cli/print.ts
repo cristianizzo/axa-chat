@@ -35,6 +35,7 @@ import {
 import { toolMatchesName, type Tool, type Tools } from 'src/Tool.js'
 import {
   type AgentDefinition,
+  getActiveAgentsFromList,
   isBuiltInAgent,
   parseAgentsFromJson,
 } from 'src/tools/AgentTool/loadAgentsDir.js'
@@ -1781,7 +1782,13 @@ function runHeadlessStreaming(
     // See gh-23085: isBridgeEnabled() at Commander-definition time poisoned
     // the settings cache before setEligibility(true) ran.
     const sdkAgents = currentAgents.filter(a => a.source === 'flagSettings')
-    currentAgents = [...freshAgentDefs.allAgents, ...sdkAgents]
+    // allAgents is the unfiltered pool; a raw concat here would put unloaded
+    // agents back in front of the model after any plugin refresh, undoing the
+    // user's choice with no visible cause. Re-run the chokepoint instead.
+    currentAgents = getActiveAgentsFromList([
+      ...freshAgentDefs.allAgents,
+      ...sdkAgents,
+    ])
   }
 
   // Re-diff MCP configs after plugin state changes. Filters to
@@ -3088,7 +3095,13 @@ function runHeadlessStreaming(
             const sdkAgents = currentAgents.filter(
               a => a.source === 'flagSettings',
             )
-            currentAgents = [...r.agentDefinitions.allAgents, ...sdkAgents]
+            // Same reason as refreshPluginState: allAgents is unfiltered, so
+            // re-applying the load filter is what keeps an unloaded agent out
+            // of the SDK init message after /reload-plugins.
+            currentAgents = getActiveAgentsFromList([
+              ...r.agentDefinitions.allAgents,
+              ...sdkAgents,
+            ])
 
             // Reload succeeded — gather response data best-effort so a
             // read failure doesn't mask the successful state change.
