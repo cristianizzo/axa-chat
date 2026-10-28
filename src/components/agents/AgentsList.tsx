@@ -7,7 +7,10 @@ import { Box, Text } from '../../ink.js';
 import type { ResolvedAgent } from '../../tools/AgentTool/agentDisplay.js';
 import { AGENT_SOURCE_GROUPS, compareAgentsByName, getOverrideSourceLabel, resolveAgentModelDisplay } from '../../tools/AgentTool/agentDisplay.js';
 import type { AgentDefinition } from '../../tools/AgentTool/loadAgentsDir.js';
+import { agentKey, getTeamForAgent, isAgentLoaded } from '../../utils/agentTeams.js';
 import { count } from '../../utils/array.js';
+import { getGlobalConfig } from '../../utils/config.js';
+import { formatRelativeTimeAgo } from '../../utils/format.js';
 import { Dialog } from '../design-system/Dialog.js';
 import { Divider } from '../design-system/Divider.js';
 import { getAgentSourceDisplayName } from './utils.js';
@@ -20,7 +23,7 @@ type Props = {
   changes?: string[];
 };
 export function AgentsList(t0) {
-  const $ = _c(96);
+  const $ = _c(100);
   const {
     source,
     agents,
@@ -40,6 +43,24 @@ export function AgentsList(t0) {
     t1 = $[1];
   }
   const sortedAgents = t1;
+
+  // Config is an in-memory cache and does not notify React, so the rows are
+  // memoized over a cheap signature instead: it changes exactly when something
+  // a row displays changed, and a load/unload therefore redraws the markers.
+  let configSignature = "";
+  {
+    const configForRows = getGlobalConfig();
+    const parts: string[] = [];
+    for (const [key, value] of Object.entries(configForRows.agentUsage ?? {})) {
+      parts.push(`${key}=${value.lastUsedAt}`);
+    }
+    parts.push(`d:${(configForRows.disabledAgents ?? []).join(",")}`);
+    parts.push(`t:${(configForRows.disabledTeams ?? []).join(",")}`);
+    for (const team of configForRows.agentTeams ?? []) {
+      parts.push(`m:${team.id}:${team.name}:${team.agentKeys.join("|")}`);
+    }
+    configSignature = parts.sort().join(";");
+  }
   const getOverrideInfo = _temp;
   let t2;
   if ($[2] !== isCreateNewSelected) {
@@ -51,7 +72,7 @@ export function AgentsList(t0) {
   }
   const renderCreateNewOption = t2;
   let t3;
-  if ($[4] !== isCreateNewSelected || $[5] !== selectedAgent?.agentType || $[6] !== selectedAgent?.source) {
+  if ($[4] !== isCreateNewSelected || $[5] !== selectedAgent?.agentType || $[6] !== selectedAgent?.source || $[96] !== configSignature) {
     t3 = agent_0 => {
       const isBuiltIn = agent_0.source === "built-in";
       const isSelected = !isBuiltIn && !isCreateNewSelected && selectedAgent?.agentType === agent_0.agentType && selectedAgent?.source === agent_0.source;
@@ -62,11 +83,16 @@ export function AgentsList(t0) {
       const dimmed = isBuiltIn || isOverridden;
       const textColor = !isBuiltIn && isSelected ? "suggestion" : undefined;
       const resolvedModel = resolveAgentModelDisplay(agent_0);
-      return <Box key={`${agent_0.agentType}-${agent_0.source}`}><Text dimColor={dimmed && !isSelected} color={textColor}>{isBuiltIn ? "" : isSelected ? `${figures.pointer} ` : "  "}</Text><Text dimColor={dimmed && !isSelected} color={textColor}>{agent_0.agentType}</Text>{resolvedModel && <Text dimColor={true} color={textColor}>{" \xB7 "}{resolvedModel}</Text>}{agent_0.memory && <Text dimColor={true} color={textColor}>{" \xB7 "}{agent_0.memory} memory</Text>}{overriddenBy && <Text dimColor={!isSelected} color={isSelected ? "warning" : undefined}>{" "}{figures.warning} shadowed by {getOverrideSourceLabel(overriddenBy)}</Text>}</Box>;
+      const key_0 = agentKey(agent_0);
+      const team = isBuiltIn ? undefined : getTeamForAgent(key_0);
+      const loaded = isBuiltIn ? true : isAgentLoaded(key_0);
+      const lastUsed = isBuiltIn ? undefined : getGlobalConfig().agentUsage?.[key_0]?.lastUsedAt;
+      return <Box key={`${agent_0.agentType}-${agent_0.source}`} flexDirection="column"><Box><Text dimColor={dimmed && !isSelected} color={textColor}>{isBuiltIn ? "" : isSelected ? `${figures.pointer} ` : "  "}</Text><Text dimColor={dimmed && !isSelected} color={textColor}>{agent_0.agentType}</Text>{resolvedModel && <Text dimColor={true} color={textColor}>{" \xB7 "}{resolvedModel}</Text>}{agent_0.memory && <Text dimColor={true} color={textColor}>{" \xB7 "}{agent_0.memory} memory</Text>}{overriddenBy && <Text dimColor={!isSelected} color={isSelected ? "warning" : undefined}>{" "}{figures.warning} shadowed by {getOverrideSourceLabel(overriddenBy)}</Text>}</Box>{!isBuiltIn && <Box paddingLeft={2}><Text dimColor={true}>{lastUsed === undefined ? "never used" : `last used ${formatRelativeTimeAgo(new Date(lastUsed))}`}</Text>{team && <><Text dimColor={true}>{" \xB7 "}</Text><Text dimColor={true}>{team.name}</Text></>}<Text dimColor={true}>{" \xB7 "}</Text>{loaded ? <Text color="success">{"\u25CF loaded"}</Text> : <Text dimColor={true}>{"\u25CB unloaded"}</Text>}</Box>}</Box>;
     };
     $[4] = isCreateNewSelected;
     $[5] = selectedAgent?.agentType;
     $[6] = selectedAgent?.source;
+    $[96] = configSignature;
     $[7] = t3;
   } else {
     t3 = $[7];

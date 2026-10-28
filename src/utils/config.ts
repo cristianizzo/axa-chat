@@ -212,6 +212,17 @@ export type DiffTool = 'terminal' | 'auto'
 
 export type OutputStyle = string
 
+/**
+ * A named group of agents, managed from /agents. Members are agentKey()
+ * strings ("<source>:<agentType>") — never skills, which are a separate,
+ * team-less surface by design.
+ */
+export type AgentTeam = {
+  id: string
+  name: string
+  agentKeys: string[]
+}
+
 export type GlobalConfig = {
   /**
    * @deprecated Use settings.apiKeyHelper instead.
@@ -581,6 +592,24 @@ export type GlobalConfig = {
 
   // Skill usage tracking for autocomplete ranking
   skillUsage?: Record<string, { usageCount: number; lastUsedAt: number }>
+
+  // Agent usage tracking, shown in the /agents management UI. Key is
+  // "<source>:<agentType>" — see agentKey() in utils/agentTeams.ts.
+  // Deliberately a separate map from skillUsage: skills are invoked by name,
+  // agents are spawned by type, and the same string can name both.
+  agentUsage?: Record<string, { usageCount: number; lastUsedAt: number }>
+
+  // Teams let the user group agents and load/unload them as a unit. Stored here
+  // rather than in agent frontmatter because agents also come from plugin,
+  // managed and CLI-flag sources whose files we cannot edit, so membership
+  // cannot live beside the definitions it names.
+  agentTeams?: AgentTeam[]
+
+  // Deny-lists, not allow-lists: absent means loaded. An allow-list would
+  // unload every existing agent the first time these keys were written.
+  disabledAgents?: string[] // agentKey() values
+  disabledTeams?: string[] // AgentTeam.id values
+
   // Official marketplace auto-install tracking
   officialMarketplaceAutoInstallAttempted?: boolean // Whether auto-install was attempted
   officialMarketplaceAutoInstalled?: boolean // Whether auto-install succeeded

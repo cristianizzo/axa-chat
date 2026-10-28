@@ -17,6 +17,7 @@ import { assembleToolPool } from '../../tools.js';
 import { asAgentId } from '../../types/ids.js';
 import { runWithAgentContext } from '../../utils/agentContext.js';
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js';
+import { agentKey } from '../../utils/agentTeams.js';
 import { getCwd, runWithCwdOverride } from '../../utils/cwd.js';
 import { logForDebugging } from '../../utils/debug.js';
 import { isEnvTruthy } from '../../utils/envUtils.js';
@@ -36,6 +37,7 @@ import { asSystemPrompt } from '../../utils/systemPromptType.js';
 import { getTaskOutputPath } from '../../utils/task/diskOutput.js';
 import { getParentSessionId, isTeammate } from '../../utils/teammate.js';
 import { isInProcessTeammate } from '../../utils/teammateContext.js';
+import { recordAgentUsage } from '../../utils/suggestions/agentUsageTracking.js';
 import { teleportToRemote } from '../../utils/teleport.js';
 import { getAssistantMessageContentLength } from '../../utils/tokens.js';
 import { createAgentId } from '../../utils/uuid.js';
@@ -435,6 +437,10 @@ export const AgentTool = buildTool({
       is_async: (run_in_background === true || selectedAgent.background === true) && !isBackgroundTasksDisabled,
       is_fork: isForkPath
     });
+
+    // Local "last used" counter for the /agents management UI. Separate from
+    // the analytics event above, which is not persisted per-machine.
+    recordAgentUsage(agentKey(selectedAgent));
 
     // Resolve effective isolation mode (explicit param overrides agent def)
     const effectiveIsolation = isolation ?? selectedAgent.isolation;
