@@ -16,7 +16,7 @@
  * Endpoint: https://api.deepseek.com/v1/chat/completions
  */
 
-import { DEEPSEEK_BASE_URL, DEEPSEEK_MAX_OUTPUT_TOKENS, DEEPSEEK_MESSAGES_PATH, resolveClaudeModelForDeepSeek } from '../../config/deepseek.js'
+import { DEEPSEEK_BASE_URL, DEEPSEEK_MAX_OUTPUT_TOKENS, DEEPSEEK_MESSAGES_PATH, DEFAULT_DEEPSEEK_MODEL, isRecognisedModelForDeepSeek, resolveClaudeModelForDeepSeek } from '../../config/deepseek.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { estimateTokenCountResponse } from './count-tokens-shim.js'
 import { createBackpressuredSseStream } from './sse-backpressure.js'
@@ -217,7 +217,14 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
       .join('\n') || undefined
   }
 
-  const model = resolveClaudeModelForDeepSeek(anthropicBody.model as string | undefined)
+  const requestedModel = anthropicBody.model as string | undefined
+  if (!isRecognisedModelForDeepSeek(requestedModel)) {
+    logForDebugging(
+      `DeepSeek resolveModel: unrecognised model '${requestedModel}', falling back to '${DEFAULT_DEEPSEEK_MODEL}'`,
+      { level: 'warn' },
+    )
+  }
+  const model = resolveClaudeModelForDeepSeek(requestedModel)
   const openAIMessages = translateMessages(messages, system)
   const anthropicTools = (anthropicBody.tools ?? []) as AnthropicTool[]
 

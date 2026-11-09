@@ -17,7 +17,7 @@
  * Endpoint: https://api.x.ai/v1/chat/completions
  */
 
-import { GROK_BASE_URL, GROK_MAX_OUTPUT_TOKENS, GROK_MESSAGES_PATH, resolveClaudeModelForGrok } from '../../config/grok.js'
+import { GROK_BASE_URL, GROK_MAX_OUTPUT_TOKENS, GROK_MESSAGES_PATH, DEFAULT_GROK_MODEL, isRecognisedModelForGrok, resolveClaudeModelForGrok } from '../../config/grok.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { estimateTokenCountResponse } from './count-tokens-shim.js'
 import { createBackpressuredSseStream } from './sse-backpressure.js'
@@ -229,7 +229,14 @@ function translateToOpenAIBody(anthropicBody: Record<string, unknown>): Record<s
       .join('\n') || undefined
   }
 
-  const model = resolveClaudeModelForGrok(anthropicBody.model as string | undefined)
+  const requestedModel = anthropicBody.model as string | undefined
+  if (!isRecognisedModelForGrok(requestedModel)) {
+    logForDebugging(
+      `Grok resolveModel: unrecognised model '${requestedModel}', falling back to '${DEFAULT_GROK_MODEL}'`,
+      { level: 'warn' },
+    )
+  }
+  const model = resolveClaudeModelForGrok(requestedModel)
   const openAIMessages = translateMessages(messages, system)
   const anthropicTools = (anthropicBody.tools ?? []) as AnthropicTool[]
 

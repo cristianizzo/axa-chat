@@ -112,6 +112,27 @@ export function resolveClaudeModelForDeepSeek(
 }
 
 /**
+ * Whether {@link resolveClaudeModelForDeepSeek} recognised this ID, rather than
+ * falling back blindly.
+ *
+ * The fallback is the right behaviour — the alternative is a 404 — but it is
+ * silent, so a typo or a newly introduced Claude family would look like a
+ * successful request on the default model. The adapter warns on this.
+ */
+export function isRecognisedModelForDeepSeek(
+  claudeModel: string | null | undefined,
+): boolean {
+  if (!claudeModel) return true
+  const lower = claudeModel.toLowerCase()
+  if (lower.startsWith('deepseek-')) return true
+  return (
+    Object.keys(CLAUDE_FAMILY_TO_DEEPSEEK_MODEL) as Array<
+      keyof typeof CLAUDE_FAMILY_TO_DEEPSEEK_MODEL
+    >
+  ).some(name => lower.includes(name))
+}
+
+/**
  * Context window for DeepSeek models (input tokens).
  * Every V4 model advertises 1M.
  */

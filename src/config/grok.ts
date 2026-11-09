@@ -59,6 +59,32 @@ export function resolveClaudeModelForGrok(
   return DEFAULT_GROK_MODEL
 }
 
+/** The Claude families that {@link resolveClaudeModelForGrok} knowingly maps. */
+const RECOGNISED_CLAUDE_FAMILIES = [
+  'opus',
+  'sonnet',
+  'haiku',
+  'fable',
+  'mythos',
+] as const
+
+/**
+ * Whether {@link resolveClaudeModelForGrok} recognised this ID, rather than
+ * falling back blindly.
+ *
+ * Every Claude family maps to the same flagship, so the fallback produces the
+ * right answer either way — but it is silent, and the adapter warns on the
+ * unrecognised case so a typo is not mistaken for a successful request.
+ */
+export function isRecognisedModelForGrok(
+  claudeModel: string | null | undefined,
+): boolean {
+  if (!claudeModel) return true
+  const lower = claudeModel.toLowerCase()
+  if (lower.startsWith('grok-')) return true
+  return RECOGNISED_CLAUDE_FAMILIES.some(name => lower.includes(name))
+}
+
 /**
  * Context window for Grok models (input tokens).
  * Verified live against GET /v1/models — grok-4.6 advertises 500k.
