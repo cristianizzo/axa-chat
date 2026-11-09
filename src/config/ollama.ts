@@ -54,3 +54,31 @@ export function getOllamaBaseUrl(): string {
 export function getOllamaAuthToken(): string {
   return process.env.OLLAMA_API_KEY?.trim() || 'ollama'
 }
+
+/** The account allowance the daemon proxies at {@link OLLAMA_BALANCE_PATH}. */
+export type OllamaBalance = {
+  included: { balance_usd: number; allowance_usd: number }
+}
+
+/** Where the daemon exposes the signed-in account's cloud allowance. */
+export const OLLAMA_BALANCE_PATH = '/api/balance'
+
+/**
+ * The share of this period's cloud allowance already spent, e.g. `9% used`.
+ *
+ * Local models draw on no allowance at all, and the daemon reports a zero one
+ * for them — returning null there keeps the footer from claiming a meaningless
+ * 100%. Values are clamped because a partial refund can leave the balance above
+ * the allowance.
+ *
+ * @param included - The `included` block of the balance response
+ * @returns The label, or null when there is no allowance to report
+ */
+export function formatOllamaCredits(
+  included: OllamaBalance['included'] | undefined,
+): string | null {
+  const allowance = included?.allowance_usd ?? 0
+  if (!(allowance > 0)) return null
+  const used = (allowance - (included?.balance_usd ?? 0)) / allowance
+  return `${Math.round(Math.min(1, Math.max(0, used)) * 100)}% used`
+}
