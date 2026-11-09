@@ -10,7 +10,8 @@
  * whose reported client version is below a minimum it enforces server-side
  * for gating newer models (seen 2026-09: 400 claude_code_version_too_old,
  * "version 2.1.251 or newer is required" when selecting Fable 5.1; seen again
- * 2026-10: "version 2.1.280 or newer is required" when selecting Opus 5.5) —
+ * 2026-10: "version 2.1.280 or newer is required" when selecting Opus 5.5; and
+ * 2026-11: "version 2.1.290 or newer is required" when selecting Fable 5.2) —
  * axa's real version numbers happily satisfy that check, but reporting axa's own
  * low numbers as if they were the upstream Claude Code version fails it even
  * though nothing about this fork's actual model/tool support is behind.
@@ -40,4 +41,4 @@
  * constants/system.ts would recreate the exact circular-dependency shape
  * constants/system.ts's own header says it was extracted to avoid.
  */
-export const ANTHROPIC_COMPAT_CLAUDE_CODE_VERSION = '2.1.280'
+export const ANTHROPIC_COMPAT_CLAUDE_CODE_VERSION = '2.1.290'
