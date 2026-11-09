@@ -41,10 +41,6 @@ export function getAgentModel(
   toolSpecifiedModel?: ModelAlias,
   permissionMode?: PermissionMode,
 ): string {
-  if (process.env.CLAUDE_CODE_SUBAGENT_MODEL) {
-    return parseUserSpecifiedModel(process.env.CLAUDE_CODE_SUBAGENT_MODEL)
-  }
-
   // Extract Bedrock region prefix from parent model to inherit for subagents.
   // This ensures subagents use the same cross-region inference profile (e.g., "eu.", "us.")
   // as the parent, which is required when IAM permissions only allow specific regions.
@@ -80,6 +76,13 @@ export function getAgentModel(
       return parentModel
     }
     return applyParentRegionPrefix(model, spec)
+  }
+
+  // An explicit env override is a deliberate choice, so it keeps concrete IDs
+  // as-is, but it must still respect the alias fallback: `opus` on Ollama would
+  // otherwise resolve to a claude-* ID and 404 on every subagent.
+  if (process.env.CLAUDE_CODE_SUBAGENT_MODEL) {
+    return resolve(process.env.CLAUDE_CODE_SUBAGENT_MODEL)
   }
 
   // Prioritize tool-specified model if provided

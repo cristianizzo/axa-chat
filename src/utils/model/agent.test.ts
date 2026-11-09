@@ -28,3 +28,13 @@ test('on Anthropic, a tier alias still resolves to a Claude model', () => {
   setActiveAuthProviderForSession('anthropic')
   expect(getAgentModel('opus', 'claude-sonnet-5-5')).toMatch(/^claude-opus/)
 })
+
+test('the subagent env override goes through the alias fallback too', () => {
+  setActiveAuthProviderForSession('ollama')
+  process.env.CLAUDE_CODE_SUBAGENT_MODEL = 'opus'
+  try {
+    expect(getAgentModel(undefined, OLLAMA_MODEL)).toBe(OLLAMA_MODEL)
+  } finally {
+    delete process.env.CLAUDE_CODE_SUBAGENT_MODEL
+  }
+})
