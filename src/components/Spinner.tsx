@@ -55,9 +55,8 @@ type Props = {
   /** Leader's turn has completed (no active query). Used to suppress stall-red spinner when only teammates are running. */
   leaderIsIdle?: boolean;
   /**
-   * 0-100 while compacting, null/undefined otherwise. See
-   * SpinnerAnimationRow's compactProgressPercent for what this can and
-   * cannot represent — it is not threaded into BriefSpinner.
+   * 0-100 while compacting, null/undefined otherwise. Threaded into
+   * BriefSpinner too, which renders the percent alone — see its own doc.
    */
   overrideProgress?: number | null;
 };
@@ -422,12 +421,16 @@ function BriefSpinner(t0) {
     t6 = $[17];
   }
   const leftWidth = t6 + 3;
+  const rightWidth = stringWidth(rightText);
   // Percent-only degrade (no block-fill bar — see BriefSpinnerProps doc).
-  // Not cached: trivial string work, recomputed every render regardless
-  // since this component is already on the 120ms animation clock.
-  const progressText = overrideProgress !== null && overrideProgress !== undefined ? ` ${Math.round(overrideProgress)}%` : "";
+  // Dropped entirely when it does not fit, matching the full spinner's
+  // hidden step: appending it unconditionally would wrap the one-line footer
+  // on a narrow terminal. The 1 reserves the gap before `rightText`.
+  const wantedProgress = overrideProgress !== null && overrideProgress !== undefined ? ` ${Math.round(overrideProgress)}%` : "";
+  const fitsProgress = columns - 2 - leftWidth - rightWidth - 1 >= (wantedProgress ? stringWidth(wantedProgress) : 0);
+  const progressText = fitsProgress ? wantedProgress : "";
   const progressWidth = progressText ? stringWidth(progressText) : 0;
-  const pad = Math.max(1, columns - 2 - leftWidth - stringWidth(rightText) - progressWidth);
+  const pad = Math.max(1, columns - 2 - leftWidth - rightWidth - progressWidth);
   let t7;
   if ($[18] !== after || $[19] !== before || $[20] !== connText || $[21] !== dots || $[22] !== shimmer || $[23] !== showConnWarning || $[31] !== progressText) {
     t7 = showConnWarning ? <Text color="error">{connText + dots + progressText}</Text> : <>{before ? <Text dimColor={true}>{before}</Text> : null}{shimmer ? <Text>{shimmer}</Text> : null}{after ? <Text dimColor={true}>{after}</Text> : null}<Text dimColor={true}>{dots}{progressText}</Text></>;

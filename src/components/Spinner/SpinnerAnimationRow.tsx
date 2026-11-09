@@ -213,9 +213,12 @@ export function SpinnerAnimationRow({
     const percentText = `${Math.round(compactProgressPercent)}%`;
     const percentWidth = stringWidth(percentText);
     const remainingForProgress = availableSpace - usedAfterTimer;
-    if (remainingForProgress >= COMPACT_PROGRESS_BAR_WIDTH + 1 + percentWidth) {
+    // Each form above ends in a trailing space, and that cell counts toward
+    // the width: leaving it out of the threshold picks the form one cell too
+    // early, so the row wraps instead of degrading to the next form.
+    if (remainingForProgress >= COMPACT_PROGRESS_BAR_WIDTH + 1 + percentWidth + 1) {
       compactProgressText = `${renderProgressBar(compactProgressPercent, COMPACT_PROGRESS_BAR_WIDTH)} ${percentText} `;
-    } else if (remainingForProgress >= percentWidth) {
+    } else if (remainingForProgress >= percentWidth + 1) {
       compactProgressText = `${percentText} `;
     }
   }

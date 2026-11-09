@@ -56,10 +56,16 @@ export const call: LocalCommandCall = async (args, context) => {
     // Try session memory compaction first if no custom instructions
     // (session memory compaction doesn't support custom instructions)
     if (!customInstructions) {
-      // setSDKStatus/compact_end bracket the attempt regardless of outcome —
+      // compact_end brackets the attempt regardless of outcome —
       // trySessionMemoryCompaction only emits its internal stage events once
       // committed (see its own doc comment), but a late internal error could
-      // still leave the bar stuck without this unconditional compact_end.
+      // still leave the bar stuck without this unconditional reset.
+      //
+      // The SDK status deliberately outlives a declined attempt (result null):
+      // the command then continues into reactive or traditional compaction, and
+      // clearing it in between makes SDK consumers see one compaction reported
+      // as a completed cycle followed by a second one. Only a committed result
+      // or a throw ends the bracket here.
       context.setSDKStatus?.('compacting')
       let sessionMemoryResult: CompactionResult | null
       try {
@@ -69,11 +75,14 @@ export const call: LocalCommandCall = async (args, context) => {
           undefined,
           context.onCompactProgress,
         )
-      } finally {
+      } catch (error) {
         context.setSDKStatus?.(null)
+        throw error
+      } finally {
         context.onCompactProgress?.({ type: 'compact_end' })
       }
       if (sessionMemoryResult) {
+        context.setSDKStatus?.(null)
         getUserContext.cache.clear?.()
         runPostCompactCleanup()
         // Reset cache read baseline so the post-compact drop isn't flagged
