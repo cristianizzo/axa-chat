@@ -374,7 +374,8 @@ export function getModelFamilies(): ModelFamily[] {
       label: 'Fable',
       description: '$10/$50 · Next-gen long-running agents',
       versions: [
-        { value: s.fable51, label: 'Fable 5.1', description: '1M context · 128k output · Latest, most advanced' },
+        { value: s.fable52, label: 'Fable 5.2', description: '1M context · 128k output · Latest, most advanced' },
+        { value: s.fable51, label: 'Fable 5.1', description: '1M context · 128k output · Previous version' },
         { value: s.fable5, label: 'Fable 5', description: '1M context · 128k output · Previous version' },
       ],
     },

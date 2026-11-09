@@ -449,7 +449,7 @@ function carry1mTag(target: ModelName, refusingModel: ModelName): ModelName {
  * Vertex and Foundry ID, so the current version is servable everywhere.
  */
 export function getDefaultFableModel(): ModelName {
-  return getModelStrings().fable51
+  return getModelStrings().fable52
 }
 
 // @[MODEL LAUNCH]: Update the default Haiku model (3P providers may lag so keep defaults unchanged).
@@ -562,6 +562,9 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   }
   // Special cases for Claude 4+ models to differentiate versions
   // Order matters: check more specific versions first (4-5 before 4)
+  if (name.includes('claude-fable-5-2')) {
+    return 'claude-fable-5-2'
+  }
   if (name.includes('claude-fable-5-1')) {
     return 'claude-fable-5-1'
   }

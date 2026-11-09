@@ -301,6 +301,23 @@ export const MODEL_REGISTRY: readonly ModelDescriptor[] = [
     knowledgeCutoff: 'June 2026',
   },
   {
+    key: 'fable52',
+    config: ALL_MODEL_CONFIGS.fable52,
+    canonical: 'claude-fable-5-2',
+    family: 'fable',
+    displayName: 'Fable 5.2',
+    pricingTier: 'tier_10_50',
+    supports1M: true,
+    effort: true,
+    maxEffort: false,
+    adaptiveThinking: true,
+    structuredOutputs: false,
+    maxOutput: OUT_64_128,
+    // ASSUMPTION: no knowledge-cutoff date was supplied for this launch; kept
+    // consistent with the fable51 pattern until a real date is confirmed.
+    knowledgeCutoff: 'June 2026',
+  },
+  {
     key: 'mythos5',
     config: ALL_MODEL_CONFIGS.mythos5,
     canonical: 'claude-mythos-5',
