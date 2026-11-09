@@ -54,6 +54,11 @@ type Props = {
   hasActiveTools?: boolean;
   /** Leader's turn has completed (no active query). Used to suppress stall-red spinner when only teammates are running. */
   leaderIsIdle?: boolean;
+  /**
+   * 0-100 while compacting, null/undefined otherwise. Threaded into
+   * BriefSpinner too, which renders the percent alone — see its own doc.
+   */
+  overrideProgress?: number | null;
 };
 
 // Thin wrapper: branches on isBriefOnly so the two variants have independent
@@ -75,7 +80,7 @@ export function SpinnerWithVerb(props: Props): React.ReactNode {
   // BriefTool.ts would leak tool-name strings into external builds. Single
   // spinner instance → hooks stay unconditional (two subs, negligible).
   if ((feature('KAIROS') || feature('KAIROS_BRIEF')) && (getKairosActive() || getUserMsgOptIn() && (briefEnvEnabled || getFeatureValue_CACHED_MAY_BE_STALE('tengu_kairos_brief', false))) && isBriefOnly && !viewingAgentTaskId) {
-    return <BriefSpinner mode={props.mode} overrideMessage={props.overrideMessage} />;
+    return <BriefSpinner mode={props.mode} overrideMessage={props.overrideMessage} overrideProgress={props.overrideProgress} />;
   }
   return <SpinnerWithVerbInner {...props} />;
 }
@@ -92,7 +97,8 @@ function SpinnerWithVerbInner({
   spinnerSuffix,
   verbose,
   hasActiveTools = false,
-  leaderIsIdle = false
+  leaderIsIdle = false,
+  overrideProgress = null
 }: Props): React.ReactNode {
   const settings = useSettings();
   const reducedMotion = settings.prefersReducedMotion ?? false;
@@ -278,7 +284,7 @@ function SpinnerWithVerbInner({
     }
   }
   return <Box flexDirection="column" width="100%" alignItems="flex-start">
-      <SpinnerAnimationRow mode={mode} reducedMotion={reducedMotion} hasActiveTools={hasActiveTools} responseLengthRef={responseLengthRef} message={message} messageColor={messageColor} shimmerColor={shimmerColor} overrideColor={overrideColor} loadingStartTimeRef={loadingStartTimeRef} totalPausedMsRef={totalPausedMsRef} pauseStartTimeRef={pauseStartTimeRef} spinnerSuffix={spinnerSuffix} verbose={verbose} columns={columns} hasRunningTeammates={hasRunningTeammates} teammateTokens={teammateTokens} foregroundedTeammate={foregroundedTeammate} leaderIsIdle={leaderIsIdle} thinkingStatus={thinkingStatus} effortSuffix={effortSuffix} />
+      <SpinnerAnimationRow mode={mode} reducedMotion={reducedMotion} hasActiveTools={hasActiveTools} responseLengthRef={responseLengthRef} message={message} messageColor={messageColor} shimmerColor={shimmerColor} overrideColor={overrideColor} loadingStartTimeRef={loadingStartTimeRef} totalPausedMsRef={totalPausedMsRef} pauseStartTimeRef={pauseStartTimeRef} spinnerSuffix={spinnerSuffix} verbose={verbose} columns={columns} compactProgressPercent={overrideProgress} hasRunningTeammates={hasRunningTeammates} teammateTokens={teammateTokens} foregroundedTeammate={foregroundedTeammate} leaderIsIdle={leaderIsIdle} thinkingStatus={thinkingStatus} effortSuffix={effortSuffix} />
       {showSpinnerTree && hasRunningTeammates ? <TeammateSpinnerTree selectedIndex={selectedIPAgentIndex} isInSelectionMode={viewSelectionMode === 'selecting-agent'} allIdle={allIdle} leaderVerb={leaderIsIdle ? undefined : leaderVerb} leaderIdleText={leaderIsIdle ? 'Idle' : undefined} leaderTokenCount={leaderTokenCount} /> : showExpandedTodos && tasksV2 && tasksV2.length > 0 ? <Box width="100%" flexDirection="column">
           <MessageResponse>
             <TaskListV2 tasks={tasksV2} />
@@ -318,12 +324,21 @@ function SpinnerWithVerbInner({
 type BriefSpinnerProps = {
   mode: SpinnerMode;
   overrideMessage?: string | null;
+  /**
+   * 0-100 while compacting, null/undefined otherwise. Brief mode is the
+   * stripped-down display (see the footprint comment above), so unlike
+   * SpinnerAnimationRow it never gets the block-fill bar — just the percent
+   * number appended after the verb, the same degrade-to-percent-only step
+   * the full spinner falls back to on narrow terminals.
+   */
+  overrideProgress?: number | null;
 };
 function BriefSpinner(t0) {
-  const $ = _c(31);
+  const $ = _c(32);
   const {
     mode,
-    overrideMessage
+    overrideMessage,
+    overrideProgress
   } = t0;
   const settings = useSettings();
   const reducedMotion = settings.prefersReducedMotion ?? false;
@@ -406,16 +421,26 @@ function BriefSpinner(t0) {
     t6 = $[17];
   }
   const leftWidth = t6 + 3;
-  const pad = Math.max(1, columns - 2 - leftWidth - stringWidth(rightText));
+  const rightWidth = stringWidth(rightText);
+  // Percent-only degrade (no block-fill bar — see BriefSpinnerProps doc).
+  // Dropped entirely when it does not fit, matching the full spinner's
+  // hidden step: appending it unconditionally would wrap the one-line footer
+  // on a narrow terminal. The 1 reserves the gap before `rightText`.
+  const wantedProgress = overrideProgress !== null && overrideProgress !== undefined ? ` ${Math.round(overrideProgress)}%` : "";
+  const fitsProgress = columns - 2 - leftWidth - rightWidth - 1 >= (wantedProgress ? stringWidth(wantedProgress) : 0);
+  const progressText = fitsProgress ? wantedProgress : "";
+  const progressWidth = progressText ? stringWidth(progressText) : 0;
+  const pad = Math.max(1, columns - 2 - leftWidth - rightWidth - progressWidth);
   let t7;
-  if ($[18] !== after || $[19] !== before || $[20] !== connText || $[21] !== dots || $[22] !== shimmer || $[23] !== showConnWarning) {
-    t7 = showConnWarning ? <Text color="error">{connText + dots}</Text> : <>{before ? <Text dimColor={true}>{before}</Text> : null}{shimmer ? <Text>{shimmer}</Text> : null}{after ? <Text dimColor={true}>{after}</Text> : null}<Text dimColor={true}>{dots}</Text></>;
+  if ($[18] !== after || $[19] !== before || $[20] !== connText || $[21] !== dots || $[22] !== shimmer || $[23] !== showConnWarning || $[31] !== progressText) {
+    t7 = showConnWarning ? <Text color="error">{connText + dots + progressText}</Text> : <>{before ? <Text dimColor={true}>{before}</Text> : null}{shimmer ? <Text>{shimmer}</Text> : null}{after ? <Text dimColor={true}>{after}</Text> : null}<Text dimColor={true}>{dots}{progressText}</Text></>;
     $[18] = after;
     $[19] = before;
     $[20] = connText;
     $[21] = dots;
     $[22] = shimmer;
     $[23] = showConnWarning;
+    $[31] = progressText;
     $[24] = t7;
   } else {
     t7 = $[24];

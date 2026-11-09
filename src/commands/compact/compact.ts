@@ -7,6 +7,7 @@ import { getShortcutDisplay } from '../../keybindings/shortcutFormat.js'
 import { notifyCompaction } from '../../services/api/promptCacheBreakDetection.js'
 import {
   type CompactionResult,
+  COMPACT_STAGE_PERCENT,
   compactConversation,
   ERROR_MESSAGE_INCOMPLETE_RESPONSE,
   ERROR_MESSAGE_NOT_ENOUGH_MESSAGES,
@@ -55,11 +56,33 @@ export const call: LocalCommandCall = async (args, context) => {
     // Try session memory compaction first if no custom instructions
     // (session memory compaction doesn't support custom instructions)
     if (!customInstructions) {
-      const sessionMemoryResult = await trySessionMemoryCompaction(
-        messages,
-        context.agentId,
-      )
+      // compact_end brackets the attempt regardless of outcome —
+      // trySessionMemoryCompaction only emits its internal stage events once
+      // committed (see its own doc comment), but a late internal error could
+      // still leave the bar stuck without this unconditional reset.
+      //
+      // The SDK status deliberately outlives a declined attempt (result null):
+      // the command then continues into reactive or traditional compaction, and
+      // clearing it in between makes SDK consumers see one compaction reported
+      // as a completed cycle followed by a second one. Only a committed result
+      // or a throw ends the bracket here.
+      context.setSDKStatus?.('compacting')
+      let sessionMemoryResult: CompactionResult | null
+      try {
+        sessionMemoryResult = await trySessionMemoryCompaction(
+          messages,
+          context.agentId,
+          undefined,
+          context.onCompactProgress,
+        )
+      } catch (error) {
+        context.setSDKStatus?.(null)
+        throw error
+      } finally {
+        context.onCompactProgress?.({ type: 'compact_end' })
+      }
       if (sessionMemoryResult) {
+        context.setSDKStatus?.(null)
         getUserContext.cache.clear?.()
         runPostCompactCleanup()
         // Reset cache read baseline so the post-compact drop isn't flagged
@@ -149,6 +172,7 @@ async function compactViaReactive(
   context.onCompactProgress?.({
     type: 'hooks_start',
     hookType: 'pre_compact',
+    percent: COMPACT_STAGE_PERCENT.preCompactHooks,
   })
   context.setSDKStatus?.('compacting')
 
@@ -170,7 +194,16 @@ async function compactViaReactive(
 
     context.setStreamMode?.('requesting')
     context.setResponseLength?.(() => 0)
-    context.onCompactProgress?.({ type: 'compact_start' })
+    // No session_start/post_compact progress events on this path —
+    // reactiveCompactOnPromptTooLong runs PostCompact hooks internally
+    // without a progress callback, so the bar holds at `summarizing` and
+    // then disappears at compact_end rather than advancing through the
+    // later stages. Honest about what's tracked, just a shorter visible
+    // sequence than the compactConversation path.
+    context.onCompactProgress?.({
+      type: 'compact_start',
+      percent: COMPACT_STAGE_PERCENT.summarizing,
+    })
 
     const outcome = await reactive.reactiveCompactOnPromptTooLong(
       messages,

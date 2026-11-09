@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { Box, Text } from '../../ink.js'
+import { renderProgressBar } from '../../utils/progressBar.js'
 import type { UpdateProgress, UpdateStage } from '../../utils/sourceUpdate.js'
 import {
   getUpdateProgress,
@@ -35,14 +36,13 @@ function ProgressBar({
   }, [])
 
   const percent = overallPercent(progress.stage, progress.percent)
-  const filled = Math.round((percent / 100) * BAR_WIDTH)
+  const bar = renderProgressBar(percent, BAR_WIDTH)
 
   return (
     <Box>
       <Text dimColor wrap="truncate">
         {SPINNER_FRAMES[frame % SPINNER_FRAMES.length]} {STAGE_LABEL[progress.stage]}{' '}
-        {'█'.repeat(filled)}
-        {'░'.repeat(BAR_WIDTH - filled)} {percent}%
+        {bar} {percent}%
         {progress.detail ? ` · ${progress.detail}` : ''}
       </Text>
     </Box>

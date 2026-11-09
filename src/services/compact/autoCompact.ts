@@ -305,13 +305,32 @@ export async function autoCompactIfNeeded(
     querySource,
   }
 
-  // EXPERIMENT: Try session memory compaction first
-  const sessionMemoryResult = await trySessionMemoryCompaction(
-    messages,
-    toolUseContext.agentId,
-    recompactionInfo.autoCompactThreshold,
-  )
+  // EXPERIMENT: Try session memory compaction first.
+  // compact_end brackets the attempt regardless of outcome —
+  // trySessionMemoryCompaction only emits its internal stage events once
+  // committed (see its own doc comment), but a late internal error could still
+  // leave the bar stuck without this unconditional reset.
+  //
+  // The SDK status deliberately outlives a declined attempt (result null): the
+  // fallback compactConversation below reports one compaction, and clearing the
+  // status in between would make SDK consumers see two.
+  toolUseContext.setSDKStatus?.('compacting')
+  let sessionMemoryResult: CompactionResult | null
+  try {
+    sessionMemoryResult = await trySessionMemoryCompaction(
+      messages,
+      toolUseContext.agentId,
+      recompactionInfo.autoCompactThreshold,
+      toolUseContext.onCompactProgress,
+    )
+  } catch (error) {
+    toolUseContext.setSDKStatus?.(null)
+    throw error
+  } finally {
+    toolUseContext.onCompactProgress?.({ type: 'compact_end' })
+  }
   if (sessionMemoryResult) {
+    toolUseContext.setSDKStatus?.(null)
     // Reset lastSummarizedMessageId since session memory compaction prunes messages
     // and the old message UUID will no longer exist after the REPL replaces messages
     setLastSummarizedMessageId(undefined)

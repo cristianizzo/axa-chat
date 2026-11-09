@@ -133,6 +133,25 @@ export const POST_COMPACT_SKILLS_TOKEN_BUDGET = 25_000
 const MAX_COMPACT_STREAMING_RETRIES = 2
 
 /**
+ * Weighted boundaries for the compaction progress bar, one position per
+ * `onCompactProgress` event compact.ts actually emits. Only four transitions
+ * exist in the whole flow (PreCompact hooks → summarization → SessionStart
+ * hooks → PostCompact hooks → done), and summarization itself is a single
+ * opaque LLM call with no sub-signal — so the bar jumps to a stage's start
+ * boundary on each transition and sits there until the next one, exactly
+ * like the self-update bar's un-instrumented install/build stages
+ * (utils/sourceUpdate.ts STAGE_RANGE). Spans are weighted by how long each
+ * stage actually takes: summarization dominates, hooks are comparatively
+ * quick.
+ */
+export const COMPACT_STAGE_PERCENT = {
+  preCompactHooks: 0,
+  summarizing: 10,
+  sessionStartHooks: 85,
+  postCompactHooks: 92,
+} as const
+
+/**
  * Strip image blocks from user messages before sending for compaction.
  * Images are not needed for generating a conversation summary and can
  * cause the compaction API call itself to hit the prompt-too-long limit,
@@ -512,6 +531,7 @@ export async function compactConversation(
     context.onCompactProgress?.({
       type: 'hooks_start',
       hookType: 'pre_compact',
+      percent: COMPACT_STAGE_PERCENT.preCompactHooks,
     })
 
     // Execute PreCompact hooks
@@ -532,7 +552,10 @@ export async function compactConversation(
     // Show requesting mode with up arrow and custom message
     context.setStreamMode?.('requesting')
     context.setResponseLength?.(() => 0)
-    context.onCompactProgress?.({ type: 'compact_start' })
+    context.onCompactProgress?.({
+      type: 'compact_start',
+      percent: COMPACT_STAGE_PERCENT.summarizing,
+    })
 
     // 3P default: true — forked-agent path reuses main conversation's prompt cache.
     // Experiment (Jan 2026) confirmed: false path is 98% cache miss, costs ~0.76% of
@@ -697,6 +720,7 @@ export async function compactConversation(
     context.onCompactProgress?.({
       type: 'hooks_start',
       hookType: 'session_start',
+      percent: COMPACT_STAGE_PERCENT.sessionStartHooks,
     })
     // Execute SessionStart hooks after successful compaction
     const hookMessages = await processSessionStartHooks('compact', {
@@ -832,6 +856,7 @@ export async function compactConversation(
     context.onCompactProgress?.({
       type: 'hooks_start',
       hookType: 'post_compact',
+      percent: COMPACT_STAGE_PERCENT.postCompactHooks,
     })
     const postCompactHookResult = await executePostCompactHooks(
       {
@@ -925,6 +950,7 @@ export async function partialCompactConversation(
     context.onCompactProgress?.({
       type: 'hooks_start',
       hookType: 'pre_compact',
+      percent: COMPACT_STAGE_PERCENT.preCompactHooks,
     })
 
     context.setSDKStatus?.('compacting')
@@ -948,7 +974,10 @@ export async function partialCompactConversation(
 
     context.setStreamMode?.('requesting')
     context.setResponseLength?.(() => 0)
-    context.onCompactProgress?.({ type: 'compact_start' })
+    context.onCompactProgress?.({
+      type: 'compact_start',
+      percent: COMPACT_STAGE_PERCENT.summarizing,
+    })
 
     const compactPrompt = getPartialCompactPrompt(customInstructions, direction)
     const summaryRequest = createUserMessage({
@@ -1090,6 +1119,7 @@ export async function partialCompactConversation(
     context.onCompactProgress?.({
       type: 'hooks_start',
       hookType: 'session_start',
+      percent: COMPACT_STAGE_PERCENT.sessionStartHooks,
     })
     const hookMessages = await processSessionStartHooks('compact', {
       model: context.options.mainLoopModel,
@@ -1178,6 +1208,7 @@ export async function partialCompactConversation(
     context.onCompactProgress?.({
       type: 'hooks_start',
       hookType: 'post_compact',
+      percent: COMPACT_STAGE_PERCENT.postCompactHooks,
     })
     const postCompactHookResult = await executePostCompactHooks(
       {
