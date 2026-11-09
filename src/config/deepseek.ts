@@ -66,6 +66,73 @@ export const DEEPSEEK_LEGACY_MODEL_IDS = [
 export const DEFAULT_DEEPSEEK_MODEL: DeepSeekModelId = 'deepseek-v4-flash'
 
 /**
+ * Claude families mapped onto their DeepSeek counterpart.
+ *
+ * Fable and Mythos take Pro alongside Opus: of the entries in MODEL_REGISTRY
+ * they carry the most expensive pricingTier, 'tier_10_50', above every Opus
+ * entry in it at 'tier_5_25'.
+ */
+export const CLAUDE_FAMILY_TO_DEEPSEEK_MODEL = {
+  opus: 'deepseek-v4-pro',
+  fable: 'deepseek-v4-pro',
+  mythos: 'deepseek-v4-pro',
+  sonnet: 'deepseek-v4-flash',
+  haiku: 'deepseek-v4-flash',
+} as const satisfies Record<string, DeepSeekModelId>
+
+/**
+ * Resolves a model ID to the DeepSeek model that will actually be served.
+ *
+ * A `deepseek-*` ID passes through untouched — including the retired
+ * `deepseek-chat`/`deepseek-reasoner` aliases, which the API still serves. A
+ * Claude family is mapped through {@link CLAUDE_FAMILY_TO_DEEPSEEK_MODEL}, and
+ * anything unrecognised falls back to the default rather than being forwarded
+ * to a provider that would 404 it.
+ *
+ * Dependency-free on purpose: the fetch adapter and the account pill both call
+ * this, so it must not drag runtime imports into either graph.
+ */
+export function resolveClaudeModelForDeepSeek(
+  claudeModel: string | null | undefined,
+): string {
+  if (!claudeModel) return DEFAULT_DEEPSEEK_MODEL
+
+  const lower = claudeModel.toLowerCase()
+  if (lower.startsWith('deepseek-')) return claudeModel
+
+  const family = (
+    Object.keys(CLAUDE_FAMILY_TO_DEEPSEEK_MODEL) as Array<
+      keyof typeof CLAUDE_FAMILY_TO_DEEPSEEK_MODEL
+    >
+  ).find(name => lower.includes(name))
+
+  return family
+    ? CLAUDE_FAMILY_TO_DEEPSEEK_MODEL[family]
+    : DEFAULT_DEEPSEEK_MODEL
+}
+
+/**
+ * Whether {@link resolveClaudeModelForDeepSeek} recognised this ID, rather than
+ * falling back blindly.
+ *
+ * The fallback is the right behaviour — the alternative is a 404 — but it is
+ * silent, so a typo or a newly introduced Claude family would look like a
+ * successful request on the default model. The adapter warns on this.
+ */
+export function isRecognisedModelForDeepSeek(
+  claudeModel: string | null | undefined,
+): boolean {
+  if (!claudeModel) return true
+  const lower = claudeModel.toLowerCase()
+  if (lower.startsWith('deepseek-')) return true
+  return (
+    Object.keys(CLAUDE_FAMILY_TO_DEEPSEEK_MODEL) as Array<
+      keyof typeof CLAUDE_FAMILY_TO_DEEPSEEK_MODEL
+    >
+  ).some(name => lower.includes(name))
+}
+
+/**
  * Context window for DeepSeek models (input tokens).
  * Every V4 model advertises 1M.
  */

@@ -21,9 +21,15 @@
  */
 
 import type { GlobalConfig } from '../../utils/config.js'
-import { CODEX_PROVIDER_ID } from '../codex.js'
-import { DEEPSEEK_PROVIDER_ID } from '../deepseek.js'
-import { GROK_PROVIDER_ID } from '../grok.js'
+import {
+  CODEX_PROVIDER_ID,
+  resolveClaudeModelForCodex,
+} from '../codex.js'
+import {
+  DEEPSEEK_PROVIDER_ID,
+  resolveClaudeModelForDeepSeek,
+} from '../deepseek.js'
+import { GROK_PROVIDER_ID, resolveClaudeModelForGrok } from '../grok.js'
 import { KIMI_PROVIDER_ID } from '../kimi.js'
 import { OLLAMA_PROVIDER_ID } from '../ollama.js'
 import { ANTHROPIC_PROVIDER, ANTHROPIC_PROVIDER_ID } from './anthropic.js'
@@ -268,4 +274,49 @@ export function isModelOwnedByACatalog(model: string): boolean {
       provider.catalog?.acceptsModel(model) ||
       provider.catalog?.wasRetiredModel?.(model),
   )
+}
+
+/**
+ * Translates a model ID into the ID the given provider will actually serve.
+ *
+ * The display layer needs this for the same reason the fetch adapters do: a
+ * Claude-family ID (or an alias that resolved to one) is not what a
+ * third-party provider answers as, and showing the pre-translation ID in the
+ * account pill — "DeepSeek - claude-opus-4-6" — is a lie about what was served.
+ * Providers with no Claude→provider mapping (Anthropic, Ollama, Kimi) return
+ * the ID unchanged; an already-provider-native ID passes through each
+ * provider's own resolver untouched.
+ *
+ * Adding a provider that does translate Claude models must declare its resolver
+ * here, or the build fails rather than silently displaying the untranslated
+ * Claude ID. The `never` assignment in the default arm is what enforces that:
+ * this repo compiles with `strict: false`, so an unhandled member would
+ * otherwise fall off the end and return `undefined` — rendering the pill as
+ * "Provider - undefined" — without TypeScript emitting anything.
+ *
+ * @param model - A model ID (already parsed from any alias)
+ * @param provider - The account whose translation to apply
+ * @returns The model ID the provider serves for `model`
+ */
+export function resolveClaudeModelForProvider(
+  model: string,
+  provider: AuthProviderId,
+): string {
+  switch (provider) {
+    case ANTHROPIC_PROVIDER_ID:
+    case OLLAMA_PROVIDER_ID:
+    case KIMI_PROVIDER_ID:
+      return model
+    case CODEX_PROVIDER_ID:
+      return resolveClaudeModelForCodex(model)
+    case DEEPSEEK_PROVIDER_ID:
+      return resolveClaudeModelForDeepSeek(model)
+    case GROK_PROVIDER_ID:
+      return resolveClaudeModelForGrok(model)
+    default: {
+      const unhandled: never = provider
+      void unhandled
+      return model
+    }
+  }
 }

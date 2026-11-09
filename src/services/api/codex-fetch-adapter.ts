@@ -21,53 +21,13 @@ import { getProxyFetchOptions } from '../../utils/proxy.js'
 import { estimateTokenCountResponse } from './count-tokens-shim.js'
 import { createBackpressuredSseStream } from './sse-backpressure.js'
 import {
-  CLAUDE_FAMILY_TO_CODEX_MODEL,
   CODEX_BASE_URL,
   CODEX_JWT_AUTH_CLAIM,
   CODEX_MODELS,
   type CodexReasoningEffort,
-  DEFAULT_CODEX_MODEL,
+  resolveClaudeModelForCodex,
   resolveCodexEffort,
 } from 'src/config/codex.js'
-
-/**
- * Resolves the model ID to send to the Codex backend.
- *
- * Claude model names are heuristically mapped to a comparable Codex model —
- * this is the legitimate case where the user is in Codex mode with a Claude
- * model still selected. Any other ID (i.e. an explicitly chosen `gpt-*` model)
- * is passed through untouched so that models newer than {@link CODEX_MODELS}
- * still work; the backend rejects genuinely invalid IDs.
- *
- * @param claudeModel - The currently selected model ID
- * @returns The model ID to send to Codex
- */
-export function mapClaudeModelToCodex(claudeModel: string | null): string {
-  if (!claudeModel) return DEFAULT_CODEX_MODEL
-
-  const lower = claudeModel.toLowerCase()
-  const family = (
-    Object.keys(CLAUDE_FAMILY_TO_CODEX_MODEL) as Array<
-      keyof typeof CLAUDE_FAMILY_TO_CODEX_MODEL
-    >
-  ).find(name => lower.includes(name))
-
-  const mapped = family
-    ? CLAUDE_FAMILY_TO_CODEX_MODEL[family]
-    : // Other Claude models (e.g. claude-fable-5, claude-mythos-5) have no
-      // natural counterpart, but must not be forwarded verbatim — Codex
-      // would reject them.
-      lower.includes('claude')
-      ? DEFAULT_CODEX_MODEL
-      : null
-
-  if (mapped) {
-    logForDebugging(`Codex: mapped Claude model '${claudeModel}' to '${mapped}'`)
-    return mapped
-  }
-
-  return claudeModel
-}
 
 /**
  * Checks if a given model string is a known Codex model.
@@ -329,7 +289,7 @@ function translateToCodexBody(anthropicBody: Record<string, unknown>): {
   const claudeModel = anthropicBody.model as string
   const anthropicTools = (anthropicBody.tools || []) as AnthropicTool[]
 
-  const codexModel = mapClaudeModelToCodex(claudeModel)
+  const codexModel = resolveClaudeModelForCodex(claudeModel)
 
   // Build system instructions
   let instructions = ''
