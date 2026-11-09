@@ -112,7 +112,7 @@ async function switchTo(
   setMainLoopModelOverride(target)
 
   const model = renderModelSetting(target ?? getDefaultMainLoopModelSetting())
-  const suffix = sessionOnly ? ' (this session only)' : ''
+  const suffix = sessionOnly ? ' (this session only)' : ' (all terminals)'
   return `Switched to ${describeAccount(id)}${suffix} · model: ${model}`
 }
 
@@ -168,12 +168,14 @@ export async function call(
   context: LocalJSXCommandContext,
   args?: string,
 ): Promise<React.ReactNode> {
-  // --session is a debug convenience: strip it out of the argument before
-  // resolving the provider name, so `/switch-account ollama --session` and
-  // `/switch-account --session ollama` both work regardless of order.
+  // A switch stays in this terminal unless --global asks to move the default
+  // for every axa terminal. --session is still accepted (now the default) so
+  // old muscle memory keeps working. Flags are stripped in any position.
   const tokens = (args ?? '').trim().split(/\s+/).filter(Boolean)
-  const sessionOnly = tokens.some(token => token === '--session')
-  const providerArg = tokens.filter(token => token !== '--session').join(' ')
+  const sessionOnly = !tokens.includes('--global')
+  const providerArg = tokens
+    .filter(token => token !== '--session' && token !== '--global')
+    .join(' ')
 
   const requested = resolveProviderAlias(providerArg)
   if (requested) {

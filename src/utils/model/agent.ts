@@ -1,10 +1,11 @@
 import type { PermissionMode } from '../permissions/PermissionMode.js'
 import { capitalize } from '../stringUtils.js'
-import { MODEL_ALIASES, type ModelAlias } from './aliases.js'
+import { isModelAlias, MODEL_ALIASES, type ModelAlias } from './aliases.js'
 import { applyBedrockRegionPrefix, getBedrockRegionPrefix } from './bedrock.js'
 import {
   getCanonicalName,
   getRuntimeMainLoopModel,
+  isServableByActiveProvider,
   parseUserSpecifiedModel,
 } from './model.js'
 import { getAPIProvider } from './providers.js'
@@ -40,10 +41,6 @@ export function getAgentModel(
   toolSpecifiedModel?: ModelAlias,
   permissionMode?: PermissionMode,
 ): string {
-  if (process.env.CLAUDE_CODE_SUBAGENT_MODEL) {
-    return parseUserSpecifiedModel(process.env.CLAUDE_CODE_SUBAGENT_MODEL)
-  }
-
   // Extract Bedrock region prefix from parent model to inherit for subagents.
   // This ensures subagents use the same cross-region inference profile (e.g., "eu.", "us.")
   // as the parent, which is required when IAM permissions only allow specific regions.
@@ -66,13 +63,34 @@ export function getAgentModel(
     return resolvedModel
   }
 
+  // A tier alias (opus/sonnet/haiku) resolves to a claude-* ID, which a
+  // provider like Ollama cannot serve: every such agent would 404. When the
+  // active account cannot serve the alias's model, run on the parent's model.
+  // Concrete IDs pass through untouched — they are a deliberate choice.
+  const resolve = (spec: string): string => {
+    const model = parseUserSpecifiedModel(spec)
+    if (
+      isModelAlias(spec.replace(/\[1m]$/i, '').trim().toLowerCase()) &&
+      !isServableByActiveProvider(model)
+    ) {
+      return parentModel
+    }
+    return applyParentRegionPrefix(model, spec)
+  }
+
+  // An explicit env override is a deliberate choice, so it keeps concrete IDs
+  // as-is, but it must still respect the alias fallback: `opus` on Ollama would
+  // otherwise resolve to a claude-* ID and 404 on every subagent.
+  if (process.env.CLAUDE_CODE_SUBAGENT_MODEL) {
+    return resolve(process.env.CLAUDE_CODE_SUBAGENT_MODEL)
+  }
+
   // Prioritize tool-specified model if provided
   if (toolSpecifiedModel) {
     if (aliasMatchesParentTier(toolSpecifiedModel, parentModel)) {
       return parentModel
     }
-    const model = parseUserSpecifiedModel(toolSpecifiedModel)
-    return applyParentRegionPrefix(model, toolSpecifiedModel)
+    return resolve(toolSpecifiedModel)
   }
 
   const agentModelWithExp = agentModel ?? getDefaultSubagentModel()
@@ -90,8 +108,7 @@ export function getAgentModel(
   if (aliasMatchesParentTier(agentModelWithExp, parentModel)) {
     return parentModel
   }
-  const model = parseUserSpecifiedModel(agentModelWithExp)
-  return applyParentRegionPrefix(model, agentModelWithExp)
+  return resolve(agentModelWithExp)
 }
 
 /**

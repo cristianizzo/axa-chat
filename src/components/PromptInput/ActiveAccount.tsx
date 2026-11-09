@@ -3,10 +3,20 @@ import { useEffect, useState } from 'react'
 import { getProvider } from 'src/config/providers/index.js'
 import { useAppState } from 'src/state/AppState.js'
 import { DEEPSEEK_BASE_URL } from '../../config/deepseek.js'
+import {
+  OLLAMA_BALANCE_PATH,
+  formatOllamaCredits,
+  type OllamaBalance,
+} from '../../config/ollama.js'
 import { useMainLoopModel } from '../../hooks/useMainLoopModel.js'
 import { Text } from '../../ink.js'
 import { getActiveAuthProvider } from '../../utils/activeAuthProvider.js'
-import { getDeepSeekAuth, isDeepSeekSubscriber } from '../../utils/auth.js'
+import {
+  getDeepSeekAuth,
+  getOllamaAuth,
+  isDeepSeekSubscriber,
+  isOllamaSubscriber,
+} from '../../utils/auth.js'
 import { getDisplayModelForActiveProvider } from '../../utils/model/model.js'
 import { isActiveAccountServingRequests } from '../../utils/model/providers.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
@@ -15,10 +25,12 @@ import { getProxyFetchOptions } from '../../utils/proxy.js'
  * The account serving the session, as a single pill in the footer's left bar:
  *
  *   DeepSeek - deepseek-v4-flash - $7.12
+ *   Ollama - deepseek-v4.1-flash:1017-cloud - 9% used
  *
- * Combines the active provider, its model, and — only when a DeepSeek account
- * is serving — the remaining credit, since the balance is the one piece of that
- * trio the LLM endpoint never echoes (it lives at `GET /user/balance`).
+ * Combines the active provider, its model, and — only when the serving account
+ * has a balance to report — the remaining credit, since that is the one piece
+ * of the trio the LLM endpoint never echoes. DeepSeek keeps it at
+ * `GET /user/balance`; Ollama Cloud proxies it at `GET /api/balance`.
  *
  * Re-renders on account switch by subscribing to AppState `authVersion`, which
  * `/switch-account` bumps, and the model via `useMainLoopModel`.
@@ -55,6 +67,67 @@ function formatAmount(entry: DeepSeekBalanceInfo): string {
   if (!Number.isFinite(amount)) return `${entry.currency} ${entry.total_balance}`
   const symbol = CURRENCY_SYMBOLS[entry.currency] ?? `${entry.currency} `
   return `${symbol}${amount.toFixed(2)}`
+}
+
+/**
+ * Ollama Cloud's remaining allowance, as a percentage used.
+ *
+ * The daemon proxies the account's own balance, so a local Ollama needs no
+ * credentials of its own — the daemon holds them.
+ */
+function useOllamaCredits(): string | null {
+  const [credits, setCredits] = useState<string | null>(null)
+  const authVersion = useAppState(s => s.authVersion)
+
+  useEffect(() => {
+    if (!isOllamaSubscriber()) {
+      setCredits(null)
+      return
+    }
+
+    const baseUrl = getOllamaAuth()?.baseUrl
+    if (!baseUrl) {
+      setCredits(null)
+      return
+    }
+
+    let cancelled = false
+
+    async function load(): Promise<void> {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+      try {
+        const response = await fetch(`${baseUrl}${OLLAMA_BALANCE_PATH}`, {
+          signal: controller.signal,
+          ...getProxyFetchOptions({ forAnthropicAPI: false }),
+        })
+        if (cancelled || !isOllamaSubscriber()) {
+          setCredits(null)
+          return
+        }
+        if (!response.ok) {
+          setCredits(null)
+          return
+        }
+        const body = (await response.json()) as OllamaBalance
+        setCredits(formatOllamaCredits(body.included))
+      } catch {
+        if (!cancelled) setCredits(null)
+      } finally {
+        clearTimeout(timeout)
+      }
+    }
+
+    void load()
+    const interval = setInterval(() => void load(), REFRESH_MS)
+
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [authVersion])
+
+  return credits
 }
 
 function useDeepSeekBalance(): string | null {
@@ -135,6 +208,7 @@ export function ActiveAccount({
   useAppState(s => s.authVersion)
   const model = getDisplayModelForActiveProvider(useMainLoopModel())
   const balance = useDeepSeekBalance()
+  const credits = useOllamaCredits()
 
   // Same guard as the banner's provider line: when CLAUDE_CODE_USE_BEDROCK/
   // _VERTEX/_FOUNDRY is set, the logged-in account is not the backend serving
@@ -151,6 +225,7 @@ export function ActiveAccount({
   // the pill after an account switch (the hook clears it, but never trust
   // state a switch races against).
   if (balance && isDeepSeekSubscriber()) parts.push(balance)
+  if (credits && isOllamaSubscriber()) parts.push(credits)
 
   return (
     <Text dimColor wrap="truncate">
