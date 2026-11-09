@@ -141,7 +141,7 @@ function buildLogMetadata(log: LogOption, options?: {
   return childPadding + baseMetadata + projectSuffix;
 }
 export function LogSelector(t0) {
-  const $ = _c(257);
+  const $ = _c(258);
   const {
     logs,
     maxHeight: t1,
