@@ -1,10 +1,11 @@
 import type { PermissionMode } from '../permissions/PermissionMode.js'
 import { capitalize } from '../stringUtils.js'
-import { MODEL_ALIASES, type ModelAlias } from './aliases.js'
+import { isModelAlias, MODEL_ALIASES, type ModelAlias } from './aliases.js'
 import { applyBedrockRegionPrefix, getBedrockRegionPrefix } from './bedrock.js'
 import {
   getCanonicalName,
   getRuntimeMainLoopModel,
+  isServableByActiveProvider,
   parseUserSpecifiedModel,
 } from './model.js'
 import { getAPIProvider } from './providers.js'
@@ -66,13 +67,27 @@ export function getAgentModel(
     return resolvedModel
   }
 
+  // A tier alias (opus/sonnet/haiku) resolves to a claude-* ID, which a
+  // provider like Ollama cannot serve: every such agent would 404. When the
+  // active account cannot serve the alias's model, run on the parent's model.
+  // Concrete IDs pass through untouched — they are a deliberate choice.
+  const resolve = (spec: string): string => {
+    const model = parseUserSpecifiedModel(spec)
+    if (
+      isModelAlias(spec.replace(/\[1m]$/i, '').trim().toLowerCase()) &&
+      !isServableByActiveProvider(model)
+    ) {
+      return parentModel
+    }
+    return applyParentRegionPrefix(model, spec)
+  }
+
   // Prioritize tool-specified model if provided
   if (toolSpecifiedModel) {
     if (aliasMatchesParentTier(toolSpecifiedModel, parentModel)) {
       return parentModel
     }
-    const model = parseUserSpecifiedModel(toolSpecifiedModel)
-    return applyParentRegionPrefix(model, toolSpecifiedModel)
+    return resolve(toolSpecifiedModel)
   }
 
   const agentModelWithExp = agentModel ?? getDefaultSubagentModel()
@@ -90,8 +105,7 @@ export function getAgentModel(
   if (aliasMatchesParentTier(agentModelWithExp, parentModel)) {
     return parentModel
   }
-  const model = parseUserSpecifiedModel(agentModelWithExp)
-  return applyParentRegionPrefix(model, agentModelWithExp)
+  return resolve(agentModelWithExp)
 }
 
 /**
