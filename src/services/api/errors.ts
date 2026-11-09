@@ -987,6 +987,10 @@ function get3PModelFallbackSuggestion(model: string): string | undefined {
   }
   // @[MODEL LAUNCH]: Add a fallback suggestion chain for the new model → previous version for 3P
   const m = model.toLowerCase()
+  // If the failing model looks like a Fable 5.2 variant, suggest Fable 5.1
+  if (m.includes('fable-5-2') || m.includes('fable_5_2')) {
+    return getModelStrings().fable51
+  }
   // If the failing model looks like an Opus 5.5 variant, suggest Opus 5
   if (m.includes('opus-5-5') || m.includes('opus_5_5')) {
     return getModelStrings().opus5

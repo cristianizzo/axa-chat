@@ -1659,7 +1659,7 @@ async function* queryModel(
     // Models with always-on thinking (e.g., Fable 5) reject { type: 'disabled' }
     // and require adaptive thinking. Log warnings when user env vars are overridden.
     const fableCanonical = getCanonicalName(options.model)
-    const isAlwaysOnThinking = fableCanonical === 'claude-fable-5' || fableCanonical === 'claude-fable-5-1'
+    const isAlwaysOnThinking = fableCanonical === 'claude-fable-5' || fableCanonical === 'claude-fable-5-1' || fableCanonical === 'claude-fable-5-2'
     if (isAlwaysOnThinking && isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING)) {
       logForDebugging(
         'Fable 5 requires thinking to be enabled (API rejects disabled). Ignoring CLAUDE_CODE_DISABLE_THINKING. Use a different model to disable thinking.',
