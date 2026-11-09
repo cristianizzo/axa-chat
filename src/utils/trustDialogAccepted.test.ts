@@ -56,6 +56,7 @@ mock.module('os', () => ({
 // no resolver, so the first call pins the path for the process. The write-path
 // tests below are the only ones that touch disk, and they touch this copy.
 const configScratch = mkdtempSync(join(realpathSync(tmpdir()), 'trust-config-'))
+const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
 process.env.CLAUDE_CONFIG_DIR = configScratch
 
 const { getGlobalClaudeFile } = await import('./env.js')
@@ -299,6 +300,11 @@ test('trust inside a home-rooted repo is persisted under cwd, not $HOME', () => 
  */
 const symlinkScratch = mkdtempSync(join(realpathSync(tmpdir()), 'trust-home-'))
 afterAll(() => {
+  // Bun runs every test file in one process: leaving this pointed at a
+  // directory deleted below would send any later file's global config into a
+  // path that no longer exists.
+  if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+  else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
   rmSync(symlinkScratch, { recursive: true, force: true })
   rmSync(configScratch, { recursive: true, force: true })
 })
