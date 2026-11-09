@@ -530,6 +530,19 @@ jobs:
           tag="${{ steps.tag.outputs.tag }}"
           version="${{ steps.tag.outputs.version }}"
 
+          # The stable channel points only at final releases. A prerelease tag
+          # must never move it: the comparison below is `sort -V`, which does
+          # not implement SemVer precedence and orders `2.0.0-beta.1` *after*
+          # `2.0.0`. A prerelease could therefore replace the stable final
+          # release, and then the real `2.0.0` would be rejected as older. The
+          # prerelease's own versioned release is still published either way.
+          case "$version" in
+            *-*)
+              echo "::notice::'$version' is a prerelease and this channel is stable-only. Not moving the pointer."
+              exit 0
+              ;;
+          esac
+
           # `queue: max` serializes these runs but does not guarantee they
           # finish in tag order — GitHub documents FIFO only for the point a
           # run starts *waiting*, not for when it completes. Two tags pushed
